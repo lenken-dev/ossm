@@ -26,7 +26,7 @@ jobs:
 
   build:
     needs: tag
-    uses: ./.github/workflows/build.yml
+    uses: ./.github/workflows/build-firmware.yml
     with:
       upload-artifacts: true
       release-id: ${{ needs.tag.outputs.new_tag }}
