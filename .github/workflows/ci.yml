@@ -26,18 +26,28 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ github.token }}
 
-  build:
-    uses: ./.github/workflows/build.yml
+  build-firmware:
+    uses: ./.github/workflows/build-firmware.yml
     with:
       upload-artifacts: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
       release-id: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }}
+
+  build-webtools:
+    uses: ./.github/workflows/build-webtools.yml
+    with:
+      upload-artifacts: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
+      release-id: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }}
+
+  build-docs:
+    uses: ./.github/workflows/build-docs.yml
+    with:
+      upload-artifacts: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
 
   build-windows:
     uses: ./.github/workflows/build-windows.yml
 
   deploy-webtools:
-    needs: [build]
-    if: always() && needs.build.result == 'success'
+    needs: [build-webtools]
     uses: ./.github/workflows/deploy-webtools.yml
     with:
       pr-number: ${{ github.event_name == 'pull_request' && format('{0}', github.event.pull_request.number) || '' }}
@@ -47,9 +57,19 @@ jobs:
       pull-requests: write
     secrets: inherit
 
+  deploy-docs:
+    needs: [build-docs]
+    uses: ./.github/workflows/deploy-docs.yml
+    with:
+      pr-number: ${{ github.event_name == 'pull_request' && format('{0}', github.event.pull_request.number) || '' }}
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+    secrets: inherit
+
   upload-firmware:
-    needs: [build]
-    if: always() && needs.build.result == 'success'
+    needs: [build-firmware]
     uses: ./.github/workflows/upload-firmware.yml
     with:
       pr-number: ${{ github.event_name == 'pull_request' && format('{0}', github.event.pull_request.number) || '' }}
