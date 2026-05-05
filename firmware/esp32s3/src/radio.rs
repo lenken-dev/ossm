@@ -23,8 +23,11 @@ pub fn start(
         esp_radio::init().expect("Failed to initialize radio controller")
     );
 
-    let (mut wifi_controller, interfaces) =
+    let (wifi_controller, interfaces) =
         esp_radio::wifi::new(radio, wifi, Default::default()).unwrap();
+
+    let wifi_controller = mk_static!(esp_radio::wifi::WifiController<'static>, wifi_controller);
+
     wifi_controller
         .set_mode(esp_radio::wifi::WifiMode::Sta)
         .unwrap();
@@ -47,7 +50,7 @@ pub fn start(
 
     ossm_m5_remote::start(spawner, manager, sender, receiver, patterns, remote_config);
 
-    let connector = BleConnector::new(radio, bt, Default::default())
-        .expect("Could not create BleConnector");
+    let connector =
+        BleConnector::new(radio, bt, Default::default()).expect("Could not create BleConnector");
     ble_remote::start(spawner, connector, patterns);
 }
