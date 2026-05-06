@@ -1,11 +1,19 @@
-use embassy_futures::select::{self, Either};
+use embassy_futures::select::{self, Either3};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::Receiver;
+use embassy_time::{Duration, Ticker};
 use embedded_hal_async::delay::DelayNs;
 use ossm::{Cancelled, MotionCommand, Ossm};
 
 use crate::input::{PatternInput, SharedPatternInput};
 use crate::util::scale;
+
+/// Cap on how often input-driven motion updates are forwarded to the controller.
+/// Each forwarded command costs a Ruckig replan;  replans can take 5-15 ms,
+/// so an unthrottled BLE input flood starves the 100 Hz motion loop.
+/// 250 ms keeps replans to ~4 Hz, well under the 10 ms tick budget while
+/// still feeling responsive to slider movement.
+const INPUT_UPDATE_THROTTLE: Duration = Duration::from_millis(250);
 
 pub const MIN_SENSATION: f64 = -1.0;
 pub const MAX_SENSATION: f64 = 1.0;
@@ -136,7 +144,12 @@ impl<'a, D: DelayNs> MotionBuilder<'a, D, NoPosition> {
     }
 }
 
-fn compute_command(input: &PatternInput, fraction: f64, speed_factor: f64, torque: Option<f64>) -> MotionCommand {
+fn compute_command(
+    input: &PatternInput,
+    fraction: f64,
+    speed_factor: f64,
+    torque: Option<f64>,
+) -> MotionCommand {
     let stroke = input.depth * input.stroke.clamp(0.0, 1.0);
     let shallow = input.depth - stroke;
     let position = shallow + fraction * stroke;
@@ -159,13 +172,26 @@ impl<'a, D: DelayNs> MotionBuilder<'a, D, HasPosition> {
         self.ctx.ossm.begin_motion(cmd);
 
         let mut move_done = core::pin::pin!(self.ctx.ossm.await_motion());
+        let mut throttle = Ticker::every(INPUT_UPDATE_THROTTLE);
+        let mut pending: Option<PatternInput> = None;
 
         loop {
-            match select::select(move_done.as_mut(), self.ctx.input_receiver.changed()).await {
-                Either::First(result) => return result,
-                Either::Second(new_input) => {
-                    let cmd = compute_command(&new_input, fraction, speed_factor, torque);
-                    self.ctx.ossm.update_motion(cmd);
+            match select::select3(
+                move_done.as_mut(),
+                self.ctx.input_receiver.changed(),
+                throttle.next(),
+            )
+            .await
+            {
+                Either3::First(result) => return result,
+                Either3::Second(new_input) => {
+                    pending = Some(new_input);
+                }
+                Either3::Third(()) => {
+                    if let Some(input) = pending.take() {
+                        let cmd = compute_command(&input, fraction, speed_factor, torque);
+                        self.ctx.ossm.update_motion(cmd);
+                    }
                 }
             }
         }
