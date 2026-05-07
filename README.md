@@ -175,18 +175,12 @@ Features are optional higher-level capabilities built on top of the core motion 
    cargo install espflash
    ```
 
-5. You should now be able to build and flash:
+5. You should now be able to build and flash. The variant is the first argument; supported variants are `ossm-alt` (ESP32-S3, RS485), `waveshare` (ESP32-S3-RS485-CAN), `seeed-xiao` (XIAO ESP32-S3), and `ossm-reference` (ESP32, step/dir).
 
    ```sh
-   just build-ossm-alt        # OSSM Alt Edition (ESP32-S3, RS485)
-   just build-ossm-reference  # OSSM Reference Board (ESP32, step/dir)
-   just build-waveshare       # Waveshare ESP32-S3-RS485-CAN
-   just build-seeed-xiao      # Seeed Studio XIAO ESP32-S3
-
-   just flash-ossm-alt        # Build + flash OSSM Alt Edition
-   just flash-ossm-reference  # Build + flash OSSM Reference Board
-   just flash-waveshare       # Build + flash Waveshare
-   just flash-seeed-xiao      # Build + flash Seeed XIAO
+   just build ossm-alt        # build only
+   just flash ossm-alt        # build + flash + monitor
+   just flash seeed-xiao sim  # flash a build with the simulated motor
    ```
 
 #### Configuring rust-analyzer

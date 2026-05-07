@@ -5,41 +5,15 @@ set dotenv-load := true
 default:
     @just --list
 
-# OSSM Alt (ESP32-S3). Pass motor=sim to swap in the simulated motor.
-[working-directory: 'firmware/esp32s3']
-build-ossm-alt motor="rs485":
-    cargo +esp build --release --bin ossm-alt --features motor-{{ motor }}
+# Build a firmware variant. Variants: ossm-alt, waveshare, seeed-xiao, ossm-reference.
+# Pass `sim` as the second arg to swap in the simulated motor (e.g. `just build seeed-xiao sim`).
+build variant motor="":
+    cargo run --quiet -p ossm-flash -- {{ variant }} --build-only {{ if motor != "" { "--motor " + motor } else { "" } }}
 
-[working-directory: 'firmware/esp32s3']
-flash-ossm-alt motor="rs485":
-    cargo +esp run --release --bin ossm-alt --features motor-{{ motor }}
-
-# Waveshare ESP32-S3-RS485-CAN. Pass motor=sim to swap in the simulated motor.
-[working-directory: 'firmware/esp32s3']
-build-waveshare motor="rs485":
-    cargo +esp build --release --bin waveshare --features motor-{{ motor }}
-
-[working-directory: 'firmware/esp32s3']
-flash-waveshare motor="rs485":
-    cargo +esp run --release --bin waveshare --features motor-{{ motor }}
-
-# Seeed Studio XIAO ESP32-S3. Pass motor=sim to swap in the simulated motor.
-[working-directory: 'firmware/esp32s3']
-build-seeed-xiao motor="rs485":
-    cargo +esp build --release --bin seeed-xiao --features motor-{{ motor }}
-
-[working-directory: 'firmware/esp32s3']
-flash-seeed-xiao motor="rs485":
-    cargo +esp run --release --bin seeed-xiao --features motor-{{ motor }}
-
-# OSSM Reference (ESP32). Pass motor=sim to swap in the simulated motor.
-[working-directory: 'firmware/esp32']
-build-ossm-reference motor="stepdir":
-    cargo +esp build --release --bin ossm-reference --features motor-{{ motor }}
-
-[working-directory: 'firmware/esp32']
-flash-ossm-reference motor="stepdir":
-    cargo +esp run --release --bin ossm-reference --features motor-{{ motor }}
+# Build, flash, and monitor a firmware variant. Variants: ossm-alt, waveshare, seeed-xiao, ossm-reference.
+# Pass `sim` as the second arg to flash a build with the simulated motor.
+flash variant motor="":
+    cargo run --quiet -p ossm-flash -- {{ variant }} {{ if motor != "" { "--motor " + motor } else { "" } }}
 
 
 # WASM Simulator
@@ -67,7 +41,7 @@ web-tools: build-wasm
 
 # All
 [parallel]
-build-all: build-ossm-alt build-waveshare build-seeed-xiao build-ossm-reference build-wasm
+build-all: (build "ossm-alt") (build "waveshare") (build "seeed-xiao") (build "ossm-reference") build-wasm
 
 # Check that all required tools are installed
 [unix]
