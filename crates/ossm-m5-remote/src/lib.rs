@@ -10,10 +10,7 @@ use esp_radio::esp_now::{
     BROADCAST_ADDRESS, EspNowManager, EspNowReceiver, EspNowSender, PeerInfo,
 };
 use log::{error, info};
-use pattern_engine::{
-    PatternEngine,
-    commands::{self, InputCommand, PlaybackCommand},
-};
+use pattern_engine::PatternSender;
 use portable_atomic::{AtomicU32, AtomicU64};
 use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
@@ -190,16 +187,16 @@ pub fn start(
     manager: &'static EspNowManager<'static>,
     sender: &'static Mutex<NoopRawMutex, EspNowSender<'static>>,
     receiver: EspNowReceiver<'static>,
-    engine: &'static PatternEngine,
+    patterns: &'static PatternSender,
     config: RemoteConfig,
 ) {
     spawner
-        .spawn(receiver_task(manager, sender, receiver, engine, config))
+        .spawn(receiver_task(manager, sender, receiver, patterns, config))
         .unwrap();
     spawner
         .spawn(heartbeat_send_task(manager, sender, config))
         .unwrap();
-    spawner.spawn(heartbeat_check_task(engine)).unwrap();
+    spawner.spawn(heartbeat_check_task(patterns)).unwrap();
 
     info!("ESP-NOW remote tasks started, waiting for connection...");
 }
@@ -209,7 +206,7 @@ async fn receiver_task(
     manager: &'static EspNowManager<'static>,
     sender: &'static Mutex<NoopRawMutex, EspNowSender<'static>>,
     mut receiver: EspNowReceiver<'static>,
-    engine: &'static PatternEngine,
+    patterns: &'static PatternSender,
     config: RemoteConfig,
 ) {
     info!("ESP-NOW receiver task started");
@@ -241,7 +238,7 @@ async fn receiver_task(
                 }
                 let current = CURRENT_PATTERN_IDX.load(Ordering::Acquire) as usize;
                 info!("Playing pattern {}", current);
-                commands::dispatch_playback(engine, PlaybackCommand::Play(current));
+                patterns.play(current);
             }
             M5Command::Off => {
                 let ack = M5Packet {
@@ -255,25 +252,25 @@ async fn receiver_task(
                         error!("Could not send OFF ack: {}", err);
                     }
                 }
-                commands::dispatch_playback(engine, PlaybackCommand::Pause);
+                patterns.pause();
                 info!("Paused");
             }
             M5Command::Speed => {
                 let velocity = (packet.value as f64) / config.max_velocity_mm_s;
-                commands::dispatch_input(engine, InputCommand::SetSpeed(velocity));
+                patterns.set_speed(velocity);
             }
             M5Command::Depth => {
                 let depth = (packet.value as f64) / config.max_travel_mm;
-                commands::dispatch_input(engine, InputCommand::SetDepth(depth));
+                patterns.set_depth(depth);
             }
             M5Command::Stroke => {
                 let stroke = (packet.value as f64) / config.max_travel_mm;
-                commands::dispatch_input(engine, InputCommand::SetStroke(stroke));
+                patterns.set_stroke(stroke);
             }
             M5Command::Sensation => {
                 // Remote sends -100..100; pattern engine expects -1.0..1.0
                 let sensation = (packet.value as f64) / 100.0;
-                commands::dispatch_input(engine, InputCommand::SetSensation(sensation));
+                patterns.set_sensation(sensation);
             }
             M5Command::Pattern => {
                 let remote_idx = packet.value as u32;
@@ -281,10 +278,7 @@ async fn receiver_task(
                     let engine_idx = pattern.to_engine_index();
                     CURRENT_PATTERN_IDX.store(engine_idx, Ordering::Release);
                     info!("Switching to pattern {}", engine_idx);
-                    commands::dispatch_playback(
-                        engine,
-                        PlaybackCommand::Play(engine_idx as usize),
-                    );
+                    patterns.play(engine_idx as usize);
                 }
             }
             M5Command::Heartbeat => {
@@ -338,7 +332,7 @@ async fn heartbeat_send_task(
 }
 
 #[embassy_executor::task]
-async fn heartbeat_check_task(engine: &'static PatternEngine) {
+async fn heartbeat_check_task(patterns: &'static PatternSender) {
     info!("ESP-NOW heartbeat check task started");
 
     let mut ticker = Ticker::every(Duration::from_millis(1000));
@@ -357,7 +351,7 @@ async fn heartbeat_check_task(engine: &'static PatternEngine) {
 
         if was_connected && !is_connected {
             info!("Remote disconnected, heartbeat lost");
-            commands::dispatch_playback(engine, PlaybackCommand::Pause);
+            patterns.pause();
         } else if !was_connected && is_connected {
             info!("Remote connected");
         }

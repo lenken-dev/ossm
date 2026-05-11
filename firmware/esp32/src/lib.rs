@@ -32,7 +32,7 @@ use esp_hal::{
 use esp_rtos::embassy::InterruptExecutor;
 use log::info;
 use ossm::{MechanicalConfig, MotionController, MotionLimits, Ossm};
-use pattern_engine::{AnyPattern, PatternEngine};
+use pattern_engine::{AnyPattern, PatternEngine, PatternSender};
 use static_cell::StaticCell;
 
 extern crate alloc;
@@ -48,7 +48,7 @@ macro_rules! mk_static {
 const UPDATE_INTERVAL_SECS: f64 = 0.01;
 
 static OSSM_CELL: StaticCell<Ossm> = StaticCell::new();
-static PATTERNS: PatternEngine = PatternEngine::new();
+static PATTERNS_CELL: StaticCell<PatternEngine> = StaticCell::new();
 
 static EXECUTOR_CORE_1: StaticCell<InterruptExecutor<2>> = StaticCell::new();
 // ESP32 DRAM is tighter than ESP32-S3. 16KB stack is needed for ruckig's
@@ -136,8 +136,10 @@ pub async fn run(spawner: Spawner, config: Config) {
         UPDATE_INTERVAL_SECS * 1000.0
     );
 
-    radio::start(&spawner, config.bt, &PATTERNS);
+    let (runner, _observer, patterns) = PATTERNS_CELL.init(PatternEngine::new()).split();
+    let patterns: &'static PatternSender = mk_static!(PatternSender, patterns);
 
-    let mut pattern_runner = PATTERNS.runner(&motion, AnyPattern::all_builtin());
-    pattern_runner.run(Delay).await;
+    radio::start(&spawner, config.bt, patterns);
+
+    runner.run(&motion, AnyPattern::all_builtin(), Delay).await
 }

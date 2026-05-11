@@ -17,10 +17,7 @@ use embassy_time::{Duration, Ticker, Timer};
 use esp_radio::ble::controller::BleConnector;
 use heapless::String;
 use log::{error, info, warn};
-use pattern_engine::{
-    EngineState, PatternEngine, PatternInput,
-    commands::{self, InputCommand, PlaybackCommand},
-};
+use pattern_engine::{EngineState, PatternInput, PatternSender, commands};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
@@ -95,7 +92,11 @@ fn get_pattern_description(index: usize) -> String<MAX_PATTERN_LENGTH> {
     output
 }
 
-pub fn start(spawner: &Spawner, connector: BleConnector<'static>, engine: &'static PatternEngine) {
+pub fn start(
+    spawner: &Spawner,
+    connector: BleConnector<'static>,
+    patterns: &'static PatternSender,
+) {
     let bt_controller: ExternalController<_, 20> = ExternalController::new(connector);
 
     let resources = mk_static!(HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX>, HostResources::new());
@@ -113,7 +114,7 @@ pub fn start(spawner: &Spawner, connector: BleConnector<'static>, engine: &'stat
     } = stack.build();
 
     spawner.must_spawn(ble_runner_task(runner));
-    spawner.must_spawn(ble_events_task(stack, peripheral, engine));
+    spawner.must_spawn(ble_events_task(stack, peripheral, patterns));
 
     info!("BLE remote tasks started, waiting for connection...");
 }
@@ -130,7 +131,7 @@ pub async fn ble_events_task(
         ExternalController<BleConnector<'static>, 20>,
         DefaultPacketPool,
     >,
-    engine: &'static PatternEngine,
+    patterns: &'static PatternSender,
 ) {
     info!("Starting advertising and GATT service");
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
@@ -182,8 +183,8 @@ pub async fn ble_events_task(
                     .with_attribute_server(&server)
                     .expect("Could not transform connection into GATT connection");
 
-                let events = gatt_events_task(&server, &gatt_connection, engine);
-                let notify = state_notifications(&server, &gatt_connection, engine);
+                let events = gatt_events_task(&server, &gatt_connection, patterns);
+                let notify = state_notifications(&server, &gatt_connection, patterns);
 
                 match select(events, notify).await {
                     Either::First(res) => {
@@ -197,7 +198,7 @@ pub async fn ble_events_task(
                     },
                 }
 
-                commands::dispatch_playback(engine, PlaybackCommand::Stop);
+                patterns.stop();
                 info!("BLE session ended, stopping engine");
             }
             Err(err) => {
@@ -221,7 +222,7 @@ pub async fn ble_runner_task(
 async fn gatt_events_task<P: PacketPool>(
     server: &Server<'_>,
     connection: &GattConnection<'_, '_, P>,
-    engine: &'static PatternEngine,
+    patterns: &'static PatternSender,
 ) -> Result<(), Error> {
     let reason = loop {
         match connection.next().await {
@@ -232,8 +233,8 @@ async fn gatt_events_task<P: PacketPool>(
                 match &event {
                     GattEvent::Read(event) => {
                         if event.handle() == server.ossm_service.current_state.handle {
-                            let engine_state = commands::current_state(engine);
-                            let input = commands::current_input(engine);
+                            let engine_state = patterns.state();
+                            let input = patterns.input();
                             let state_json = state_to_json(engine_state, &input);
                             server.set(&server.ossm_service.current_state, &state_json)?;
                         }
@@ -263,7 +264,7 @@ async fn gatt_events_task<P: PacketPool>(
                         let command: String<MAX_COMMAND_LENGTH> =
                             server.get(&server.ossm_service.primary_command)?;
 
-                        process_command(&command, server, engine);
+                        process_command(&command, server, patterns);
                     }
                     if event_handle == server.ossm_service.pattern_description.handle {
                         let command: String<MAX_PATTERN_LENGTH> =
@@ -331,19 +332,20 @@ async fn advertise<'values, 'server, C: Controller>(
 async fn state_notifications<P: PacketPool>(
     server: &Server<'_>,
     connection: &GattConnection<'_, '_, P>,
-    engine: &'static PatternEngine,
+    patterns: &'static PatternSender,
 ) -> Result<(), Error> {
-    let mut sub =
-        commands::subscribe_state(engine).expect("No state subscriber slots available");
+    let mut sub = patterns
+        .subscribe()
+        .expect("No state subscriber slots available");
     let mut heartbeat = Ticker::every(Duration::from_secs(1));
 
     loop {
         let engine_state = match select(sub.next_message_pure(), heartbeat.next()).await {
             Either::First(state) => state,
-            Either::Second(_) => commands::current_state(engine),
+            Either::Second(_) => patterns.state(),
         };
 
-        let input = commands::current_input(engine);
+        let input = patterns.input();
         let state_json = state_to_json(engine_state, &input);
         server
             .ossm_service
@@ -388,7 +390,7 @@ fn state_to_json(state: EngineState, input: &PatternInput) -> String<MAX_STATE_L
 fn process_command(
     command: &String<MAX_COMMAND_LENGTH>,
     server: &Server<'_>,
-    engine: &'static PatternEngine,
+    patterns: &'static PatternSender,
 ) {
     info!("BLE Command {}", command);
 
@@ -404,27 +406,12 @@ fn process_command(
                         if let Ok(value) = value.parse::<u32>() {
                             let normalized = value as f64 / 100.0;
                             match action {
-                                "speed" => commands::dispatch_input(
-                                    engine,
-                                    InputCommand::SetSpeed(normalized),
-                                ),
-                                "stroke" => commands::dispatch_input(
-                                    engine,
-                                    InputCommand::SetStroke(normalized),
-                                ),
-                                "depth" => commands::dispatch_input(
-                                    engine,
-                                    InputCommand::SetDepth(normalized),
-                                ),
+                                "speed" => patterns.set_speed(normalized),
+                                "stroke" => patterns.set_stroke(normalized),
+                                "depth" => patterns.set_depth(normalized),
                                 // BLE sends 0–100; internal range is -1.0..1.0.
-                                "sensation" => commands::dispatch_input(
-                                    engine,
-                                    InputCommand::SetSensation(normalized * 2.0 - 1.0),
-                                ),
-                                "pattern" => commands::dispatch_playback(
-                                    engine,
-                                    PlaybackCommand::Play(value as usize),
-                                ),
+                                "sensation" => patterns.set_sensation(normalized * 2.0 - 1.0),
+                                "pattern" => patterns.play(value as usize),
                                 _ => {
                                     error!("Invalid set command {}", action);
                                     fail = true;
@@ -440,10 +427,8 @@ fn process_command(
                     }
                 }
                 "go" => match action {
-                    "simplePenetration" | "strokeEngine" => {
-                        commands::dispatch_playback(engine, PlaybackCommand::Play(0))
-                    }
-                    "menu" => commands::dispatch_playback(engine, PlaybackCommand::Stop),
+                    "simplePenetration" | "strokeEngine" => patterns.play(0),
+                    "menu" => patterns.stop(),
                     _ => {
                         error!("Unknown go action: {}", action);
                         fail = true;
