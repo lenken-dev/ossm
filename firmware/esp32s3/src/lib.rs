@@ -31,7 +31,7 @@ use esp_hal::{
 use esp_rtos::embassy::InterruptExecutor;
 use log::info;
 use ossm::{MechanicalConfig, MotionController, MotionLimits, Ossm};
-use pattern_engine::{AnyPattern, PatternEngine};
+use pattern_engine::{AnyPattern, PatternEngine, PatternSender};
 use static_cell::StaticCell;
 
 extern crate alloc;
@@ -46,8 +46,8 @@ macro_rules! mk_static {
 
 const UPDATE_INTERVAL_SECS: f64 = 0.01;
 
-static OSSM: Ossm = Ossm::new();
-static PATTERNS: PatternEngine = PatternEngine::new(&OSSM);
+static OSSM_CELL: StaticCell<Ossm> = StaticCell::new();
+static PATTERNS_CELL: StaticCell<PatternEngine> = StaticCell::new();
 
 static EXECUTOR_CORE_1: StaticCell<InterruptExecutor<2>> = StaticCell::new();
 static APP_CORE_STACK: StaticCell<Stack<32768>> = StaticCell::new();
@@ -96,8 +96,10 @@ pub async fn run(spawner: Spawner, config: Config) {
     };
     let limits = MotionLimits::default();
 
+    let (receiver, _observer, motion) = OSSM_CELL.init(Ossm::new()).split();
+
     let board = board::build(motor, &MECHANICAL);
-    let controller = OSSM.controller(board, limits.clone(), UPDATE_INTERVAL_SECS);
+    let controller = receiver.into_controller(board, limits.clone(), UPDATE_INTERVAL_SECS);
 
     let sw_int = SoftwareInterruptControl::new(config.sw_int);
     let app_core_stack = APP_CORE_STACK.init(Stack::new());
@@ -129,8 +131,10 @@ pub async fn run(spawner: Spawner, config: Config) {
         UPDATE_INTERVAL_SECS * 1000.0
     );
 
-    radio::start(&spawner, config.wifi, config.bt, &PATTERNS, &limits);
+    let (runner, _observer, patterns) = PATTERNS_CELL.init(PatternEngine::new()).split();
+    let patterns: &'static PatternSender = mk_static!(PatternSender, patterns);
 
-    let mut pattern_runner = PATTERNS.runner(AnyPattern::all_builtin());
-    pattern_runner.run(Delay).await;
+    radio::start(&spawner, config.wifi, config.bt, patterns, &limits);
+
+    runner.run(&motion, AnyPattern::all_builtin(), Delay).await
 }

@@ -7,7 +7,7 @@ use esp_radio::esp_now::{EspNowManager, EspNowSender};
 use log::info;
 use ossm::MotionLimits;
 use ossm_m5_remote::RemoteConfig;
-use pattern_engine::PatternEngine;
+use pattern_engine::PatternSender;
 
 use crate::mk_static;
 
@@ -15,7 +15,7 @@ pub fn start(
     spawner: &Spawner,
     wifi: WIFI<'static>,
     bt: BT<'static>,
-    patterns: &'static PatternEngine,
+    patterns: &'static PatternSender,
     limits: &MotionLimits,
 ) {
     let radio = &*mk_static!(

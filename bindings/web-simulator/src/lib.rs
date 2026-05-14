@@ -2,17 +2,18 @@ extern crate alloc;
 use alloc::string::String;
 
 use embassy_time::{Delay, Duration, Ticker};
-use ossm::{MechanicalConfig, MotionLimits, Ossm};
+use ossm::{MechanicalConfig, MotionLimits, MotionObserver, Ossm};
 use pattern_engine::{
-    AnyPattern, PatternEngine,
-    commands::{self, InputCommand, PlaybackCommand},
+    AnyPattern, PatternEngine, PatternObserver, PatternSender,
+    commands,
 };
 use sim_board::SimBoard;
 use sim_motor::SimMotor;
+use static_cell::StaticCell;
 use wasm_bindgen::prelude::*;
 
-static OSSM: Ossm = Ossm::new();
-static PATTERNS: PatternEngine = PatternEngine::new(&OSSM);
+static OSSM_CELL: StaticCell<Ossm> = StaticCell::new();
+static PATTERNS_CELL: StaticCell<PatternEngine> = StaticCell::new();
 
 static MECHANICAL: MechanicalConfig = MechanicalConfig {
     pulley_teeth: 20,
@@ -21,7 +22,11 @@ static MECHANICAL: MechanicalConfig = MechanicalConfig {
 };
 
 #[wasm_bindgen]
-pub struct Simulator {}
+pub struct Simulator {
+    motion_observer: MotionObserver,
+    pattern_observer: PatternObserver,
+    patterns: PatternSender,
+}
 
 #[wasm_bindgen]
 impl Simulator {
@@ -33,6 +38,10 @@ impl Simulator {
 
         ossm::build_info!();
 
+        let (receiver, motion_observer, motion) = OSSM_CELL.init(Ossm::new()).split();
+        let (runner, pattern_observer, patterns) =
+            PATTERNS_CELL.init(PatternEngine::new()).split();
+
         let update_interval_secs = update_interval_ms / 1000.0;
         let motor = SimMotor::new();
         let board = SimBoard::new(motor, &MECHANICAL);
@@ -43,7 +52,7 @@ impl Simulator {
             ..MotionLimits::default()
         };
 
-        let mut controller = OSSM.controller(board, limits, update_interval_secs);
+        let mut controller = receiver.into_controller(board, limits, update_interval_secs);
 
         let interval_us = (update_interval_secs * 1_000_000.0) as u64;
 
@@ -57,53 +66,55 @@ impl Simulator {
             }
         });
 
-        let mut pattern_runner = PATTERNS.runner(AnyPattern::all_builtin());
-
         wasm_bindgen_futures::spawn_local(async move {
-            pattern_runner.run(Delay).await;
+            runner.run(&motion, AnyPattern::all_builtin(), Delay).await
         });
 
-        Self {}
+        Self {
+            motion_observer,
+            pattern_observer,
+            patterns,
+        }
     }
 
     pub fn get_engine_state(&self) -> u8 {
-        commands::current_state(&PATTERNS).as_u8()
+        self.pattern_observer.state().as_u8()
     }
 
     pub fn get_position(&self) -> f32 {
-        OSSM.motion_state().position
+        self.motion_observer.state().position
     }
 
     pub fn set_depth(&self, depth: f64) {
-        commands::dispatch_input(&PATTERNS, InputCommand::SetDepth(depth));
+        self.patterns.set_depth(depth);
     }
 
     pub fn set_stroke(&self, stroke: f64) {
-        commands::dispatch_input(&PATTERNS, InputCommand::SetStroke(stroke));
+        self.patterns.set_stroke(stroke);
     }
 
     pub fn set_velocity(&self, velocity: f64) {
-        commands::dispatch_input(&PATTERNS, InputCommand::SetSpeed(velocity));
+        self.patterns.set_speed(velocity);
     }
 
     pub fn set_sensation(&self, sensation: f64) {
-        commands::dispatch_input(&PATTERNS, InputCommand::SetSensation(sensation));
+        self.patterns.set_sensation(sensation);
     }
 
     pub fn play(&self, index: usize) {
-        commands::dispatch_playback(&PATTERNS, PlaybackCommand::Play(index));
+        self.patterns.play(index);
     }
 
     pub fn pause(&self) {
-        commands::dispatch_playback(&PATTERNS, PlaybackCommand::Pause);
+        self.patterns.pause();
     }
 
     pub fn resume(&self) {
-        commands::dispatch_playback(&PATTERNS, PlaybackCommand::Resume);
+        self.patterns.resume();
     }
 
     pub fn stop(&self) {
-        commands::dispatch_playback(&PATTERNS, PlaybackCommand::Stop);
+        self.patterns.stop();
     }
 
     pub fn pattern_count(&self) -> usize {
