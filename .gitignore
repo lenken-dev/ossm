@@ -7,3 +7,5 @@ target/
 .env
 
 .pnpm-store
+
+.DS_Store
