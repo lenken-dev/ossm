@@ -20,6 +20,7 @@ import {
   HamburgerMenuIcon,
   CubeIcon,
   BarChartIcon,
+  LayersIcon,
   RocketIcon,
 } from "@radix-ui/react-icons";
 
@@ -98,6 +99,14 @@ export default function Layout() {
                         </Flex>
                       )}
                     </NavLink>
+                    <NavLink to="/diagram" onClick={() => setMenuOpen(false)} style={{ textDecoration: "none" }}>
+                      {({ isActive }) => (
+                        <Flex align="center" gap="2" px="2" py="2" style={{ borderRadius: 6, backgroundColor: isActive ? "var(--accent-3)" : "transparent" }}>
+                          <LayersIcon />
+                          <Text size="2" weight={isActive ? "medium" : "regular"}>Diagram</Text>
+                        </Flex>
+                      )}
+                    </NavLink>
                     <NavLink to="/firmware" onClick={() => setMenuOpen(false)} style={{ textDecoration: "none" }}>
                       {({ isActive }) => (
                         <Flex align="center" gap="2" px="2" py="2" style={{ borderRadius: 6, backgroundColor: isActive ? "var(--accent-3)" : "transparent" }}>
@@ -159,6 +168,13 @@ export default function Layout() {
                   {({ isActive }) => (
                     <TabNav.Link asChild active={isActive}>
                       <span>Graph</span>
+                    </TabNav.Link>
+                  )}
+                </NavLink>
+                <NavLink to="/diagram">
+                  {({ isActive }) => (
+                    <TabNav.Link asChild active={isActive}>
+                      <span>Diagram</span>
                     </TabNav.Link>
                   )}
                 </NavLink>

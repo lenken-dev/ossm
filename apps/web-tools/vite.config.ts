@@ -74,6 +74,9 @@ function wasmHotReload(): Plugin {
 }
 
 export default defineConfig({
+  build: {
+    target: "esnext",
+  },
   optimizeDeps: {
     exclude: ["@ossm-rs/web-simulator", "@ossm-rs/trajectory-recorder"],
   },
