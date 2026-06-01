@@ -31,7 +31,7 @@ use state::MotionStateChannels;
 pub use state::{MotionPhase, MotionState};
 pub use transport::{
     Modbus, ModbusTransport, ReadNonBlocking, Rs485ModbusTransport, StepDirConfig, StepDirError,
-    StepDirMotor, StepOutput, TransportError,
+    StepDirMotor, StepOutput, TransportError, UartReconfigure,
 };
 
 /// Root container for an OSSM instance.
