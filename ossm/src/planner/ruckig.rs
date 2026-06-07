@@ -1,4 +1,5 @@
 use rsruckig::prelude::*;
+use num_traits::float::Float;
 
 use super::{Planner, PlannerOutput};
 
@@ -66,17 +67,17 @@ impl Planner for RuckigPlanner {
         let position = position.clamp(0.0, 1.0);
         let velocity = (velocity_fraction * self.max_velocity).clamp(MIN_VELOCITY, self.max_velocity);
 
-        let speed_3 = 2.0 * libm::pow(velocity,3.0);
-        let max_jerk = speed_3 / libm::pow(0.066,2.0);
+        let speed_3 = 2.0 * velocity.powf(3.0);
+        let max_jerk = speed_3 / 0.066.powf(2.0);
         let rail_2 = 1.0;
         let min_jerk= speed_3 / rail_2;
         jerk_fraction = 1.0 - jerk_fraction;
-        jerk_fraction = libm::pow(jerk_fraction,0.5);
+        jerk_fraction = jerk_fraction.powf(0.5);
         jerk_fraction = 1.0 - jerk_fraction;
-        jerk_fraction = libm::pow(jerk_fraction,2.0);
+        jerk_fraction = jerk_fraction.powf(2.0);
         let mm_s3 = jerk_fraction * max_jerk + min_jerk;
         self.input.max_jerk[0] = mm_s3.clamp(1.0, self.max_jerk);
-        
+
         self.input.target_position[0] = position;
         self.input.max_velocity[0] = velocity;
         self.output.time = 0.0;
