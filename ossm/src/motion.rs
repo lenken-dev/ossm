@@ -1,4 +1,5 @@
 use rsruckig::prelude::*;
+use num_traits::float::Float;
 
 use crate::command::{Cancelled, MotionCommand, StateCommand, StateResponse};
 use crate::state::MotionPhase;
@@ -214,7 +215,7 @@ impl<'a, B: Board> MotionController<'a, B> {
             }
 
             MotionState::Moving => {
-                // Only attempt to update the current motion if 
+                // Only attempt to update the current motion if
                 // A. The remaining time of the existing move is more then 1 second
                 // B. The current max velocity is 0, indicating the device isn't actually moving
                 // C. The current output time is 0, which often indicates an error state.
@@ -377,9 +378,9 @@ impl<'a, B: Board> MotionController<'a, B> {
 
     fn ramp_by_exponent(&self, value: f64, exponent: f64) -> f64 {
         let mut ramped = 1.0 - value;
-        ramped = libm::pow(ramped,exponent);
+        ramped = ramped.powf(exponent);
         ramped = 1.0 - ramped;
-        return libm::pow(ramped,1.0/exponent);
+        return ramped.powf(1.0/exponent);
     }
 
     /// Calculates minimum and maximum jerk values
@@ -389,9 +390,9 @@ impl<'a, B: Board> MotionController<'a, B> {
     /// Only 95% of the maximum value is potentially used. This seems to make ruckig more stable.
     /// When velocity is slowing, previous jerk is used if it is greater then the new jerk to ensure time to slow down.
     fn fraction_to_jerk(&self, fraction: f64, speed: f64) -> f64 {
-        let speed_3 = 2.0 * libm::pow(speed,3.0);
-        let max_jerk = 0.95 * speed_3 / libm::pow(12.0,2.0);
-        let rail_2 = libm::pow(self.limits.max_position_mm - self.limits.min_position_mm,2.0);
+        let speed_3 = 2.0 * speed.powf(3.0);
+        let max_jerk = 0.95 * speed_3 / 12.0.powf(2.0);
+        let rail_2 = (self.limits.max_position_mm - self.limits.min_position_mm).powf(2.0);
         let min_jerk= speed_3 / rail_2;
         let mm_s3 = self.ramp_by_exponent(fraction, 0.5) * max_jerk + min_jerk;
         if self.input.current_velocity[0].abs() > speed && self.input.max_jerk[0] > mm_s3{
