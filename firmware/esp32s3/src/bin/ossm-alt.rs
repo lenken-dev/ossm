@@ -16,6 +16,10 @@ async fn main(spawner: embassy_executor::Spawner) {
             uart_rx: p.GPIO12.into(),
             rs485_de: p.GPIO11.into(),
         },
+        led: Some(esp32s3::LedConfig {
+            rmt: p.RMT,
+            pin: p.GPIO38.into(),
+        }),
         wifi: p.WIFI,
         bt: p.BT,
         timg0: p.TIMG0,

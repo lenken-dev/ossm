@@ -17,6 +17,7 @@ mod motor;
 mod radio;
 
 pub use motor::Config as MotorConfig;
+pub use ossm_esp::led::ws2812::Config as LedConfig;
 
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -30,7 +31,7 @@ use esp_hal::{
 };
 use esp_rtos::embassy::InterruptExecutor;
 use log::info;
-use ossm::{MechanicalConfig, MotionController, MotionLimits, Ossm};
+use ossm::{MechanicalConfig, MotionController, MotionLimits, Ossm, Rgb, RgbLed};
 use pattern_engine::{AnyPattern, PatternEngine, PatternSender};
 use static_cell::StaticCell;
 
@@ -46,6 +47,9 @@ macro_rules! mk_static {
 
 const UPDATE_INTERVAL_SECS: f64 = 0.01;
 
+/// Shown as soon as the firmware is alive.
+const BOOT_COLOR: Rgb = Rgb::new(255, 255, 255).scaled(0.02);
+
 static OSSM_CELL: StaticCell<Ossm> = StaticCell::new();
 static PATTERNS_CELL: StaticCell<PatternEngine> = StaticCell::new();
 
@@ -55,6 +59,8 @@ static MOTION_READY: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 
 pub struct Config {
     pub motor: motor::Config,
+    /// `None` on boards with no addressable LED wired up.
+    pub led: Option<LedConfig>,
     pub wifi: WIFI<'static>,
     pub bt: BT<'static>,
     pub timg0: TIMG0<'static>,
@@ -86,6 +92,17 @@ pub async fn run(spawner: Spawner, config: Config) {
 
     let timg0 = TimerGroup::new(config.timg0);
     esp_rtos::start(timg0.timer0);
+
+    // Before the motor: `motor::build` panics on a factory-fresh motor, and
+    // the LED is the only sign the firmware ran at all. It does not implicate
+    // the motor - nothing changes the colour afterwards.
+    // See docs/adr/0001-boot-led-before-motor-init.md.
+    let mut led = config.led.and_then(ossm_esp::led::ws2812::build);
+    if let Some(led) = led.as_mut()
+        && let Err(e) = led.set_color(BOOT_COLOR).await
+    {
+        log::warn!("Failed to set boot LED colour: {:?}", e);
+    }
 
     let motor = motor::build(config.motor).await;
 

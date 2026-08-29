@@ -16,6 +16,8 @@ async fn main(spawner: embassy_executor::Spawner) {
             uart_rx: p.GPIO18.into(),
             rs485_de: p.GPIO21.into(),
         },
+        // No LED wired up until this board's pin is confirmed.
+        led: None,
         wifi: p.WIFI,
         bt: p.BT,
         timg0: p.TIMG0,
