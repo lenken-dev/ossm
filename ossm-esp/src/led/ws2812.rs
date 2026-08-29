@@ -21,14 +21,26 @@ const RMT_CLK_DIVIDER: u8 = 1;
 
 /// WS2812B bit timings, in 12.5 ns RMT ticks. A `0` bit is a short high then
 /// a long low; a `1` bit is the reverse, both over a ~1.25 µs period.
-const T0H_TICKS: u16 = 32; // 400 ns
-const T0L_TICKS: u16 = 68; // 850 ns
-const T1H_TICKS: u16 = 64; // 800 ns
-const T1L_TICKS: u16 = 36; // 450 ns
+///
+/// The V5 revision's windows are tighter and *not* a superset of the
+/// original's, and the two cannot be told apart in software, so these sit in
+/// the overlap of both:
+///
+/// |      | original    | V5          | chosen |
+/// | ---- | ----------- | ----------- | ------ |
+/// | T0H  |  250-550 ns |  220-380 ns | 300 ns |
+/// | T0L  |  700-1000ns |  580-1000ns | 950 ns |
+/// | T1H  |  650-950 ns |  580-1000ns | 750 ns |
+/// | T1L  |  300-600 ns |  220-420 ns | 400 ns |
+const T0H_TICKS: u16 = 24; // 300 ns
+const T0L_TICKS: u16 = 76; // 950 ns
+const T1H_TICKS: u16 = 60; // 750 ns
+const T1L_TICKS: u16 = 32; // 400 ns
 
 /// Latch gap held low after the frame, sent as both halves of one pulse code.
-/// The datasheet wants >50 µs of idle before the LED commits the colour.
-const RESET_HALF_TICKS: u16 = 4000; // 50 µs, sent twice
+/// Must clear the original part's >50 µs and the V5 revision's >280 µs; short
+/// of that a V5 fails to latch, or reads the next frame as a second pixel.
+const RESET_HALF_TICKS: u16 = 12_000; // 150 µs, sent twice
 
 const BITS_PER_LED: usize = 24;
 /// 24 bits, one reset code, one end marker — inside the 48-word RMT memory
