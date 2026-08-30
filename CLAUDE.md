@@ -14,6 +14,11 @@ See `docs/agents/issue-tracker.md`.
 The five canonical triage roles, each label string equal to its name.
 See `docs/agents/triage-labels.md`.
 
+### Code comments
+
+Document the contract, not the deliberation; match the density of neighbouring files.
+See `docs/agents/code-comments.md`.
+
 ### Domain docs
 
 Single-context: `CONTEXT.md` and `docs/adr/` at the repo root.
