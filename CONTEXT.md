@@ -17,3 +17,20 @@ The colour shown as soon as the firmware is alive. It reports that the
 firmware ran at all, and nothing more — it is not a claim that the machine is
 ready, and it does not name a fault.
 _Avoid_: status colour, ready colour, startup indicator
+
+**Fault**:
+A latched condition the firmware has decided the user must be told about. It
+names what the user must do, not which subsystem broke, and it only ever
+describes — it never commands the machine.
+_Avoid_: error, failure
+
+**Fault class**:
+The required-action grouping a fault belongs to: *hardware*, meaning something
+physical must change, or *firmware*, meaning there is nothing physical to do.
+_Avoid_: category, severity
+
+**Error code**:
+The displayed identity of a fault — its fault class together with its blink
+count. Curated: only faults a user can act on have their own, and every other
+fault shares its class's generic code.
+_Avoid_: fault code, blink code
