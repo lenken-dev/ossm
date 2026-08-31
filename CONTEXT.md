@@ -34,3 +34,16 @@ The displayed identity of a fault — its fault class together with its blink
 count. Curated: only faults a user can act on have their own, and every other
 fault shares its class's generic code.
 _Avoid_: fault code, blink code
+
+**Remote**:
+A control surface that drives the machine over a radio. The phone app over BLE
+and the M5 handset over ESP-NOW are each a remote; the machine does not
+distinguish between them.
+_Avoid_: controller, client
+
+**Remote presence**:
+The firmware's belief that at least one remote is live. A belief, not a fact:
+each radio infers it differently and lags reality by its own timeout, so
+presence is always slightly stale and never a guarantee that a command will
+arrive.
+_Avoid_: connected, connection, link
