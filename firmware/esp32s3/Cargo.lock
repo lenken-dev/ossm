@@ -1337,6 +1337,7 @@ dependencies = [
  "embassy-time",
  "embedded-io 0.6.1",
  "esp-hal",
+ "log",
  "m57aim-motor",
  "ossm",
  "rs485-board",
