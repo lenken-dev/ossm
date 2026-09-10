@@ -1,0 +1,19 @@
+## Contribution conventions
+
+Follow upstream conventions. Use Conventional Commits (`type(scope): description`) and do not add tests unless instructed to.
+
+Keep `CONTEXT.md` and agent environment changes in separate commits marked with the `(fork)` scope (e.g. `docs(fork): ...`) so they can be omitted from upstream PRs.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked as local Markdown under `.scratch/`. See `.agent-docs/issue-tracker.md`.
+
+### Triage labels
+
+Triage state uses the five canonical Matt Pocock skill labels. See `.agent-docs/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single-context layout focused on the Rust implementation. See `.agent-docs/domain.md`.
