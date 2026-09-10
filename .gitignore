@@ -12,3 +12,7 @@ target/
 .pnpm-store
 
 .DS_Store
+
+.scratch/
+.worktrees/
+
