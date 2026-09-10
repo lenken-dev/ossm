@@ -1,6 +1,7 @@
 # Status indicator hardware
 
-`status-indicator` is a dependency-free `no_std` crate. `Indicator::set_on(bool)`
+`status-indicator` is a `no_std` crate, dependency-free with default features.
+`Indicator::set_on(bool)`
 provides on/off control, and `ColorIndicator::set_color(Rgb)` adds color support.
 Both operations are async and return hardware errors. `Rgb` contains raw 8-bit
 red, green, and blue channels; it does not apply gamma or brightness policy.
@@ -58,5 +59,46 @@ Optional packages can appear in `Cargo.lock` without being build dependencies.
 Compilation and simulated output checks do not verify physical signal timing or
 the board's LED. No hardware observation is implied by those checks.
 
-Status policy, timed patterns, primitive LED/buzzer drivers, application
-integration, and a standalone example are outside this change.
+## Steady status system
+
+The optional `status-indicator/policy` feature provides `select`, `color`, and
+`Output`. Engine and motion dependencies are confined to that feature; consumers
+of indicator traits do not need it. State selection follows the first matching
+rule, including when independently sampled observers disagree:
+
+| Condition | Status | Color |
+| --- | --- | --- |
+| Engine Homing | Homing | Yellow |
+| Motion Disabled or Enabled | Idle | Dim white |
+| Motion Stopping | Stopping | Orange |
+| Motion Moving | Playing | Green |
+| Engine Playing | Playing | Green |
+| Either observer Paused | Paused | Blue |
+| Engine Ready | Ready | Green |
+| Otherwise | Idle | Dim white |
+
+Engine Playing includes pattern delays and zero-speed holds. The palette and
+50 ms polling cadence are named constants in `crates/status-indicator/src/policy.rs`.
+Colors are scaled proportionally to a maximum channel brightness of 51/255
+(20%); idle white is 10/255 on each channel.
+
+Build ossm-alt with `cargo +esp build --bin ossm-alt --features
+motor-rs485,indicator-ws2812b` from `firmware/esp32s3` after sourcing the ESP
+toolchain environment. Its board wiring assigns GPIO38 and RMT channel 0.
+The indicator initializes and explicitly turns on with idle before motor setup.
+Once both observers are available, a task samples them every 50 ms and applies
+changed colors. Initialization failure is logged and disables indication;
+failed initial turn-on or runtime output is retried with the latest desired
+color on the next task tick. Failed writes invalidate the applied-color cache.
+Runtime failure messages are limited to one per five seconds. These failures
+do not terminate motion or pattern execution.
+
+The firmware adapter provides the same config/build/start boundary when absent,
+initializing no indicator peripherals and spawning no task. Waveshare and
+Seeed XIAO use absent configuration even if the package feature is enabled.
+
+Run policy and simulated failure checks with `cargo test -p status-indicator
+--features policy --test policy`. Hardware checks remain manual: observe idle
+during startup, yellow during homing, green when ready/playing, orange during
+deceleration, and blue when paused. Automated checks do not establish physical
+LED color, brightness, or timing.

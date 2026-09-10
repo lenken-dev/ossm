@@ -7,6 +7,9 @@
 
 use core::fmt::Debug;
 
+#[cfg(feature = "policy")]
+pub mod policy;
+
 /// Raw, linear RGB channel values. Zero is dark; 255 is full intensity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rgb {

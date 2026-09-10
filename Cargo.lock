@@ -1524,6 +1524,11 @@ dependencies = [
 [[package]]
 name = "status-indicator"
 version = "0.1.0"
+dependencies = [
+ "embassy-futures",
+ "ossm",
+ "pattern-engine",
+]
 
 [[package]]
 name = "stepdir-board"

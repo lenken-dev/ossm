@@ -16,7 +16,7 @@ motor-rs485 = ["ossm-esp/motor-rs485"]
 # sites don't change between real and sim builds.
 motor-sim = ["ossm-esp/motor-sim", "motor-rs485"]
 # Opt in explicitly; selecting a board binary alone must not enable drivers.
-indicator-ws2812b = ["ossm-esp/indicator-ws2812b"]
+indicator-ws2812b = ["ossm-esp/indicator-ws2812b", "dep:status-indicator"]
 
 [[bin]]
 name = "ossm-alt"
@@ -31,6 +31,7 @@ name = "seeed-xiao"
 path = "src/bin/seeed-xiao.rs"
 
 [dependencies]
+status-indicator = { path = "../../crates/status-indicator", features = ["policy"], optional = true }
 ossm = { path = "../../ossm" }
 ossm-esp = { path = "../../ossm-esp", features = ["esp32s3"] }
 pattern-engine = { path = "../../crates/pattern-engine" }
