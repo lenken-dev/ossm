@@ -7,6 +7,7 @@ An alternative firmware for OSSM written in rust.
 - [Why](#why)
 - [Supported hardware](#supported-hardware)
 - [Installing firmware](#installing-firmware)
+- [Status LED colors](#status-led-colors)
 - [Safety and disclaimers](#safety-and-disclaimers)
 - [Features](#features)
   - [Under the hood](#under-the-hood)
@@ -55,6 +56,19 @@ Motors:
 For now, firmware must be built and flashed manually from source. See [Set up your environment](#set-up-your-environment) for instructions.
 
 For the v1 release, pre-built binaries will be published on each tagged release. Longer term, a web flasher is planned so you can flash directly from your browser without any toolchain setup.
+
+## Status LED colors
+
+On boards with a configured RGB status LED, such as the OSSM Alt Edition, the LED shows a steady color:
+
+| Color | Meaning |
+| --- | --- |
+| Dim white | Idle — the motion controller is disabled or enabled but not ready, or the pattern engine is idle. |
+| Yellow | Homing — establishing the home reference. |
+| Orange | Stopping — decelerating, including while fulfilling a pause request. |
+| Green | Ready, moving, or playing a pattern. Playback stays green during pattern delays and zero-speed holds. |
+| Blue | Paused — motion has stopped with the intent to resume preserved. |
+| Red | Application panic — firmware has halted; the indication remains until manual reset. |
 
 ## Safety and disclaimers
 
