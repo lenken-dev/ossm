@@ -1,0 +1,3 @@
+# Keep normal trajectory planning in the motion controller
+
+The inherited Rust design assigns normal trajectory planning to the motion controller and treats the board and motor as position followers, with board-controlled homing as an exception. The [board contract](../../ossm/src/board.rs) explicitly gives the rationale: controller and motor planners in series would produce unpredictable compounding behavior, so the motor is configured for maximum tracking performance while the controller plans bounded motion. This records an evidenced inherited decision, not a new fork decision or proof of physical safety; see the [controller](../../ossm/src/motion.rs) and [RS485 board](../../boards/rs485/src/lib.rs).
