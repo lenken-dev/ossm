@@ -45,11 +45,24 @@ enum Motor {
     Sim,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Indicator {
+    None,
+    Ws2812b,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Feature {
+    Motor(Motor),
+    Indicator(Indicator),
+}
+
 struct VariantSpec {
     workspace: &'static str,
     bin: &'static str,
     target: &'static str,
     default_motor: Motor,
+    indicator: Indicator,
 }
 
 impl Variant {
@@ -60,24 +73,28 @@ impl Variant {
                 bin: "ossm-alt",
                 target: "xtensa-esp32s3-none-elf",
                 default_motor: Motor::Rs485,
+                indicator: Indicator::Ws2812b,
             },
             Variant::Waveshare => VariantSpec {
                 workspace: "firmware/esp32s3",
                 bin: "waveshare",
                 target: "xtensa-esp32s3-none-elf",
                 default_motor: Motor::Rs485,
+                indicator: Indicator::None,
             },
             Variant::SeeedXiao => VariantSpec {
                 workspace: "firmware/esp32s3",
                 bin: "seeed-xiao",
                 target: "xtensa-esp32s3-none-elf",
                 default_motor: Motor::Rs485,
+                indicator: Indicator::None,
             },
             Variant::OssmReference => VariantSpec {
                 workspace: "firmware/esp32",
                 bin: "ossm-reference",
                 target: "xtensa-esp32-none-elf",
                 default_motor: Motor::Stepdir,
+                indicator: Indicator::None,
             },
         }
     }
@@ -90,6 +107,38 @@ impl Motor {
             Motor::Stepdir => "motor-stepdir",
             Motor::Sim => "motor-sim",
         }
+    }
+}
+
+impl Indicator {
+    fn feature(self) -> Option<&'static str> {
+        match self {
+            Indicator::None => None,
+            Indicator::Ws2812b => Some("indicator-ws2812b"),
+        }
+    }
+}
+
+impl Feature {
+    fn cargo_name(self) -> Option<&'static str> {
+        match self {
+            Feature::Motor(motor) => Some(motor.feature()),
+            Feature::Indicator(indicator) => indicator.feature(),
+        }
+    }
+}
+
+impl VariantSpec {
+    fn features(&self, motor: Motor) -> Vec<Feature> {
+        vec![Feature::Motor(motor), Feature::Indicator(self.indicator)]
+    }
+
+    fn cargo_features(&self, motor: Motor) -> String {
+        self.features(motor)
+            .into_iter()
+            .filter_map(Feature::cargo_name)
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 
@@ -106,11 +155,12 @@ fn workspace_root() -> Result<PathBuf> {
 fn run_build(spec: &VariantSpec, motor: Motor) -> Result<PathBuf> {
     let root = workspace_root()?;
     let workspace_dir = root.join(spec.workspace);
+    let features = spec.cargo_features(motor);
 
     eprintln!(
         "ossm-flash: building {} ({}) in {}",
         spec.bin,
-        motor.feature(),
+        features,
         workspace_dir.display()
     );
 
@@ -123,7 +173,7 @@ fn run_build(spec: &VariantSpec, motor: Motor) -> Result<PathBuf> {
             "--bin",
             spec.bin,
             "--features",
-            motor.feature(),
+            &features,
         ])
         .status()
         .context("failed to invoke `cargo +esp build` (is the esp toolchain installed?)")?;

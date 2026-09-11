@@ -41,10 +41,10 @@ No timer task or heap allocation is needed.
 ## Build isolation and verification
 
 The ESP32-S3 firmware exposes the same opt-in `indicator-ws2812b` feature. It is
-disabled by default. Its three board executables share one Cargo package, so
-features apply to the package, not an individual executable. Normal board builds
-do not pull in the WS2812B implementation. Explicitly enabling the feature opts
-that build into the driver, regardless of the executable selected.
+disabled in Cargo defaults, but `ossm-flash` enables it for OSSM Alt, and
+`just focus esp32s3` enables it for editor analysis. Its three board executables
+share one Cargo package, so features apply to the package, not an individual
+executable. Builds without the feature exclude the WS2812B implementation.
 
 From the repository root, run the public-interface behavior checks with
 `cargo test -p ws2812b-indicator --test indicator`. They simulate the external
