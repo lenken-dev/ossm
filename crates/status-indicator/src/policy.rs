@@ -5,7 +5,6 @@ use ossm::MotionPhase;
 use pattern_engine::EngineState;
 
 pub const POLL_INTERVAL_MS: u64 = 50;
-/// Twenty percent of raw LED maximum, applied to every palette channel.
 pub use crate::MAX_BRIGHTNESS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

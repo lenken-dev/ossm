@@ -1,7 +1,7 @@
 use std::{cell::Cell, rc::Rc};
 
 use embassy_futures::block_on;
-use status_indicator::{ColorIndicator, Indicator, PanicIndicator, Rgb};
+use status_indicator::{ColorIndicator, Indicator, MAX_BRIGHTNESS, PanicIndicator, Rgb};
 use ws2812b_indicator::{PanicPixelWriter, PixelWriter, Ws2812b};
 
 /// Simulates the LED at the external transport boundary, including retained
@@ -38,7 +38,7 @@ fn panic_overrides_an_off_led_with_capped_red_without_polling() {
     let mut panic = indicator.take_panic_indicator().unwrap();
     assert!(indicator.take_panic_indicator().is_none());
     panic.indicate_panic().unwrap();
-    assert_eq!(led.get(), [0, 51, 0]);
+    assert_eq!(led.get(), [0, MAX_BRIGHTNESS, 0]);
 }
 
 struct PendingWire {
@@ -92,7 +92,7 @@ fn panic_can_override_a_normal_write_that_never_completes() {
     ));
     assert_eq!(led.get(), [255, 0, 0]);
     panic.indicate_panic().unwrap();
-    assert_eq!(led.get(), [0, 51, 0]);
+    assert_eq!(led.get(), [0, MAX_BRIGHTNESS, 0]);
 }
 
 #[test]

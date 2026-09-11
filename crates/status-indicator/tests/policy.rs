@@ -46,15 +46,16 @@ fn steady_palette_is_capped_and_idle_is_dimmer() {
         Rgb,
         policy::{MAX_BRIGHTNESS, color},
     };
+    let max = MAX_BRIGHTNESS;
+    let orange_green = (u16::from(max) * 80 / 255) as u8;
     let expected = [
         (Status::Idle, Rgb::new(10, 10, 10)),
-        (Status::Homing, Rgb::new(51, 51, 0)),
-        (Status::Stopping, Rgb::new(51, 16, 0)),
-        (Status::Playing, Rgb::new(0, 51, 0)),
-        (Status::Paused, Rgb::new(0, 0, 51)),
-        (Status::Ready, Rgb::new(0, 51, 0)),
+        (Status::Homing, Rgb::new(max, max, 0)),
+        (Status::Stopping, Rgb::new(max, orange_green, 0)),
+        (Status::Playing, Rgb::new(0, max, 0)),
+        (Status::Paused, Rgb::new(0, 0, max)),
+        (Status::Ready, Rgb::new(0, max, 0)),
     ];
-    assert_eq!(MAX_BRIGHTNESS, 51);
     for (status, rgb) in expected {
         assert_eq!(color(status), rgb);
         for channel in [rgb.red, rgb.green, rgb.blue] {

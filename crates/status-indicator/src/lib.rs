@@ -7,8 +7,8 @@
 
 use core::fmt::Debug;
 
-/// Maximum channel intensity shared by normal and panic indication (20%).
-pub const MAX_BRIGHTNESS: u8 = 255 / 5;
+/// Maximum channel intensity.
+pub const MAX_BRIGHTNESS: u8 = 255;
 /// Persistent panic output for color indicators.
 pub const PANIC_COLOR: Rgb = Rgb::new(MAX_BRIGHTNESS, 0, 0);
 
