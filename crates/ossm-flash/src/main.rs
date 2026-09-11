@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
@@ -61,7 +61,7 @@ struct VariantSpec {
     workspace: &'static str,
     bin: &'static str,
     target: &'static str,
-    default_motor: Motor,
+    motor: Motor,
     indicator: Indicator,
 }
 
@@ -72,28 +72,28 @@ impl Variant {
                 workspace: "firmware/esp32s3",
                 bin: "ossm-alt",
                 target: "xtensa-esp32s3-none-elf",
-                default_motor: Motor::Rs485,
+                motor: Motor::Rs485,
                 indicator: Indicator::Ws2812b,
             },
             Variant::Waveshare => VariantSpec {
                 workspace: "firmware/esp32s3",
                 bin: "waveshare",
                 target: "xtensa-esp32s3-none-elf",
-                default_motor: Motor::Rs485,
+                motor: Motor::Rs485,
                 indicator: Indicator::None,
             },
             Variant::SeeedXiao => VariantSpec {
                 workspace: "firmware/esp32s3",
                 bin: "seeed-xiao",
                 target: "xtensa-esp32s3-none-elf",
-                default_motor: Motor::Rs485,
+                motor: Motor::Rs485,
                 indicator: Indicator::None,
             },
             Variant::OssmReference => VariantSpec {
                 workspace: "firmware/esp32",
                 bin: "ossm-reference",
                 target: "xtensa-esp32-none-elf",
-                default_motor: Motor::Stepdir,
+                motor: Motor::Stepdir,
                 indicator: Indicator::None,
             },
         }
@@ -129,12 +129,15 @@ impl Feature {
 }
 
 impl VariantSpec {
-    fn features(&self, motor: Motor) -> Vec<Feature> {
-        vec![Feature::Motor(motor), Feature::Indicator(self.indicator)]
+    fn features(&self) -> Vec<Feature> {
+        vec![
+            Feature::Motor(self.motor),
+            Feature::Indicator(self.indicator),
+        ]
     }
 
-    fn cargo_features(&self, motor: Motor) -> String {
-        self.features(motor)
+    fn cargo_features(&self) -> String {
+        self.features()
             .into_iter()
             .filter_map(Feature::cargo_name)
             .collect::<Vec<_>>()
@@ -152,10 +155,10 @@ fn workspace_root() -> Result<PathBuf> {
         .context("could not resolve workspace root from CARGO_MANIFEST_DIR")
 }
 
-fn run_build(spec: &VariantSpec, motor: Motor) -> Result<PathBuf> {
+fn run_build(spec: &VariantSpec) -> Result<PathBuf> {
     let root = workspace_root()?;
     let workspace_dir = root.join(spec.workspace);
-    let features = spec.cargo_features(motor);
+    let features = spec.cargo_features();
 
     eprintln!(
         "ossm-flash: building {} ({}) in {}",
@@ -225,8 +228,10 @@ fn run_flash_and_monitor(elf: &PathBuf, port: Option<&str>) -> Result<()> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let spec = cli.variant.spec();
-    let motor = cli.motor.unwrap_or(spec.default_motor);
+    let mut spec = cli.variant.spec();
+    if let Some(motor) = cli.motor {
+        spec.motor = motor;
+    }
 
     let elf = if cli.no_build {
         let root = workspace_root()?;
@@ -236,7 +241,7 @@ fn main() -> Result<()> {
             .join("release")
             .join(spec.bin)
     } else {
-        run_build(&spec, motor)?
+        run_build(&spec)?
     };
 
     if cli.build_only {
