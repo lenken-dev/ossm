@@ -16,7 +16,7 @@ motor-rs485 = ["ossm-esp/motor-rs485"]
 # sites don't change between real and sim builds.
 motor-sim = ["ossm-esp/motor-sim", "motor-rs485"]
 # Opt in explicitly; selecting a board binary alone must not enable drivers.
-indicator-ws2812b = ["ossm-esp/indicator-ws2812b", "dep:status-indicator"]
+indicator-ws2812b = ["ossm-esp/indicator-ws2812b", "dep:status-indicator", "esp-backtrace/custom-pre-backtrace"]
 
 [[bin]]
 name = "ossm-alt"

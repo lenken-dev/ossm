@@ -16,6 +16,12 @@ The driver commits its logical state only after successful writes. An error or
 cancelled write can leave the physical output unknown. Calling `set_on` again
 always sends a complete frame, allowing the caller to reapply the desired state.
 
+`Indicator::take_panic_indicator` extracts an independent, synchronous panic
+output once. Its bounded attempt overrides normal output and retains the panic
+signal until reset. The WS2812B uses continuous red; firmware registers this
+output after initialization and invokes it for application panics before
+continuing diagnostics and halting.
+
 ## ESP support
 
 Enable `ossm-esp/indicator-ws2812b` to use `ossm_esp::indicator::build` with a
@@ -24,11 +30,11 @@ RMT peripheral as `Config::rmt`. The builder configures an async RMT transport
 and returns an initially-off indicator. It returns configuration and initial
 clear failures to the caller.
 
-The builder owns RMT and uses TX channel 0 with an 80 MHz clock. This follows
+The builder owns RMT, using TX channel 0 for normal output and reserving TX
+channel 1 for panic output. This follows
 the existing ESP peripheral-ownership convention and cannot coexist with the
 current step/dir adapter's ownership of the same RMT peripheral. The ossm-alt
-RS485 motor does not use RMT. Future application composition must account for
-peripheral ownership; this change does not alter motor adapters.
+RS485 motor does not use RMT. Application composition must account for peripheral ownership.
 
 The transport sends GRB bytes, most significant bit first, with 300 microseconds
 low before and after each pixel. The initial reset recovers framing after an
@@ -85,7 +91,7 @@ Colors are scaled proportionally to a maximum channel brightness of 51/255
 
 Build ossm-alt with `cargo +esp build --bin ossm-alt --features
 motor-rs485,indicator-ws2812b` from `firmware/esp32s3` after sourcing the ESP
-toolchain environment. Its board wiring assigns GPIO38 and RMT channel 0.
+toolchain environment. Its board wiring assigns GPIO38 and the RMT peripheral.
 The indicator initializes and explicitly turns on with idle before motor setup.
 Once both observers are available, a task samples them every 50 ms and applies
 changed colors. Initialization failure is logged and disables indication;

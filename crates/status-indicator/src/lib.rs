@@ -7,6 +7,11 @@
 
 use core::fmt::Debug;
 
+/// Maximum channel intensity shared by normal and panic indication (20%).
+pub const MAX_BRIGHTNESS: u8 = 255 / 5;
+/// Persistent panic output for color indicators.
+pub const PANIC_COLOR: Rgb = Rgb::new(MAX_BRIGHTNESS, 0, 0);
+
 #[cfg(feature = "policy")]
 pub mod policy;
 
@@ -35,10 +40,28 @@ impl Rgb {
 #[allow(async_fn_in_trait)]
 pub trait Indicator {
     type Error: Debug;
+    type Panic: PanicIndicator;
+
+    /// Extract the independent panic output once, for registration with the
+    /// application's panic handler. Subsequent calls return `None`.
+    fn take_panic_indicator(&mut self) -> Option<Self::Panic>;
 
     /// Apply the requested output and wait for the hardware update to complete.
     /// Turning off preserves any configured color. No timing pattern is started.
     async fn set_on(&mut self, on: bool) -> Result<(), Self::Error>;
+}
+
+/// Independent output used during a terminal application panic.
+///
+/// Implementations must make a bounded, synchronous attempt, without allocation,
+/// task scheduling, or locks that interrupted application code might hold. The
+/// signal overrides normal output and persists until reset. Failure must return
+/// so the caller can continue diagnostics and halt. Concrete signals depend on
+/// hardware capabilities.
+pub trait PanicIndicator {
+    type Error: Debug;
+
+    fn indicate_panic(&mut self) -> Result<(), Self::Error>;
 }
 
 /// An indicator that remembers a color independently of its on/off state.

@@ -87,6 +87,11 @@ struct TestIndicator {
 
 impl Indicator for TestIndicator {
     type Error = ();
+    type Panic = TestPanic;
+
+    fn take_panic_indicator(&mut self) -> Option<Self::Panic> {
+        None
+    }
     async fn set_on(&mut self, on: bool) -> Result<(), ()> {
         self.wire.writes.set(self.wire.writes.get() + 1);
         if self.wire.fail_on.get() {
@@ -96,6 +101,16 @@ impl Indicator for TestIndicator {
         self.wire
             .visible
             .set(if on { self.remembered } else { Rgb::BLACK });
+        Ok(())
+    }
+}
+
+struct TestPanic;
+
+impl status_indicator::PanicIndicator for TestPanic {
+    type Error = ();
+
+    fn indicate_panic(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 }

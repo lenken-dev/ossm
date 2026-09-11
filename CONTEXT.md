@@ -124,3 +124,6 @@ The machine's physical output for communicating status to a person, such as a co
 
 **Status system**:
 The policy that determines which machine conditions to communicate and how to express them through a status indicator.
+
+**Panic indication**:
+A hardware-specific status indication triggered only by an application panic and retained until manual reset. On a WS2812B, it is continuous red; it supplements panic diagnostics.
