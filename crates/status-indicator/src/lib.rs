@@ -20,6 +20,11 @@ pub struct Rgb {
 
 impl Rgb {
     pub const BLACK: Self = Self::new(0, 0, 0);
+    pub const BLUE: Self = Self::new(0, 0, 255);
+    pub const DIM_WHITE: Self = Self::new(10, 10, 10);
+    pub const GREEN: Self = Self::new(0, 255, 0);
+    pub const ORANGE: Self = Self::new(255, 80, 0);
+    pub const YELLOW: Self = Self::new(255, 255, 0);
 
     pub const fn new(red: u8, green: u8, blue: u8) -> Self {
         Self { red, green, blue }

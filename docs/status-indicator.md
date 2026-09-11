@@ -77,8 +77,9 @@ rule, including when independently sampled observers disagree:
 | Engine Ready | Ready | Green |
 | Otherwise | Idle | Dim white |
 
-Engine Playing includes pattern delays and zero-speed holds. The palette and
-50 ms polling cadence are named constants in `crates/status-indicator/src/policy.rs`.
+Engine Playing includes pattern delays and zero-speed holds. The palette is
+defined by `Rgb` in `crates/status-indicator/src/lib.rs`; polling cadence is
+configured in `crates/status-indicator/src/policy.rs`.
 Colors are scaled proportionally to a maximum channel brightness of 51/255
 (20%); idle white is 10/255 on each channel.
 

@@ -7,12 +7,6 @@ use pattern_engine::EngineState;
 pub const POLL_INTERVAL_MS: u64 = 50;
 /// Twenty percent of raw LED maximum, applied to every palette channel.
 pub const MAX_BRIGHTNESS: u8 = 255 / 5;
-pub const IDLE_COLOR: Rgb = Rgb::new(10, 10, 10);
-pub const HOMING_COLOR: Rgb = Rgb::new(255, 255, 0);
-pub const STOPPING_COLOR: Rgb = Rgb::new(255, 80, 0);
-pub const PLAYING_COLOR: Rgb = Rgb::new(0, 255, 0);
-pub const PAUSED_COLOR: Rgb = Rgb::new(0, 0, 255);
-pub const READY_COLOR: Rgb = PLAYING_COLOR;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -27,12 +21,12 @@ pub enum Status {
 /// Cap brightness while preserving each palette color's channel proportions.
 pub fn color(status: Status) -> Rgb {
     let rgb = match status {
-        Status::Idle => IDLE_COLOR,
-        Status::Homing => HOMING_COLOR,
-        Status::Stopping => STOPPING_COLOR,
-        Status::Playing => PLAYING_COLOR,
-        Status::Paused => PAUSED_COLOR,
-        Status::Ready => READY_COLOR,
+        Status::Idle => Rgb::DIM_WHITE,
+        Status::Homing => Rgb::YELLOW,
+        Status::Stopping => Rgb::ORANGE,
+        Status::Playing => Rgb::GREEN,
+        Status::Paused => Rgb::BLUE,
+        Status::Ready => Rgb::GREEN,
     };
     let peak = rgb.red.max(rgb.green).max(rgb.blue);
     if peak <= MAX_BRIGHTNESS {
