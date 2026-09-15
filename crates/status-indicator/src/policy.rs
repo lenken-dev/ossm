@@ -1,8 +1,9 @@
 //! Steady status policy, independent of indicator hardware and scheduling.
 
-use crate::{ColorIndicator, Rgb};
+use crate::{ColorIndicator, RGB8};
 use ossm::MotionPhase;
 use pattern_engine::EngineState;
+use smart_leds::{brightness, colors};
 
 pub const POLL_INTERVAL_MS: u64 = 50;
 pub use crate::MAX_BRIGHTNESS;
@@ -17,22 +18,18 @@ pub enum Status {
     Ready,
 }
 
-/// Cap brightness while preserving each palette color's channel proportions.
-pub fn color(status: Status) -> Rgb {
+/// Apply the shared brightness level without changing the palette's hues.
+pub fn color(status: Status) -> RGB8 {
     let rgb = match status {
-        Status::Idle => Rgb::DIM_WHITE,
-        Status::Homing => Rgb::YELLOW,
-        Status::Stopping => Rgb::ORANGE,
-        Status::Playing => Rgb::GREEN,
-        Status::Paused => Rgb::BLUE,
-        Status::Ready => Rgb::GREEN,
+        Status::Idle => RGB8::new(10, 10, 10),
+        Status::Homing => colors::YELLOW,
+        Status::Stopping => RGB8::new(255, 80, 0),
+        Status::Playing | Status::Ready => colors::LIME,
+        Status::Paused => colors::BLUE,
     };
-    let peak = rgb.red.max(rgb.green).max(rgb.blue);
-    if peak <= MAX_BRIGHTNESS {
-        return rgb;
-    }
-    let scale = |channel: u8| (channel as u16 * MAX_BRIGHTNESS as u16 / peak as u16) as u8;
-    Rgb::new(scale(rgb.red), scale(rgb.green), scale(rgb.blue))
+    brightness([rgb].into_iter(), MAX_BRIGHTNESS)
+        .next()
+        .unwrap()
 }
 
 /// Resolve independently sampled observers in priority order. Engine playing
@@ -53,7 +50,7 @@ pub fn select(engine: EngineState, motion: MotionPhase) -> Status {
 /// The caller schedules retries: errors never mark output as applied.
 pub struct Output<I> {
     indicator: I,
-    applied: Option<Rgb>,
+    applied: Option<RGB8>,
     on: bool,
 }
 
@@ -66,17 +63,17 @@ impl<I: ColorIndicator> Output<I> {
         }
     }
 
-    pub async fn apply(&mut self, status: Status) -> Result<(), I::Error> {
+    pub fn apply(&mut self, status: Status) -> Result<(), I::Error> {
         let desired = color(status);
         if self.applied == Some(desired) {
             return Ok(());
         }
-        // Invalidate before awaiting: a failed or cancelled write may have
-        // changed physical output, even if the next request is the old color.
+        // A failed write may change physical output, even if the next request
+        // returns to the previous color.
         self.applied = None;
-        self.indicator.set_color(desired).await?;
+        self.indicator.set_color(desired)?;
         if !self.on {
-            self.indicator.set_on(true).await?;
+            self.indicator.set_on(true)?;
             self.on = true;
         }
         self.applied = Some(desired);

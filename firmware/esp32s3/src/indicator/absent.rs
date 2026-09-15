@@ -5,7 +5,7 @@ use pattern_engine::PatternObserver;
 #[derive(Default)]
 pub struct Config;
 
-pub async fn build(_config: Config) {}
+pub fn build(_config: Config) {}
 
 pub fn start(
     _spawner: &Spawner,

@@ -10,10 +10,15 @@ async fn main(spawner: embassy_executor::Spawner) {
     let p = esp_hal::init(esp_hal::Config::default());
 
     #[cfg(feature = "indicator-ws2812b")]
-    let indicator = Some(ossm_esp::indicator::Config {
-        rmt: p.RMT,
-        data: p.GPIO38.into(),
-    });
+    let indicator = {
+        let rmt = esp_hal::rmt::Rmt::new(p.RMT, esp_hal::time::Rate::from_mhz(80))
+            .expect("Failed to initialize RMT");
+        Some(ossm_esp::indicator::Config {
+            channel: rmt.channel0,
+            panic_channel: rmt.channel1,
+            data: p.GPIO38.into(),
+        })
+    };
     #[cfg(not(feature = "indicator-ws2812b"))]
     let indicator = esp32s3::IndicatorConfig::default();
 

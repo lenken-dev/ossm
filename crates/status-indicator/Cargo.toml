@@ -7,11 +7,10 @@ edition = "2024"
 policy = ["dep:ossm", "dep:pattern-engine"]
 
 [dependencies]
+smart-leds = "0.4"
+embedded-hal = "1.0"
 ossm = { path = "../../ossm", optional = true }
 pattern-engine = { path = "../pattern-engine", optional = true }
-
-[dev-dependencies]
-embassy-futures = "0.1"
 
 [[test]]
 name = "policy"

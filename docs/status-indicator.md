@@ -1,76 +1,63 @@
-# Status indicator hardware
+# Status indication
 
-`status-indicator` is a `no_std` crate, dependency-free with default features.
-`Indicator::set_on(bool)`
-provides on/off control, and `ColorIndicator::set_color(Rgb)` adds color support.
-Both operations are async and return hardware errors. `Rgb` contains raw 8-bit
-red, green, and blue channels; it does not apply gamma or brightness policy.
+`status-indicator` provides small synchronous, fallible capabilities:
+`Indicator::set_on(bool)` and `ColorIndicator::set_color(RGB8)`. `RGB8` comes
+from `smart-leds`; there is no application-specific color or pixel transport
+interface. Like the motor, indicators separate portable capabilities from
+platform `Config`/`build` adapters and firmware feature selection.
 
-`ws2812b-indicator` implements these capabilities for one WS2812B through a
-`PixelWriter` hardware transport. Initialization clears the LED and remembers
-the caller's initial color. Off preserves that color; changing color while off
-leaves the output dark. Turning on displays the remembered color, and changing
-color while on updates it immediately. Black remains a valid selected color.
+`SmartLed` adds remembered on/off color and reset/latch delays to a standard
+`SmartLedsWrite` writer. Initialization clears the LED while remembering the
+initial color. Turning off preserves that color; changing color while off
+leaves the LED dark. Turning on displays the remembered color. Black remains a
+valid selected color. Logical state changes only after successful writes, and
+`set_on` always retransmits so callers can recover from uncertain output.
 
-The driver commits its logical state only after successful writes. An error or
-cancelled write can leave the physical output unknown. Calling `set_on` again
-always sends a complete frame, allowing the caller to reapply the desired state.
+## ESP hardware and channel ownership
 
-`Indicator::take_panic_indicator` extracts an independent, synchronous panic
-output once. Its bounded attempt overrides normal output and retains the panic
-signal until reset. The WS2812B uses continuous red; firmware registers this
-output after initialization and invokes it for application panics before
-continuing diagnostics and halting.
+Enable `ossm-esp/indicator-ws2812b` to construct one WS2812B using
+`esp-hal-smartled` 0.17.0 and its blocking `SmartLedsAdapter`. The upstream
+adapter owns GRB encoding and RMT pulse generation; both normal and panic output
+use `SmartLedsWrite::write` and HAL blocking delays. Each write has a 300 µs
+low interval before transmission to reset framing and another afterward to
+latch the pixel, including when a write returns an error.
 
-## ESP support
+Board composition initializes RMT at 80 MHz and passes individual channel
+creators to adapters. OSSM Alt assigns channel 0 to normal output, channel 1 to
+panic output, and GPIO38 to the LED. The current indicator `Config` expresses
+those channel numbers in its types. OSSM Reference similarly passes channel 0
+to the step/dir motor adapter, which retains its existing divider and step
+pulse configuration. Neither adapter takes the whole RMT peripheral; unused
+channels remain available to board composition. This change adds no LED to
+OSSM Reference.
 
-Enable `ossm-esp/indicator-ws2812b` to use `ossm_esp::indicator::build` with a
-`Config` and initial `Rgb`. On ossm-alt, supply GPIO38 as `Config::data` and the
-RMT peripheral as `Config::rmt`. The builder configures an async RMT transport
-and returns an initially-off indicator. It returns configuration and initial
-clear failures to the caller.
+The ESP indicator builder returns the normal indicator and an independently
+owned panic handle. The panic handle owns the GPIO; normal code owns only its
+channel. Both channels start with no pin attached. During initialization, HAL
+routing connects normal output to the GPIO. On panic, HAL routing replaces it
+with the idle-low panic channel before the reset interval and red frame.
+In-flight or later normal writes cannot reconnect the GPIO or overwrite red.
+No custom register access, pulse encoder, or panic transport trait is needed.
 
-The builder owns RMT, using TX channel 0 for normal output and reserving TX
-channel 1 for panic output. This follows
-the existing ESP peripheral-ownership convention and cannot coexist with the
-current step/dir adapter's ownership of the same RMT peripheral. The ossm-alt
-RS485 motor does not use RMT. Application composition must account for peripheral ownership.
+Firmware registers the panic handle after successful initialization and invokes
+it through `esp-backtrace`'s pre-backtrace hook. Atomic one-time acquisition
+prevents overlapping mutable access during nested or simultaneous panics.
+Panic indication covers either core after registration, uses the shared
+brightness level, and remains red until manual reset. It supplements the
+existing diagnostics and halt; simultaneous/nested panics do not guarantee
+completed physical indication.
 
-The transport sends GRB bytes, most significant bit first, with 300 microseconds
-low before and after each pixel. The initial reset recovers framing after an
-interrupted transmission; the final reset latches the output before the future
-completes. Pulse timings follow Worldsemi's
-[WS2812B datasheet](https://cdn-shop.adafruit.com/datasheets/WS2812B.pdf) and
-[WS2812B-V5 datasheet](https://www.world-semi.co.kr/_files/ugd/89cd03_1023b0e9d135431aa1e6491bfc318112.pdf).
-No timer task or heap allocation is needed.
+The [upstream adapter](https://docs.rs/esp-hal-smartled/0.17.0/esp_hal_smartled/)
+panics if channel configuration fails. Its blocking completion polling has no
+timeout: stalled RMT hardware can prevent subsequent panic diagnostics. These
+upstream behaviors are accepted. Returned initial-clear errors disable indication
+with a log message; failed startup turn-on and runtime writes are retried.
 
-## Build isolation and verification
+## Steady status policy
 
-The ESP32-S3 firmware exposes the same opt-in `indicator-ws2812b` feature. It is
-disabled in Cargo defaults, but `ossm-flash` enables it for OSSM Alt, and
-`just focus esp32s3` enables it for editor analysis. Its three board executables
-share one Cargo package, so features apply to the package, not an individual
-executable. Builds without the feature exclude the WS2812B implementation.
-
-From the repository root, run the public-interface behavior checks with
-`cargo test -p ws2812b-indicator --test indicator`. They simulate the external
-LED transport and exercise clearing, color retention, GRB order, and failures.
-
-From `firmware/esp32s3`, compile the hardware implementation with
-`cargo +esp build --lib --features motor-rs485,indicator-ws2812b`. Compare
-`cargo tree --edges normal,build --features motor-rs485` with the same command
-using `--features motor-rs485,indicator-ws2812b` to check dependency isolation.
-Optional packages can appear in `Cargo.lock` without being build dependencies.
-
-Compilation and simulated output checks do not verify physical signal timing or
-the board's LED. No hardware observation is implied by those checks.
-
-## Steady status system
-
-The optional `status-indicator/policy` feature provides `select`, `color`, and
-`Output`. Engine and motion dependencies are confined to that feature; consumers
-of indicator traits do not need it. State selection follows the first matching
-rule, including when independently sampled observers disagree:
+The optional `status-indicator/policy` feature exposes state selection, palette,
+and `Output`. Motion and engine dependencies are confined to this feature.
+State selection applies the first matching rule to independent observer snapshots:
 
 | Condition | Status | Color |
 | --- | --- | --- |
@@ -83,29 +70,42 @@ rule, including when independently sampled observers disagree:
 | Engine Ready | Ready | Green |
 | Otherwise | Idle | Dim white |
 
-Engine Playing includes pattern delays and zero-speed holds. The palette is
-defined by `Rgb` in `crates/status-indicator/src/lib.rs`; polling cadence is
-configured in `crates/status-indicator/src/policy.rs`. Normal colors and panic
-red share `MAX_BRIGHTNESS`. Normal colors are scaled proportionally when they
-exceed that cap; idle uses dim white.
+Engine Playing includes pattern delays and zero-speed holds. Palette values
+remain unchanged: green is `(0, 255, 0)`, orange `(255, 80, 0)`, and idle white
+`(10, 10, 10)`. The smart LED brightness helper uniformly scales colors using
+`MAX_BRIGHTNESS`; no gamma correction is applied. Palette and polling cadence
+are defined in `crates/status-indicator/src/policy.rs`.
 
-Build ossm-alt with `cargo +esp build --bin ossm-alt --features
-motor-rs485,indicator-ws2812b` from `firmware/esp32s3` after sourcing the ESP
-toolchain environment. Its board wiring assigns GPIO38 and the RMT peripheral.
-The indicator initializes and explicitly turns on with idle before motor setup.
-Once both observers are available, a task samples them every 50 ms and applies
-changed colors. Initialization failure is logged and disables indication;
-failed initial turn-on or runtime output is retried with the latest desired
-color on the next task tick. Failed writes invalidate the applied-color cache.
-Runtime failure messages are limited to one per five seconds. These failures
-do not terminate motion or pattern execution.
+Firmware displays idle before motor setup. Once observers are available, the
+status task polls every 50 ms and performs a blocking update only when the
+color changes. A failed write invalidates the applied-color cache and retries
+the latest desired output on the next tick. Failure logs are limited to once
+every five seconds. Ordinary write errors do not stop motion or pattern execution.
 
-The firmware adapter provides the same config/build/start boundary when absent,
-initializing no indicator peripherals and spawning no task. Waveshare and
-Seeed XIAO use absent configuration even if the package feature is enabled.
+## Optional support and verification
 
-Run policy and simulated failure checks with `cargo test -p status-indicator
---features policy --test policy`. Hardware checks remain manual: observe idle
-during startup, yellow during homing, green when ready/playing, orange during
-deceleration, and blue when paused. Automated checks do not establish physical
-LED color, brightness, or timing.
+Hardware support remains opt-in through `indicator-ws2812b`. `ossm-flash`
+enables it for OSSM Alt and `just focus esp32s3` enables editor analysis. Boards
+without indication use the uniform absent `Config`/`build`/`start` adapter,
+which initializes no indicator peripherals and spawns no status task.
+Waveshare and Seeed XIAO remain absent even when the package feature is enabled.
+Builds without the feature exclude `esp-hal-smartled` and `status-indicator`.
+
+Host behavior checks use the standard smart LED output boundary:
+
+```sh
+cargo test -p status-indicator --features policy
+```
+
+They cover initialization, remembered color, failed writes, observer precedence,
+unchanged-color suppression, and retries. GPIO takeover, actual LED timing,
+either-core panic injection, and red persistence require hardware observation.
+The old simulated custom-panic-transport tests no longer apply.
+
+After sourcing the ESP toolchain environment, compile all ESP32-S3 binaries
+from `firmware/esp32s3` with `cargo +esp build --bins --features
+motor-rs485,indicator-ws2812b`, then without `indicator-ws2812b`. Build OSSM
+Reference from `firmware/esp32` with `cargo +esp build --bin ossm-reference
+--features motor-stepdir`. Use `cargo tree --edges normal,build` with the same
+features to verify hardware dependency isolation. Optional packages appearing
+in a lockfile alone do not imply a build dependency.
