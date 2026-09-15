@@ -5,15 +5,13 @@ use core::{
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Instant, Ticker};
 use ossm::MotionObserver;
-use ossm_esp::indicator::{self, Ws2812bIndicator};
+use ossm_esp::indicator::{self, PanicIndicator};
 use pattern_engine::PatternObserver;
 use static_cell::StaticCell;
 use status_indicator::policy::{Output, POLL_INTERVAL_MS, Status, color, select};
-use status_indicator::{Indicator, PanicIndicator};
 
-type PanicOutput = <Ws2812bIndicator<'static> as Indicator>::Panic;
-static PANIC_STORAGE: StaticCell<PanicOutput> = StaticCell::new();
-static PANIC_OUTPUT: AtomicPtr<PanicOutput> = AtomicPtr::new(ptr::null_mut());
+static PANIC_STORAGE: StaticCell<PanicIndicator> = StaticCell::new();
+static PANIC_OUTPUT: AtomicPtr<PanicIndicator> = AtomicPtr::new(ptr::null_mut());
 
 // esp-backtrace invokes this only for Rust panics, before diagnostics and halt.
 // Taking the pointer grants one caller exclusive access, including nested or
@@ -28,25 +26,21 @@ pub extern "Rust" fn custom_pre_backtrace() {
     }
 }
 
-// Other boards may leave this absent even when the package feature is enabled.
-pub type Config = Option<indicator::Config<'static>>;
-pub type StatusOutput = Output<Ws2812bIndicator<'static>>;
+pub type StatusOutput = Output<indicator::Indicator>;
 const FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(5);
 
-pub async fn build(config: Config) -> Option<StatusOutput> {
+pub fn build(config: Option<indicator::Config<'static>>) -> Option<StatusOutput> {
     let config = config?;
-    let mut indicator = match indicator::build(config, color(Status::Idle)).await {
+    let (indicator, panic) = match indicator::build(config, color(Status::Idle)) {
         Ok(indicator) => indicator,
         Err(error) => {
             log::warn!("Status indicator initialization failed: {:?}", error);
             return None;
         }
     };
-    if let Some(panic) = indicator.take_panic_indicator() {
-        PANIC_OUTPUT.store(PANIC_STORAGE.init(panic), Ordering::Release);
-    }
+    PANIC_OUTPUT.store(PANIC_STORAGE.init(panic), Ordering::Release);
     let mut output = Output::new(indicator);
-    if let Err(error) = output.apply(Status::Idle).await {
+    if let Err(error) = output.apply(Status::Idle) {
         // Retain the initialized transport so the task can retry turn-on.
         log::warn!("Status indicator initial output failed: {:?}", error);
     }
@@ -73,7 +67,7 @@ async fn status_task(mut output: StatusOutput, motion: MotionObserver, engine: P
     loop {
         ticker.next().await;
         let desired = select(engine.state(), motion.state().phase);
-        if let Err(error) = output.apply(desired).await {
+        if let Err(error) = output.apply(desired) {
             let now = Instant::now();
             if now >= next_failure_log {
                 log::warn!("Status indicator write failed; retrying: {:?}", error);

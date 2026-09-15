@@ -201,19 +201,16 @@ Features are optional higher-level capabilities built on top of the core motion 
 
 This project targets multiple architectures (ESP32-S3, ESP32, WASM), each with its own Rust target triple and toolchain settings. Since rust-analyzer can only analyze one target at a time, it needs to be told which one to use - otherwise it defaults to your host platform and will report false errors for embedded or WASM code.
 
-The `just focus` command updates the VS Code and Zed rust-analyzer settings to select a firmware workspace and its features:
+The `just focus` command links a firmware's config tomls to the workspace root to configure the correct target and features:
 
 ```sh
-just focus esp32s3
-just focus esp32
+just focus ossm-alt
+just focus ossm-reference
 ```
-
-The ESP32-S3 focus enables the RS485 motor and WS2812B status-indicator modules used by the
-default OSSM Alt build.
 
 After running this, you may need to restart rust-analyzer (or reload your editor) to pick up the new settings. You only need to re-run it when switching to a different target.
 
-The command regenerates editor settings from their templates. Put persistent customizations in the templates.
+> Note: In unix this uses a symlink, meaning if either file changes, both kept in sync. Windows has permission issues with symlinks, and so it performs a full copy instead. Edits to the root level configs will not be persisted, and can fall out of sync.
 
 #### In a dev container
 

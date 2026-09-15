@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
@@ -45,24 +45,11 @@ enum Motor {
     Sim,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Indicator {
-    None,
-    Ws2812b,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Feature {
-    Motor(Motor),
-    Indicator(Indicator),
-}
-
 struct VariantSpec {
     workspace: &'static str,
     bin: &'static str,
     target: &'static str,
-    motor: Motor,
-    indicator: Indicator,
+    default_motor: Motor,
 }
 
 impl Variant {
@@ -72,29 +59,25 @@ impl Variant {
                 workspace: "firmware/esp32s3",
                 bin: "ossm-alt",
                 target: "xtensa-esp32s3-none-elf",
-                motor: Motor::Rs485,
-                indicator: Indicator::Ws2812b,
+                default_motor: Motor::Rs485,
             },
             Variant::Waveshare => VariantSpec {
                 workspace: "firmware/esp32s3",
                 bin: "waveshare",
                 target: "xtensa-esp32s3-none-elf",
-                motor: Motor::Rs485,
-                indicator: Indicator::None,
+                default_motor: Motor::Rs485,
             },
             Variant::SeeedXiao => VariantSpec {
                 workspace: "firmware/esp32s3",
                 bin: "seeed-xiao",
                 target: "xtensa-esp32s3-none-elf",
-                motor: Motor::Rs485,
-                indicator: Indicator::None,
+                default_motor: Motor::Rs485,
             },
             Variant::OssmReference => VariantSpec {
                 workspace: "firmware/esp32",
                 bin: "ossm-reference",
                 target: "xtensa-esp32-none-elf",
-                motor: Motor::Stepdir,
-                indicator: Indicator::None,
+                default_motor: Motor::Stepdir,
             },
         }
     }
@@ -110,41 +93,6 @@ impl Motor {
     }
 }
 
-impl Indicator {
-    fn feature(self) -> Option<&'static str> {
-        match self {
-            Indicator::None => None,
-            Indicator::Ws2812b => Some("indicator-ws2812b"),
-        }
-    }
-}
-
-impl Feature {
-    fn cargo_name(self) -> Option<&'static str> {
-        match self {
-            Feature::Motor(motor) => Some(motor.feature()),
-            Feature::Indicator(indicator) => indicator.feature(),
-        }
-    }
-}
-
-impl VariantSpec {
-    fn features(&self) -> Vec<Feature> {
-        vec![
-            Feature::Motor(self.motor),
-            Feature::Indicator(self.indicator),
-        ]
-    }
-
-    fn cargo_features(&self) -> String {
-        self.features()
-            .into_iter()
-            .filter_map(Feature::cargo_name)
-            .collect::<Vec<_>>()
-            .join(",")
-    }
-}
-
 fn workspace_root() -> Result<PathBuf> {
     // ossm-flash lives at <root>/crates/ossm-flash; CARGO_MANIFEST_DIR points there.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -155,15 +103,14 @@ fn workspace_root() -> Result<PathBuf> {
         .context("could not resolve workspace root from CARGO_MANIFEST_DIR")
 }
 
-fn run_build(spec: &VariantSpec) -> Result<PathBuf> {
+fn run_build(spec: &VariantSpec, motor: Motor) -> Result<PathBuf> {
     let root = workspace_root()?;
     let workspace_dir = root.join(spec.workspace);
-    let features = spec.cargo_features();
 
     eprintln!(
         "ossm-flash: building {} ({}) in {}",
         spec.bin,
-        features,
+        motor.feature(),
         workspace_dir.display()
     );
 
@@ -176,7 +123,7 @@ fn run_build(spec: &VariantSpec) -> Result<PathBuf> {
             "--bin",
             spec.bin,
             "--features",
-            &features,
+            motor.feature(),
         ])
         .status()
         .context("failed to invoke `cargo +esp build` (is the esp toolchain installed?)")?;
@@ -228,10 +175,8 @@ fn run_flash_and_monitor(elf: &PathBuf, port: Option<&str>) -> Result<()> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut spec = cli.variant.spec();
-    if let Some(motor) = cli.motor {
-        spec.motor = motor;
-    }
+    let spec = cli.variant.spec();
+    let motor = cli.motor.unwrap_or(spec.default_motor);
 
     let elf = if cli.no_build {
         let root = workspace_root()?;
@@ -241,7 +186,7 @@ fn main() -> Result<()> {
             .join("release")
             .join(spec.bin)
     } else {
-        run_build(&spec)?
+        run_build(&spec, motor)?
     };
 
     if cli.build_only {
