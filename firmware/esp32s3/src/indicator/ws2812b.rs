@@ -26,12 +26,10 @@ pub extern "Rust" fn custom_pre_backtrace() {
     }
 }
 
-// Other boards may leave this absent even when the package feature is enabled.
-pub type Config = Option<indicator::Config<'static>>;
 pub type StatusOutput = Output<indicator::Indicator>;
 const FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(5);
 
-pub fn build(config: Config) -> Option<StatusOutput> {
+pub fn build(config: Option<indicator::Config<'static>>) -> Option<StatusOutput> {
     let config = config?;
     let (indicator, panic) = match indicator::build(config, color(Status::Idle)) {
         Ok(indicator) => indicator,

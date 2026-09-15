@@ -1,6 +1,6 @@
 #![no_std]
 
-//! Immediate indicator capabilities and optional steady status policy.
+//! Immediate indicator capabilities and steady status policy.
 
 use core::fmt::Debug;
 pub use smart_leds::RGB8;
@@ -8,7 +8,6 @@ pub use smart_leds::RGB8;
 mod smartled;
 pub use smartled::SmartLed;
 
-#[cfg(feature = "policy")]
 pub mod policy;
 
 /// Brightness applied uniformly to normal colors and panic red.

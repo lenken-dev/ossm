@@ -208,8 +208,8 @@ just focus esp32s3
 just focus esp32
 ```
 
-The ESP32-S3 focus enables the RS485 motor and WS2812B status-indicator modules used by the
-default OSSM Alt build.
+The ESP32-S3 focus enables the selected motor module. WS2812B status-indicator support is
+part of the ESP32-S3 firmware package and needs no editor feature.
 
 After running this, you may need to restart rust-analyzer (or reload your editor) to pick up the new settings. You only need to re-run it when switching to a different target.
 

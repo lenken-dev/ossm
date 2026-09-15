@@ -57,7 +57,7 @@ static MOTION_READY: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 
 pub struct Config {
     pub motor: motor::Config,
-    pub indicator: IndicatorConfig,
+    pub indicator: Option<IndicatorConfig>,
     pub wifi: WIFI<'static>,
     pub bt: BT<'static>,
     pub timg0: TIMG0<'static>,

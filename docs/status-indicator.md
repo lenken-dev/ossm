@@ -4,7 +4,7 @@
 `Indicator::set_on(bool)` and `ColorIndicator::set_color(RGB8)`. `RGB8` comes
 from `smart-leds`; there is no application-specific color or pixel transport
 interface. Like the motor, indicators separate portable capabilities from
-platform `Config`/`build` adapters and firmware feature selection.
+platform `Config`/`build` adapters and board-level resource allocation.
 
 `SmartLed` adds remembered on/off color and reset/latch delays to a standard
 `SmartLedsWrite` writer. Initialization clears the LED while remembering the
@@ -55,8 +55,7 @@ with a log message; failed startup turn-on and runtime writes are retried.
 
 ## Steady status policy
 
-The optional `status-indicator/policy` feature exposes state selection, palette,
-and `Output`. Motion and engine dependencies are confined to this feature.
+`status-indicator::policy` exposes state selection, palette, and `Output`.
 State selection applies the first matching rule to independent observer snapshots:
 
 | Condition | Status | Color |
@@ -82,19 +81,23 @@ color changes. A failed write invalidates the applied-color cache and retries
 the latest desired output on the next tick. Failure logs are limited to once
 every five seconds. Ordinary write errors do not stop motion or pattern execution.
 
-## Optional support and verification
+## Firmware integration and verification
 
-Hardware support remains opt-in through `indicator-ws2812b`. `ossm-flash`
-enables it for OSSM Alt and `just focus esp32s3` enables editor analysis. Boards
-without indication use the uniform absent `Config`/`build`/`start` adapter,
-which initializes no indicator peripherals and spawns no status task.
-Waveshare and Seeed XIAO remain absent even when the package feature is enabled.
-Builds without the feature exclude `esp-hal-smartled` and `status-indicator`.
+The ESP32-S3 firmware always includes WS2812B support because OSSM Alt always
+has the indicator. Its board entry point initializes RMT at 80 MHz and passes
+channels 0 and 1 plus GPIO38 through `IndicatorConfig`, following the same
+resource-config pattern as `MotorConfig`. The shared firmware config uses
+`Option<IndicatorConfig>` so Waveshare and Seeed XIAO can pass `None`; no RMT
+resources are initialized for them.
+
+The reusable `ossm-esp` platform crate retains its `indicator-ws2812b`
+capability feature. Consumers that do not enable that feature exclude
+`esp-hal-smartled` and `status-indicator`.
 
 Host behavior checks use the standard smart LED output boundary:
 
 ```sh
-cargo test -p status-indicator --features policy
+cargo test -p status-indicator
 ```
 
 They cover initialization, remembered color, failed writes, observer precedence,
@@ -103,9 +106,9 @@ either-core panic injection, and red persistence require hardware observation.
 The old simulated custom-panic-transport tests no longer apply.
 
 After sourcing the ESP toolchain environment, compile all ESP32-S3 binaries
-from `firmware/esp32s3` with `cargo +esp build --bins --features
-motor-rs485,indicator-ws2812b`, then without `indicator-ws2812b`. Build OSSM
-Reference from `firmware/esp32` with `cargo +esp build --bin ossm-reference
---features motor-stepdir`. Use `cargo tree --edges normal,build` with the same
-features to verify hardware dependency isolation. Optional packages appearing
-in a lockfile alone do not imply a build dependency.
+from `firmware/esp32s3` with `cargo +esp build --bins --features motor-rs485`.
+Build OSSM Reference from `firmware/esp32` with `cargo +esp build --bin
+ossm-reference --features motor-stepdir`. Typecheck `ossm-esp` for the desired
+chip and motor without `indicator-ws2812b` to verify that the lower-level
+hardware dependency remains optional. Optional packages appearing in a lockfile
+alone do not imply a build dependency.
