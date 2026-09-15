@@ -15,8 +15,6 @@ motor-rs485 = ["ossm-esp/motor-rs485"]
 # visible - the sim layer drops the fields inside `build` so bin-file call
 # sites don't change between real and sim builds.
 motor-sim = ["ossm-esp/motor-sim", "motor-rs485"]
-# Opt in explicitly; selecting a board binary alone must not enable drivers.
-indicator-ws2812b = ["ossm-esp/indicator-ws2812b", "dep:status-indicator", "esp-backtrace/custom-pre-backtrace"]
 
 [[bin]]
 name = "ossm-alt"
@@ -31,9 +29,9 @@ name = "seeed-xiao"
 path = "src/bin/seeed-xiao.rs"
 
 [dependencies]
-status-indicator = { path = "../../crates/status-indicator", features = ["policy"], optional = true }
+status-indicator = { path = "../../crates/status-indicator" }
 ossm = { path = "../../ossm" }
-ossm-esp = { path = "../../ossm-esp", features = ["esp32s3"] }
+ossm-esp = { path = "../../ossm-esp", features = ["esp32s3", "indicator-ws2812b"] }
 pattern-engine = { path = "../../crates/pattern-engine" }
 ossm-m5-remote = { path = "../../crates/ossm-m5-remote", features = [
     "esp32s3",
@@ -71,6 +69,7 @@ esp-backtrace = { version = "0.18.1", features = [
     "esp32s3",
     "panic-handler",
     "halt-cores",
+    "custom-pre-backtrace",
 ] }
 esp-println = { version = "0.16.1", features = ["esp32s3", "log-04"] }
 
