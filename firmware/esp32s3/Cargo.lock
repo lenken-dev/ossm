@@ -1725,7 +1725,6 @@ dependencies = [
 name = "status-indicator"
 version = "0.1.0"
 dependencies = [
- "embedded-hal 1.0.0",
  "ossm",
  "pattern-engine",
  "smart-leds",

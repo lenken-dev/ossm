@@ -5,6 +5,5 @@ edition = "2024"
 
 [dependencies]
 smart-leds = "0.4"
-embedded-hal = "1.0"
 ossm = { path = "../../ossm" }
 pattern-engine = { path = "../pattern-engine" }

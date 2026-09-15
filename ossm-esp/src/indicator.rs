@@ -11,13 +11,15 @@ use esp_hal_smartled::{LedAdapterError, SmartLedsAdapter, buffer_size, smart_led
 use static_cell::StaticCell;
 use status_indicator::{Indicator as _, PANIC_COLOR, RGB8, SmartLed};
 
+const RESET_INTERVAL_US: u32 = 600;
+
 pub struct Config<'d> {
     pub channel: ChannelCreator<'d, Blocking, 0>,
     pub panic_channel: ChannelCreator<'d, Blocking, 1>,
     pub data: AnyPin<'d>,
 }
 
-pub type Indicator = SmartLed<SmartLedsAdapter<'static, { buffer_size(1) }>, Delay>;
+pub type Indicator = SmartLed<SmartLedsAdapter<'static, { buffer_size(1) }>>;
 
 /// Independent panic output, registered by firmware after initialization.
 /// It uses upstream blocking completion, which has no timeout.
@@ -31,6 +33,7 @@ impl PanicIndicator {
         // The panic channel is idle low. Take over the pin before resetting
         // framing; normal writes cannot reconnect it or replace panic red.
         OutputSignal::RMT_SIG_1.connect_to(&self.data);
+        Delay::new().delay_micros(RESET_INTERVAL_US);
         self.indicator.set_on(true)
     }
 }
@@ -57,10 +60,15 @@ pub fn build(
         NoPin,
         PANIC_BUFFER.init(smart_led_buffer!(1)),
     );
-    let panic = SmartLed::new(panic, Delay::new(), PANIC_COLOR)?;
+    let panic = SmartLed::new(panic, PANIC_COLOR)?;
     let data = Output::new(config.data, Level::Low, OutputConfig::default());
     OutputSignal::RMT_SIG_0.connect_to(&data);
-    let normal = SmartLed::new(normal, Delay::new(), color)?;
+    let delay = Delay::new();
+    delay.delay_micros(RESET_INTERVAL_US);
+    let normal = SmartLed::new(normal, color)?;
+    // Firmware applies the initial color immediately after build; finish the
+    // clear frame's latch interval before returning.
+    delay.delay_micros(RESET_INTERVAL_US);
     Ok((
         normal,
         PanicIndicator {

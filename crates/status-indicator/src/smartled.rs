@@ -1,22 +1,21 @@
 use crate::{ColorIndicator, Indicator};
-use embedded_hal::delay::DelayNs;
 use smart_leds::{RGB8, SmartLedsWrite, colors};
 
-/// One smart LED with remembered color and synchronous reset/latch delays.
+/// One smart LED with remembered color.
 /// The supplied writer owns pixel encoding and hardware transmission.
-pub struct SmartLed<W, D> {
+/// Callers are responsible for leaving the protocol's reset/latch interval
+/// between writes.
+pub struct SmartLed<W> {
     writer: W,
-    delay: D,
     color: RGB8,
     on: bool,
 }
 
-impl<W, D> Indicator for SmartLed<W, D>
+impl<W> Indicator for SmartLed<W>
 where
     W: SmartLedsWrite,
     W::Color: From<RGB8>,
     W::Error: core::fmt::Debug,
-    D: DelayNs,
 {
     type Error = W::Error;
 
@@ -27,12 +26,11 @@ where
     }
 }
 
-impl<W, D> ColorIndicator for SmartLed<W, D>
+impl<W> ColorIndicator for SmartLed<W>
 where
     W: SmartLedsWrite,
     W::Color: From<RGB8>,
     W::Error: core::fmt::Debug,
-    D: DelayNs,
 {
     fn set_color(&mut self, color: RGB8) -> Result<(), Self::Error> {
         if self.on {
@@ -43,17 +41,15 @@ where
     }
 }
 
-impl<W, D> SmartLed<W, D>
+impl<W> SmartLed<W>
 where
     W: SmartLedsWrite,
     W::Color: From<RGB8>,
-    D: DelayNs,
 {
     /// Clear the LED, then retain the initial color without displaying it.
-    pub fn new(writer: W, delay: D, color: RGB8) -> Result<Self, W::Error> {
+    pub fn new(writer: W, color: RGB8) -> Result<Self, W::Error> {
         let mut led = Self {
             writer,
-            delay,
             color,
             on: false,
         };
@@ -62,11 +58,6 @@ where
     }
 
     fn write(&mut self, color: RGB8) -> Result<(), W::Error> {
-        // Recover framing after startup, a failed frame, or panic pin takeover.
-        // 300 us also covers WS2812B variants requiring >280 us of reset low.
-        self.delay.delay_us(300);
-        let result = self.writer.write([color]);
-        self.delay.delay_us(300);
-        result
+        self.writer.write([color])
     }
 }

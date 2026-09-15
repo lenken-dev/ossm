@@ -6,21 +6,22 @@ from `smart-leds`; there is no application-specific color or pixel transport
 interface. Like the motor, indicators separate portable capabilities from
 platform `Config`/`build` adapters and board-level resource allocation.
 
-`SmartLed` adds remembered on/off color and reset/latch delays to a standard
-`SmartLedsWrite` writer. Initialization clears the LED while remembering the
-initial color. Turning off preserves that color; changing color while off
-leaves the LED dark. Turning on displays the remembered color. Black remains a
-valid selected color. Logical state changes only after successful writes, and
-`set_on` always retransmits so callers can recover from uncertain output.
+`SmartLed` adds remembered on/off color to a standard `SmartLedsWrite` writer.
+Initialization clears the LED while remembering the initial color. Turning off
+preserves that color; changing color while off leaves the LED dark. Turning on
+displays the remembered color. Black remains a valid selected color. Logical
+state changes only after successful writes, and `set_on` always retransmits so
+callers can recover from uncertain output.
 
 ## ESP hardware and channel ownership
 
 Enable `ossm-esp/indicator-ws2812b` to construct one WS2812B using
 `esp-hal-smartled` 0.17.0 and its blocking `SmartLedsAdapter`. The upstream
 adapter owns GRB encoding and RMT pulse generation; both normal and panic output
-use `SmartLedsWrite::write` and HAL blocking delays. Each write has a 300 µs
-low interval before transmission to reset framing and another afterward to
-latch the pixel, including when a write returns an error.
+use `SmartLedsWrite::write`. Ordinary runtime writes add no blocking delay: the
+50 ms status polling interval is already much longer than the LED's reset/latch
+requirement. The platform builder waits 600 µs before and after its initial
+clear, and the panic path waits 600 µs after taking over the GPIO.
 
 Board composition initializes RMT at 80 MHz and passes individual channel
 creators to adapters. OSSM Alt assigns channel 0 to normal output, channel 1 to
@@ -35,7 +36,7 @@ The ESP indicator builder returns the normal indicator and an independently
 owned panic handle. The panic handle owns the GPIO; normal code owns only its
 channel. Both channels start with no pin attached. During initialization, HAL
 routing connects normal output to the GPIO. On panic, HAL routing replaces it
-with the idle-low panic channel before the reset interval and red frame.
+with the idle-low panic channel, waits 600 µs, and sends the red frame.
 In-flight or later normal writes cannot reconnect the GPIO or overwrite red.
 No custom register access, pulse encoder, or panic transport trait is needed.
 

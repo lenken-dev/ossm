@@ -1,6 +1,5 @@
 use std::{cell::Cell, rc::Rc};
 
-use embedded_hal::delay::DelayNs;
 use smart_leds::{RGB8, SmartLedsWrite, colors};
 use status_indicator::{ColorIndicator, Indicator, SmartLed};
 
@@ -31,24 +30,18 @@ impl SmartLedsWrite for LedWire {
     }
 }
 
-struct NoDelay;
-
-impl DelayNs for NoDelay {
-    fn delay_ns(&mut self, _: u32) {}
-}
-
 #[test]
 fn initialization_clears_an_already_lit_led() {
     let wire = Rc::new(Wire::default());
     wire.visible.set(colors::BLUE);
-    let _indicator = SmartLed::new(LedWire(wire.clone()), NoDelay, colors::RED).unwrap();
+    let _indicator = SmartLed::new(LedWire(wire.clone()), colors::RED).unwrap();
     assert_eq!(wire.visible.get(), colors::BLACK);
 }
 
 #[test]
 fn on_off_and_color_changes_preserve_the_selected_color() {
     let wire = Rc::new(Wire::default());
-    let mut indicator = SmartLed::new(LedWire(wire.clone()), NoDelay, colors::RED).unwrap();
+    let mut indicator = SmartLed::new(LedWire(wire.clone()), colors::RED).unwrap();
     indicator.set_on(true).unwrap();
     assert_eq!(wire.visible.get(), colors::RED);
     indicator.set_on(false).unwrap();
@@ -64,16 +57,13 @@ fn on_off_and_color_changes_preserve_the_selected_color() {
 fn initialization_reports_a_failed_clear() {
     let wire = Rc::new(Wire::default());
     wire.fail.set(true);
-    assert!(matches!(
-        SmartLed::new(LedWire(wire), NoDelay, colors::RED),
-        Err(())
-    ));
+    assert!(matches!(SmartLed::new(LedWire(wire), colors::RED), Err(())));
 }
 
 #[test]
 fn failed_updates_preserve_logical_state_and_can_be_retried() {
     let wire = Rc::new(Wire::default());
-    let mut indicator = SmartLed::new(LedWire(wire.clone()), NoDelay, colors::RED).unwrap();
+    let mut indicator = SmartLed::new(LedWire(wire.clone()), colors::RED).unwrap();
     wire.fail.set(true);
     assert_eq!(indicator.set_on(true), Err(()));
     indicator.set_color(colors::BLUE).unwrap();
