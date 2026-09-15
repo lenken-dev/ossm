@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
@@ -49,7 +49,7 @@ struct VariantSpec {
     workspace: &'static str,
     bin: &'static str,
     target: &'static str,
-    motor: Motor,
+    default_motor: Motor,
 }
 
 impl Variant {
@@ -59,25 +59,25 @@ impl Variant {
                 workspace: "firmware/esp32s3",
                 bin: "ossm-alt",
                 target: "xtensa-esp32s3-none-elf",
-                motor: Motor::Rs485,
+                default_motor: Motor::Rs485,
             },
             Variant::Waveshare => VariantSpec {
                 workspace: "firmware/esp32s3",
                 bin: "waveshare",
                 target: "xtensa-esp32s3-none-elf",
-                motor: Motor::Rs485,
+                default_motor: Motor::Rs485,
             },
             Variant::SeeedXiao => VariantSpec {
                 workspace: "firmware/esp32s3",
                 bin: "seeed-xiao",
                 target: "xtensa-esp32s3-none-elf",
-                motor: Motor::Rs485,
+                default_motor: Motor::Rs485,
             },
             Variant::OssmReference => VariantSpec {
                 workspace: "firmware/esp32",
                 bin: "ossm-reference",
                 target: "xtensa-esp32-none-elf",
-                motor: Motor::Stepdir,
+                default_motor: Motor::Stepdir,
             },
         }
     }
@@ -93,12 +93,6 @@ impl Motor {
     }
 }
 
-impl VariantSpec {
-    fn cargo_features(&self) -> &'static str {
-        self.motor.feature()
-    }
-}
-
 fn workspace_root() -> Result<PathBuf> {
     // ossm-flash lives at <root>/crates/ossm-flash; CARGO_MANIFEST_DIR points there.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -109,15 +103,14 @@ fn workspace_root() -> Result<PathBuf> {
         .context("could not resolve workspace root from CARGO_MANIFEST_DIR")
 }
 
-fn run_build(spec: &VariantSpec) -> Result<PathBuf> {
+fn run_build(spec: &VariantSpec, motor: Motor) -> Result<PathBuf> {
     let root = workspace_root()?;
     let workspace_dir = root.join(spec.workspace);
-    let features = spec.cargo_features();
 
     eprintln!(
         "ossm-flash: building {} ({}) in {}",
         spec.bin,
-        features,
+        motor.feature(),
         workspace_dir.display()
     );
 
@@ -130,7 +123,7 @@ fn run_build(spec: &VariantSpec) -> Result<PathBuf> {
             "--bin",
             spec.bin,
             "--features",
-            features,
+            motor.feature(),
         ])
         .status()
         .context("failed to invoke `cargo +esp build` (is the esp toolchain installed?)")?;
@@ -182,10 +175,8 @@ fn run_flash_and_monitor(elf: &PathBuf, port: Option<&str>) -> Result<()> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut spec = cli.variant.spec();
-    if let Some(motor) = cli.motor {
-        spec.motor = motor;
-    }
+    let spec = cli.variant.spec();
+    let motor = cli.motor.unwrap_or(spec.default_motor);
 
     let elf = if cli.no_build {
         let root = workspace_root()?;
@@ -195,7 +186,7 @@ fn main() -> Result<()> {
             .join("release")
             .join(spec.bin)
     } else {
-        run_build(&spec)?
+        run_build(&spec, motor)?
     };
 
     if cli.build_only {

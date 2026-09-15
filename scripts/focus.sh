@@ -29,8 +29,7 @@ jq --arg proj "firmware/${crate}/Cargo.toml" --arg feat "$feature" \
 
 jq --arg proj "firmware/${crate}/Cargo.toml" --arg feat "$feature" \
    '.lsp["rust-analyzer"].initialization_options.linkedProjects = [$proj]
-    | .lsp["rust-analyzer"].initialization_options.cargo.features =
-        [$feat]' \
+    | .lsp["rust-analyzer"].initialization_options.cargo.features = [$feat]' \
    .zed/settings.template.json > .zed/settings.json
 
 echo "rust-analyzer focused on ${crate} with --features ${feature}"
