@@ -42,14 +42,14 @@ fn all_observer_combinations_follow_status_precedence() {
 
 #[test]
 fn steady_palette_preserves_the_status_colors() {
-    use status_indicator::{RGB8, policy::color};
+    use status_indicator::policy::{BLUE, DIM_WHITE, GREEN, ORANGE, YELLOW, color};
     let expected = [
-        (Status::Idle, RGB8::new(10, 10, 10)),
-        (Status::Homing, RGB8::new(255, 255, 0)),
-        (Status::Stopping, RGB8::new(255, 80, 0)),
-        (Status::Playing, RGB8::new(0, 255, 0)),
-        (Status::Paused, RGB8::new(0, 0, 255)),
-        (Status::Ready, RGB8::new(0, 255, 0)),
+        (Status::Idle, DIM_WHITE),
+        (Status::Homing, YELLOW),
+        (Status::Stopping, ORANGE),
+        (Status::Playing, GREEN),
+        (Status::Paused, BLUE),
+        (Status::Ready, GREEN),
     ];
     for (status, rgb) in expected {
         assert_eq!(color(status), rgb);

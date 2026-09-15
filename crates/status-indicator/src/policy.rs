@@ -3,10 +3,16 @@
 use crate::{ColorIndicator, RGB8};
 use ossm::MotionPhase;
 use pattern_engine::EngineState;
-use smart_leds::{brightness, colors};
+use smart_leds::brightness;
 
 pub const POLL_INTERVAL_MS: u64 = 50;
 pub use crate::MAX_BRIGHTNESS;
+
+pub const BLUE: RGB8 = RGB8::new(0, 0, 255);
+pub const DIM_WHITE: RGB8 = RGB8::new(10, 10, 10);
+pub const GREEN: RGB8 = RGB8::new(0, 255, 0);
+pub const ORANGE: RGB8 = RGB8::new(255, 80, 0);
+pub const YELLOW: RGB8 = RGB8::new(255, 255, 0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -21,11 +27,11 @@ pub enum Status {
 /// Apply the shared brightness level without changing the palette's hues.
 pub fn color(status: Status) -> RGB8 {
     let rgb = match status {
-        Status::Idle => RGB8::new(10, 10, 10),
-        Status::Homing => colors::YELLOW,
-        Status::Stopping => RGB8::new(255, 80, 0),
-        Status::Playing | Status::Ready => colors::LIME,
-        Status::Paused => colors::BLUE,
+        Status::Idle => DIM_WHITE,
+        Status::Homing => YELLOW,
+        Status::Stopping => ORANGE,
+        Status::Playing | Status::Ready => GREEN,
+        Status::Paused => BLUE,
     };
     brightness([rgb].into_iter(), MAX_BRIGHTNESS)
         .next()
