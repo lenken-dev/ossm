@@ -131,12 +131,12 @@ impl StreamPlanner {
     /// Number of points the planner can hold ahead of the current move.
     pub const CAPACITY: usize = CAPACITY;
 
-    pub fn new(mut config: PlannerConfig, range: StrokeRange) -> Self {
-        if !(config.max_velocity.is_finite() && config.max_velocity > 0.0) {
-            config.max_velocity = 0.0;
-        }
+    pub fn new(config: PlannerConfig, range: StrokeRange) -> Self {
         Self {
-            config,
+            config: PlannerConfig {
+                max_velocity: sanitize_velocity(config.max_velocity),
+                ..config
+            },
             range: range.sanitized(),
             queue: Deque::new(),
             last_at_ms: None,
@@ -150,6 +150,33 @@ impl StreamPlanner {
 
     pub fn stats(&self) -> PlannerStats {
         self.stats
+    }
+
+    pub fn config(&self) -> PlannerConfig {
+        self.config
+    }
+
+    /// Change the maximum speed (see [`PlannerConfig::max_velocity`]). Applies
+    /// to following requests; the current move is not re-requested.
+    pub fn set_max_velocity(&mut self, max_velocity: f64) {
+        self.config.max_velocity = sanitize_velocity(max_velocity);
+    }
+
+    /// Whether nothing is left to request: no point is queued and no stroke
+    /// range change is outstanding.
+    pub fn is_idle(&self) -> bool {
+        self.queue.is_empty() && !self.range_pending
+    }
+
+    /// Treat the current move as not executed: it is neither refined nor
+    /// re-requested after a stroke range change. Queued points keep their
+    /// schedule.
+    pub fn discard_current(&mut self) {
+        if let Some(active) = &mut self.active {
+            active.awaits_next = false;
+        }
+        self.last_target = None;
+        self.range_pending = false;
     }
 
     /// Change the stroke range (sanitized, see [`StrokeRange::sanitized`]).
@@ -376,6 +403,14 @@ impl StreamPlanner {
         let speed_out = average_speed(travel_out, next.at_ms.saturating_sub(target.at_ms));
         let speed = speed_in.min(speed_out).min(self.config.max_velocity);
         speed.copysign(travel_out)
+    }
+}
+
+fn sanitize_velocity(max_velocity: f64) -> f64 {
+    if max_velocity.is_finite() && max_velocity > 0.0 {
+        max_velocity
+    } else {
+        0.0
     }
 }
 
