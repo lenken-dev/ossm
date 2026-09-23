@@ -1,3 +1,5 @@
+use core::sync::atomic::AtomicU8;
+
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 
@@ -24,12 +26,15 @@ pub(crate) type EngineCommandChannel =
 
 /// Root container for a stream engine.
 ///
-/// Carries the command channel and shared stream input that the capability
-/// handles project from. `StreamEngine` is instantiated once in static
-/// storage and immediately consumed by [`split`](Self::split).
+/// Carries the command channel, shared stream input, and activity count that
+/// the capability handles project from. `StreamEngine` is instantiated once
+/// in static storage and immediately consumed by [`split`](Self::split).
 pub struct StreamEngine {
     pub(crate) commands: EngineCommandChannel,
     pub(crate) input: SharedStreamInput,
+    /// Live [`ActiveGuard`](crate::ActiveGuard)s; streaming is active while
+    /// any exist.
+    pub(crate) active: AtomicU8,
 }
 
 impl StreamEngine {
@@ -37,6 +42,7 @@ impl StreamEngine {
         Self {
             commands: EngineCommandChannel::new(),
             input: SharedStreamInput::new_with(StreamInput::DEFAULT),
+            active: AtomicU8::new(0),
         }
     }
 
