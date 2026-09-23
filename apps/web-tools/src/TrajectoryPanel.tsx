@@ -18,7 +18,7 @@ import { ReloadIcon } from "@radix-ui/react-icons";
 import { type ChartSeries } from "./Chart";
 import { type UnitMode } from "./hooks/useTrajectoryInputs";
 
-const UNIT_LABELS: Record<UnitMode, { position: string; velocity: string; acceleration: string }> = {
+export const UNIT_LABELS: Record<UnitMode, { position: string; velocity: string; acceleration: string }> = {
   relative: { position: "Position", velocity: "Velocity", acceleration: "Acceleration" },
   absolute: { position: "Position (mm)", velocity: "Velocity (mm/s)", acceleration: "Accel (mm/s²)" },
 };
@@ -31,7 +31,7 @@ interface TrajectoryData {
 }
 
 let recorder: TrajectoryRecorder | null = null;
-function getRecorder(): TrajectoryRecorder {
+export function getRecorder(): TrajectoryRecorder {
   if (!recorder) {
     recorder = new TrajectoryRecorder();
   }
@@ -287,7 +287,7 @@ export function TrajectorySidebar({
   );
 }
 
-function LabeledSlider({
+export function LabeledSlider({
   label,
   value,
   display,
