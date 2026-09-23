@@ -46,6 +46,11 @@ const ACCELERATION_ABSORB_VELOCITY: f64 = 1.0;
 /// allow for rounding at targets on its ends.
 const RANGE_TOLERANCE: f64 = 1e-9;
 
+/// Moves may exceed the velocity limit by this fraction of it, since
+/// removing an outward acceleration within the jerk limit can overshoot it
+/// slightly.
+const VELOCITY_TOLERANCE: f64 = 0.01;
+
 /// A trajectory counts as completed once sampled more than this fraction
 /// of a cycle past its end, so that a sample landing on the end (with
 /// rounding) is not mistaken for coasting.
@@ -116,6 +121,10 @@ pub struct Calculation {
     /// machine jerk limit, then kept, since holding would stop even more
     /// abruptly.
     pub out_of_range: bool,
+    /// Whether the calculated move exceeds the velocity limit. Such a move
+    /// counts as failed like one leaving the position range. Stops are not
+    /// checked: braking from an outward acceleration may overshoot a little.
+    pub too_fast: bool,
     pub succeeded: bool,
 }
 
@@ -158,6 +167,7 @@ enum Plan {
 enum Outcome {
     Calculated,
     OutOfRange,
+    TooFast,
     Failed,
 }
 
@@ -168,7 +178,8 @@ enum Outcome {
 /// [`request_move`](Self::request_move) and
 /// [`request_stop`](Self::request_stop), and call [`step`](Self::step) once
 /// per control cycle. Only the latest request is kept, but a requested or
-/// required stop cannot be replaced by a move until it is calculated.
+/// required stop cannot be replaced by a move until it is calculated: a move
+/// requested before then is deferred and requested afterwards.
 pub struct StreamExecutor {
     /// Scratch space, so a failed calculation leaves the followed trajectory
     /// intact.
@@ -178,8 +189,11 @@ pub struct StreamExecutor {
     /// The plan of the trajectory in the output. `None` while there is
     /// none: the state then extrapolates at its current velocity.
     active: Option<Plan>,
-    /// A stop is outstanding and moves are refused.
+    /// A stop is outstanding; moves are deferred until it is calculated.
     stop_required: bool,
+    /// The latest move requested while a stop was outstanding, requested
+    /// once the stop is calculated.
+    deferred: Option<Plan>,
     /// The outstanding stop recovers from a failure and uses the machine
     /// jerk limit rather than the jerk setting.
     urgent: bool,
@@ -204,6 +218,7 @@ impl StreamExecutor {
             pending: None,
             active: None,
             stop_required: false,
+            deferred: None,
             urgent: false,
             move_failures: 0,
             stop_failures: 0,
@@ -225,19 +240,23 @@ impl StreamExecutor {
     }
 
     /// Request a move from the state at the next [`step`](Self::step),
-    /// replacing any outstanding move request. Returns `false`, ignoring the
-    /// move, while a stop is outstanding.
-    pub fn request_move(&mut self, goal: StreamGoal, limits: StreamLimits) -> bool {
+    /// replacing any outstanding move request. While a stop is outstanding,
+    /// the move is deferred until the stop is calculated, replacing any
+    /// deferred move, and keeps its arrival time.
+    pub fn request_move(&mut self, goal: StreamGoal, limits: StreamLimits) {
+        let plan = Plan::Move(goal, limits);
         if self.stop_required {
-            return false;
+            self.deferred = Some(plan);
+            return;
         }
-        self.pending = Some(Plan::Move(goal, limits));
+        self.pending = Some(plan);
         self.limits = Some(limits);
-        true
     }
 
-    /// Request a controlled stop. Has no effect while stopping already.
+    /// Request a controlled stop, dropping any deferred move. Has no effect
+    /// while stopping already.
     pub fn request_stop(&mut self) {
+        self.deferred = None;
         if self.active != Some(Plan::Stop) || self.pending.is_some() {
             self.require_stop(false);
         }
@@ -287,19 +306,21 @@ impl StreamExecutor {
             };
             let outcome = self.calculate(ruckig, input, plan, attempt);
             let out_of_range = matches!(outcome, Outcome::OutOfRange);
+            let too_fast = matches!(outcome, Outcome::TooFast);
             let coasting = self.coasting(input, output, cycle);
             let succeeded = match outcome {
                 Outcome::Calculated => true,
                 // Out of range even at the machine jerk limit, or with
                 // nothing else to follow: braking cannot do better.
                 Outcome::OutOfRange => stop && (self.urgent || coasting),
-                Outcome::Failed => false,
+                Outcome::TooFast | Outcome::Failed => false,
             };
             calculation = Some(Calculation {
                 stop,
                 attempt,
                 timed: input.minimum_duration.is_some(),
                 out_of_range,
+                too_fast,
                 succeeded,
             });
 
@@ -337,13 +358,27 @@ impl StreamExecutor {
                     }
                 } else {
                     self.move_failures += 1;
-                    if out_of_range || coasting || self.move_failures > MAX_JERK_RETRIES {
+                    // Less jerk would only overshoot further.
+                    if out_of_range || too_fast || coasting || self.move_failures > MAX_JERK_RETRIES
+                    {
                         event = Event::MoveFailed;
                         self.require_stop(true);
                     } else {
                         self.pending = Some(plan.later(cycle));
                     }
                 }
+            }
+        }
+
+        // A deferred move keeps its arrival time, and is requested once the
+        // stop is calculated, for calculation in the next cycle.
+        if let Some(plan) = self.deferred.take() {
+            let plan = plan.later(cycle);
+            if self.stop_required {
+                self.deferred = Some(plan);
+            } else if let Plan::Move(_, limits) = plan {
+                self.pending = Some(plan);
+                self.limits = Some(limits);
             }
         }
 
@@ -443,13 +478,18 @@ impl StreamExecutor {
         };
         sanitize(input);
         if let Some(limits) = limits {
-            input.max_jerk[0] = if plan == Plan::Stop && self.urgent {
+            let jerk = if plan == Plan::Stop && self.urgent {
                 limits.max_jerk
             } else {
                 absorbing_jerk(input, &limits)
             };
+            // Retries reduce the jerk, but never below what keeps an outward
+            // acceleration from overshooting the velocity limit.
+            let reduced = jerk * Float::powi(JERK_RETRY_FACTOR, attempt as i32);
+            input.max_jerk[0] = reduced.max(headroom_jerk(input, &limits));
+        } else {
+            input.max_jerk[0] *= Float::powi(JERK_RETRY_FACTOR, attempt as i32);
         }
-        input.max_jerk[0] *= Float::powi(JERK_RETRY_FACTOR, attempt as i32);
 
         if !matches!(
             ruckig.calculate(input, &mut self.scratch),
@@ -469,6 +509,15 @@ impl StreamExecutor {
         let (low, high) = position_bounds(&self.scratch);
         if low < min || high > max {
             return Outcome::OutOfRange;
+        }
+        // A state already faster than the limit (after lowering it) may
+        // slow down, but not speed up.
+        if plan != Plan::Stop {
+            let allowed = limits.max_velocity.max(input.current_velocity[0].abs())
+                * (1.0 + VELOCITY_TOLERANCE);
+            if peak_speed(&self.scratch) > allowed {
+                return Outcome::TooFast;
+            }
         }
         Outcome::Calculated
     }
@@ -511,6 +560,7 @@ impl StreamExecutor {
     /// calculated at all.
     fn hold(&mut self, input: &mut InputParameter<1>, output: &mut OutputParameter<1>) {
         self.pending = None;
+        self.deferred = None;
         self.active = None;
         self.stop_required = false;
         self.urgent = false;
@@ -545,24 +595,7 @@ fn position_bounds(trajectory: &Trajectory<1>) -> (f64, f64) {
     let profile = &trajectory.get_profiles()[0][0];
     let mut bounds = (profile.pf, profile.pf);
     let mut include = |p: f64| bounds = (bounds.0.min(p), bounds.1.max(p));
-    let brake = &profile.brake;
-    let accel = &profile.accel;
-    let phases = (0..2)
-        .map(|i| (brake.t[i], brake.p[i], brake.v[i], brake.a[i], brake.j[i]))
-        .chain((0..7).map(|i| {
-            (
-                profile.t[i],
-                profile.p[i],
-                profile.v[i],
-                profile.a[i],
-                profile.j[i],
-            )
-        }))
-        .chain((0..2).map(|i| (accel.t[i], accel.p[i], accel.v[i], accel.a[i], accel.j[i])));
-    for (duration, p, v, a, j) in phases {
-        if duration <= 0.0 || duration.is_nan() {
-            continue;
-        }
+    for (duration, p, v, a, j) in phases(trajectory) {
         let at = |t: f64| p + t * (v + t * (a / 2.0 + t * j / 6.0));
         include(p);
         include(at(duration));
@@ -585,6 +618,47 @@ fn position_bounds(trajectory: &Trajectory<1>) -> (f64, f64) {
         }
     }
     bounds
+}
+
+/// Highest absolute velocity the trajectory reaches: at phase boundaries, or
+/// where the acceleration crosses zero inside a jerk phase.
+fn peak_speed(trajectory: &Trajectory<1>) -> f64 {
+    let profile = &trajectory.get_profiles()[0][0];
+    let mut peak = profile.vf.abs();
+    for (duration, _, v, a, j) in phases(trajectory) {
+        let at = |t: f64| v + t * (a + t * j / 2.0);
+        peak = peak.max(v.abs()).max(at(duration).abs());
+        if j != 0.0 {
+            let t = -a / j;
+            if t > 0.0 && t < duration {
+                peak = peak.max(at(t).abs());
+            }
+        }
+    }
+    peak
+}
+
+/// The phases of a trajectory's profile with a positive duration, as
+/// `(duration, position, velocity, acceleration, jerk)` at their start: the
+/// brake pre-trajectory, the main profile, and the acceleration
+/// post-trajectory.
+fn phases(trajectory: &Trajectory<1>) -> impl Iterator<Item = (f64, f64, f64, f64, f64)> + '_ {
+    let profile = &trajectory.get_profiles()[0][0];
+    let brake = &profile.brake;
+    let accel = &profile.accel;
+    (0..2)
+        .map(|i| (brake.t[i], brake.p[i], brake.v[i], brake.a[i], brake.j[i]))
+        .chain((0..7).map(|i| {
+            (
+                profile.t[i],
+                profile.p[i],
+                profile.v[i],
+                profile.a[i],
+                profile.j[i],
+            )
+        }))
+        .chain((0..2).map(|i| (accel.t[i], accel.p[i], accel.v[i], accel.a[i], accel.j[i])))
+        .filter(|phase| phase.0 > 0.0)
 }
 
 /// Whether the current state in `input` is the state sampled from the
@@ -651,6 +725,25 @@ fn absorbing_jerk(input: &InputParameter<1>, limits: &StreamLimits) -> f64 {
         acceleration * acceleration / (2.0 * ACCELERATION_ABSORB_VELOCITY * limits.max_velocity);
     let jerk = limits.jerk.max(needed.min(limits.max_jerk));
     if jerk.is_finite() { jerk } else { limits.jerk }
+}
+
+/// Lowest jerk that removes an outward current acceleration before the
+/// velocity exceeds its limit by more than the tolerance, up to the
+/// machine's jerk limit.
+fn headroom_jerk(input: &InputParameter<1>, limits: &StreamLimits) -> f64 {
+    let velocity = input.current_velocity[0];
+    let acceleration = input.current_acceleration[0];
+    if acceleration * velocity <= 0.0 {
+        return 0.0;
+    }
+    let headroom =
+        (limits.max_velocity - velocity.abs()).max(limits.max_velocity * VELOCITY_TOLERANCE);
+    let jerk = acceleration * acceleration / (2.0 * headroom);
+    if jerk.is_finite() {
+        jerk.min(limits.max_jerk)
+    } else {
+        limits.max_jerk
+    }
 }
 
 /// Discard residual velocity and acceleration Ruckig cannot plan from.

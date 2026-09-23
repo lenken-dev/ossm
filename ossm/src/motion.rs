@@ -306,10 +306,8 @@ impl<'a, B: Board> MotionController<'a, B> {
         if starting {
             self.stream.start(&self.input, &self.output);
         }
-        if !self.request_stream_move(target, cmd.velocity * range, cmd.duration) {
-            // A required stop is still being planned.
-            return;
-        }
+        // Deferred by the executor while a required stop is still planned.
+        self.request_stream_move(target, cmd.velocity * range, cmd.duration);
         self.target = Some(target);
         self.streaming = true;
 
@@ -323,8 +321,7 @@ impl<'a, B: Board> MotionController<'a, B> {
 
     /// Request a streaming move toward `target` (mm), arriving with
     /// `velocity` (mm/s) after at least `duration` seconds.
-    /// Returns `false` if the executor refused it for an outstanding stop.
-    fn request_stream_move(&mut self, target: MotionTarget, velocity: f64, duration: f64) -> bool {
+    fn request_stream_move(&mut self, target: MotionTarget, velocity: f64, duration: f64) {
         let goal = StreamGoal {
             position: target.position,
             velocity,
@@ -358,6 +355,8 @@ impl<'a, B: Board> MotionController<'a, B> {
             let attempt = calc.attempt;
             if calc.out_of_range {
                 log::warn!("Stream {kind} leaves the machine range (attempt {attempt})");
+            } else if calc.too_fast {
+                log::warn!("Stream {kind} exceeds the velocity limit (attempt {attempt})");
             } else if !calc.succeeded {
                 log::warn!("Stream {kind} calculation failed (attempt {attempt})");
             } else if attempt > 0 {
@@ -513,10 +512,9 @@ impl<'a, B: Board> MotionController<'a, B> {
             && let Some(target) = self.target
         {
             // Continue to the last streamed target, ending at rest.
-            if self.request_stream_move(target, 0.0, 0.0) {
-                self.apply_torque().await;
-                self.transition(MotionState::Moving);
-            }
+            self.request_stream_move(target, 0.0, 0.0);
+            self.apply_torque().await;
+            self.transition(MotionState::Moving);
             return;
         }
         // Switch back to position control and restore the instructed target.
