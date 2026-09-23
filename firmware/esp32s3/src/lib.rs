@@ -145,7 +145,7 @@ pub async fn run(spawner: Spawner, config: Config) {
 
     indicator::start(&spawner, indicator, motion_observer, pattern_observer);
 
-    radio::start(&spawner, config.wifi, config.bt, patterns, &limits);
+    radio::start(&spawner, config.wifi, config.bt, patterns, stream, &limits);
 
     mode::Modes {
         motion: &motion,
