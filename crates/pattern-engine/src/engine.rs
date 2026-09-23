@@ -1,4 +1,4 @@
-use core::sync::atomic::AtomicU16;
+use core::sync::atomic::{AtomicBool, AtomicU16};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -87,6 +87,8 @@ pub struct PatternEngine {
     pub(crate) state: AtomicU16,
     pub(crate) input: SharedPatternInput,
     pub(crate) state_channel: StateChannel,
+    /// A run awaits a motion state operation it requested.
+    pub(crate) state_operation: AtomicBool,
 }
 
 impl PatternEngine {
@@ -96,6 +98,7 @@ impl PatternEngine {
             state: AtomicU16::new(EngineState::Idle.encode()),
             input: SharedPatternInput::new_with(PatternInput::DEFAULT),
             state_channel: StateChannel::new(),
+            state_operation: AtomicBool::new(false),
         }
     }
 
