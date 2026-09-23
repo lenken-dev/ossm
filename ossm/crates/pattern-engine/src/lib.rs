@@ -14,7 +14,7 @@ pub use engine::{EngineState, PatternEngine};
 pub use input::{PatternInput, SharedPatternInput};
 pub use observer::PatternObserver;
 pub use pattern::{Pattern, PatternCtx};
-pub use runner::PatternRunner;
+pub use runner::{PatternRunner, PendingCommand};
 pub use sender::PatternSender;
 pub use util::scale;
 
