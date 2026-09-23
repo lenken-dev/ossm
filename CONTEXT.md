@@ -117,6 +117,40 @@ _Avoid_: Motion phase
 A requested cap on motor output expressed as a fraction of the motor's maximum output, with a hardware-dependent effect.
 _Avoid_: Measured torque, contact force
 
+### Streaming
+
+**Streaming**:
+The mode in which a remote client drives motion with timed stream points instead of a pattern. It uses the depth, stroke, and speed settings, and lasts until the next pattern command.
+_Avoid_: Pattern playback
+
+**Stream point**:
+A streamed target: a position from zero (deepest) to one hundred (shallowest) within the stroke range, and a duration. It is due that duration after the later of its reception and the previous point's scheduled arrival.
+_Avoid_: Stroke position, move
+
+**Stream move**:
+A move toward a stream point with a requested arrival time and arrival velocity. Unlike a pattern move it may end in motion, so another stream move or a controlled stop must follow it.
+_Avoid_: Stream point
+
+**Look-ahead**:
+The stream points queued beyond the target of the current stream move. A stream move arrives in motion only when look-ahead exists; otherwise it ends at rest.
+_Avoid_: Buffering
+
+**Skipped point**:
+A stream point passed over for a later one: a late point (one that can no longer be reached on time) whenever another point follows, or a point that cannot be reached in time on the way to a later point in the same direction. Direction reversals are only protected from the second kind.
+_Avoid_: Dropped point
+
+**Dropped point**:
+A stream point discarded on receipt because a queue was full.
+_Avoid_: Skipped point
+
+**Armed**:
+The condition under which preparing the machine for streaming continues: the speed setting is above zero and no pattern command is pending. Otherwise preparing aborts. Taking over requires more: a stream point starts streaming only while the pattern engine is idle or ready, no motion state operation is in flight, and the speed setting is above zero.
+_Avoid_: Enabled
+
+**Stream end**:
+The controlled stop that closes a stream, discarding queued stream points and any intent to resume. The next stream point starts a new stream. Running out of stream points is not a stream end: the machine rests at the last target and the stream stays open.
+_Avoid_: Pause, stopping
+
 ### Status indication
 
 **Status indicator**:
