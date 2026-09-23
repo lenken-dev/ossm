@@ -2,7 +2,9 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::pubsub::{self, Subscriber};
 
 use crate::Ossm;
-use crate::command::{Cancelled, MotionCommand, StateCommand, StateResponse};
+use crate::command::{
+    Cancelled, MotionCommand, StateCommand, StateResponse, StreamCommand, StreamMove,
+};
 use crate::state::{MotionPhase, MotionState};
 
 /// Sender half of the motion channels.
@@ -86,6 +88,33 @@ impl MotionSender {
     pub fn update_motion(&self, cmd: MotionCommand) {
         let _ = self.channels.move_cmd.try_receive();
         let _ = self.channels.move_cmd.try_send(cmd.clamped());
+    }
+
+    /// Replace the current move with a streaming move, before the
+    /// controller's next sample. Replaces a pending streaming move or end.
+    ///
+    /// Streaming moves do not reset the completion signal. A streaming move
+    /// that completes in motion without a follow-up is brought to a
+    /// controlled stop.
+    pub fn stream_move(&self, cmd: StreamMove) {
+        self.channels
+            .stream_cmd
+            .signal(StreamCommand::Move(cmd.clamped()));
+    }
+
+    /// Bring streaming motion to a controlled stop and wait until streaming
+    /// has ended (normally in `Ready`), dropping any intent to resume a
+    /// paused stream. Replaces a pending streaming move; a streaming move
+    /// sent after it continues the stream instead, and this then waits
+    /// until the stream ends otherwise. Returns promptly when not streaming.
+    ///
+    /// Await this before starting pattern motion: the controller rejects
+    /// pattern commands while streaming, resolving their
+    /// [`await_motion`](Self::await_motion) with [`Cancelled`].
+    pub async fn end_stream(&self) {
+        self.channels.stream_ended.reset();
+        self.channels.stream_cmd.signal(StreamCommand::End);
+        self.channels.stream_ended.wait().await;
     }
 
     /// Wait for the current in-flight motion to complete.
