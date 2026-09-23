@@ -29,7 +29,7 @@ impl StreamSender {
     /// The point is stamped with the current time. A point that does not fit
     /// into the command queue is dropped with [`PushError::QueueFull`] and,
     /// unlike a point dropped by the planner, does not advance the stream
-    /// timeline.
+    /// timeline. Both drops are counted in [`dropped`](Self::dropped).
     pub fn push(&self, position: f64, duration_ms: u32) -> Result<(), PushError> {
         if !position.is_finite() {
             return Err(PushError::InvalidPosition);
@@ -41,7 +41,17 @@ impl StreamSender {
                 position,
                 duration_ms,
             })
-            .map_err(|_| PushError::QueueFull)
+            .map_err(|_| {
+                self.engine.dropped.fetch_add(1, Ordering::Relaxed);
+                PushError::QueueFull
+            })
+    }
+
+    /// Points dropped so far because a queue was full: the command queue
+    /// here, or the planner queue in the runner. Wraps, so compare two
+    /// readings with [`u32::wrapping_sub`].
+    pub fn dropped(&self) -> u32 {
+        self.engine.dropped.load(Ordering::Relaxed)
     }
 
     /// Stop streaming: drop queued points and bring the machine to a
