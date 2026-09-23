@@ -117,6 +117,7 @@ dependencies = [
  "pattern-engine",
  "portable-atomic",
  "static_cell",
+ "stream-engine",
  "trouble-host",
 ]
 

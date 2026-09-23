@@ -1,5 +1,7 @@
 #![no_std]
 
+mod lite;
+
 use core::{
     fmt::Write,
     sync::atomic::{AtomicBool, Ordering},
@@ -19,7 +21,10 @@ use heapless::String;
 use log::{error, info, warn};
 use pattern_engine::{EngineState, PatternInput, PatternSender, commands};
 use static_cell::StaticCell;
+use stream_engine::StreamSender;
 use trouble_host::prelude::*;
+
+use crate::lite::LiteSession;
 
 const SERVICE_UUID: Uuid = uuid!("522b443a-4f53-534d-0001-420badbabe69");
 const PRIMARY_COMMAND_UUID: Uuid = uuid!("522b443a-4f53-534d-1000-420badbabe69");
@@ -27,6 +32,10 @@ const SPEED_KNOB_UUID: Uuid = uuid!("522b443a-4f53-534d-1010-420badbabe69");
 const CURRENT_STATE_UUID: Uuid = uuid!("522b443a-4f53-534d-2000-420badbabe69");
 const PATTERN_LIST_UUID: Uuid = uuid!("522b443a-4f53-534d-3000-420badbabe69");
 const PATTERN_DESCRIPTION_UUID: Uuid = uuid!("522b443a-4f53-534d-3010-420badbabe69");
+
+/// AD type of an incomplete list of 128-bit service UUIDs. The advertisement
+/// and the scan response each list one of the two services.
+const INCOMPLETE_SERVICE_UUIDS_128: u8 = 0x06;
 
 static CONNECTED: AtomicBool = AtomicBool::new(false);
 
@@ -40,6 +49,7 @@ macro_rules! mk_static {
 #[gatt_server]
 struct Server {
     ossm_service: OssmService,
+    lite_service: LiteService,
 }
 
 #[gatt_service(uuid = SERVICE_UUID)]
@@ -58,6 +68,22 @@ struct OssmService {
 
     #[characteristic(uuid = PATTERN_DESCRIPTION_UUID, read, write)]
     pattern_description: String<MAX_PATTERN_LENGTH>,
+}
+
+/// OSSM-Lite compatible streaming service (see [`lite`]).
+#[gatt_service(uuid = lite::SERVICE_UUID)]
+struct LiteService {
+    #[characteristic(uuid = lite::STREAM_UUID, read, write, write_without_response)]
+    stream: String<{ lite::MAX_STREAM_LENGTH }>,
+
+    #[characteristic(uuid = lite::SPEED_UUID, read, write)]
+    speed: String<{ lite::MAX_SETTING_LENGTH }>,
+
+    #[characteristic(uuid = lite::MAX_DEPTH_UUID, read, write)]
+    max_depth: String<{ lite::MAX_SETTING_LENGTH }>,
+
+    #[characteristic(uuid = lite::MIN_DEPTH_UUID, read, write)]
+    min_depth: String<{ lite::MAX_SETTING_LENGTH }>,
 }
 
 fn get_all_patterns_json() -> String<MAX_PATTERN_LENGTH> {
@@ -92,10 +118,13 @@ fn get_pattern_description(index: usize) -> String<MAX_PATTERN_LENGTH> {
     output
 }
 
+/// Start the BLE remote. Without a `stream`, the OSSM-Lite service is not
+/// advertised and ignores streamed points.
 pub fn start(
     spawner: &Spawner,
     connector: BleConnector<'static>,
     patterns: &'static PatternSender,
+    stream: Option<&'static StreamSender>,
 ) {
     let bt_controller: ExternalController<_, 20> = ExternalController::new(connector);
 
@@ -114,7 +143,7 @@ pub fn start(
     } = stack.build();
 
     spawner.must_spawn(ble_runner_task(runner));
-    spawner.must_spawn(ble_events_task(stack, peripheral, patterns));
+    spawner.must_spawn(ble_events_task(stack, peripheral, patterns, stream));
 
     info!("BLE remote tasks started, waiting for connection...");
 }
@@ -132,6 +161,7 @@ pub async fn ble_events_task(
         DefaultPacketPool,
     >,
     patterns: &'static PatternSender,
+    stream: Option<&'static StreamSender>,
 ) {
     info!("Starting advertising and GATT service");
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
@@ -141,7 +171,7 @@ pub async fn ble_events_task(
     .unwrap();
 
     loop {
-        match advertise("OSSM-rs", &mut peripheral).await {
+        match advertise("OSSM-rs", &mut peripheral, stream.is_some()).await {
             Ok(connection) => {
                 CONNECTED.store(true, Ordering::Release);
                 info!("BLE Connected");
@@ -183,8 +213,8 @@ pub async fn ble_events_task(
                     .with_attribute_server(&server)
                     .expect("Could not transform connection into GATT connection");
 
-                let events = gatt_events_task(&server, &gatt_connection, patterns);
-                let notify = state_notifications(&server, &gatt_connection, patterns);
+                let events = gatt_events_task(&server, &gatt_connection, patterns, stream);
+                let notify = state_notifications(&server, &gatt_connection, patterns, stream);
 
                 match select(events, notify).await {
                     Either::First(res) => {
@@ -198,7 +228,7 @@ pub async fn ble_events_task(
                     },
                 }
 
-                patterns.stop();
+                stop(patterns, stream);
                 info!("BLE session ended, stopping engine");
             }
             Err(err) => {
@@ -223,7 +253,9 @@ async fn gatt_events_task<P: PacketPool>(
     server: &Server<'_>,
     connection: &GattConnection<'_, '_, P>,
     patterns: &'static PatternSender,
+    stream: Option<&'static StreamSender>,
 ) -> Result<(), Error> {
+    let mut lite = LiteSession::new(patterns, stream);
     let reason = loop {
         match connection.next().await {
             GattConnectionEvent::Disconnected { reason } => break reason,
@@ -235,17 +267,20 @@ async fn gatt_events_task<P: PacketPool>(
                         if event.handle() == server.ossm_service.current_state.handle {
                             let engine_state = patterns.state();
                             let input = patterns.input();
-                            let state_json = state_to_json(engine_state, &input);
+                            let state_json =
+                                state_to_json(engine_state, &input, is_streaming(stream));
                             server.set(&server.ossm_service.current_state, &state_json)?;
                         }
                         if event.handle() == server.ossm_service.pattern_list.handle {
                             let patterns = get_all_patterns_json();
                             server.set(&server.ossm_service.pattern_list, &patterns)?;
                         }
+                        lite.on_read(server, event.handle())?;
                     }
                     GattEvent::Write(event) => {
                         write = true;
                         event_handle = event.handle();
+                        lite.on_write(server, event_handle, event.data());
                     }
                     GattEvent::Other(_) => {}
                 };
@@ -264,7 +299,7 @@ async fn gatt_events_task<P: PacketPool>(
                         let command: String<MAX_COMMAND_LENGTH> =
                             server.get(&server.ossm_service.primary_command)?;
 
-                        process_command(&command, server, patterns);
+                        process_command(&command, server, patterns, stream);
                     }
                     if event_handle == server.ossm_service.pattern_description.handle {
                         let command: String<MAX_PATTERN_LENGTH> =
@@ -292,34 +327,51 @@ async fn gatt_events_task<P: PacketPool>(
     };
     CONNECTED.store(false, Ordering::Release);
     info!("[gatt] disconnected: {:?}", reason);
+    lite.log_summary();
     Ok(())
 }
 
 /// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
+///
+/// The advertisement has no room for a second 128-bit service UUID, so the
+/// OSSM-Lite service is listed in the scan response when `streaming`.
 async fn advertise<'values, 'server, C: Controller>(
     name: &'values str,
     peripheral: &mut Peripheral<'values, C, DefaultPacketPool>,
+    streaming: bool,
 ) -> Result<Connection<'values, DefaultPacketPool>, BleHostError<C::Error>> {
-    let uuid: [u8; 16] = SERVICE_UUID
-        .as_raw()
-        .try_into()
-        .expect("Service UUID incorrect");
-
     let mut advertiser_data = [0; 31];
     let len = AdStructure::encode_slice(
         &[
             AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-            AdStructure::ServiceUuids128(&[uuid]),
+            AdStructure::Unknown {
+                ty: INCOMPLETE_SERVICE_UUIDS_128,
+                data: SERVICE_UUID.as_raw(),
+            },
             AdStructure::CompleteLocalName(name.as_bytes()),
         ],
         &mut advertiser_data[..],
     )?;
+
+    let mut scan_data = [0; 31];
+    let scan_len = if streaming {
+        AdStructure::encode_slice(
+            &[AdStructure::Unknown {
+                ty: INCOMPLETE_SERVICE_UUIDS_128,
+                data: lite::SERVICE_UUID.as_raw(),
+            }],
+            &mut scan_data[..],
+        )?
+    } else {
+        0
+    };
+
     let advertiser = peripheral
         .advertise(
             &Default::default(),
             Advertisement::ConnectableScannableUndirected {
                 adv_data: &advertiser_data[..len],
-                scan_data: &[],
+                scan_data: &scan_data[..scan_len],
             },
         )
         .await?;
@@ -333,6 +385,7 @@ async fn state_notifications<P: PacketPool>(
     server: &Server<'_>,
     connection: &GattConnection<'_, '_, P>,
     patterns: &'static PatternSender,
+    stream: Option<&'static StreamSender>,
 ) -> Result<(), Error> {
     let mut sub = patterns
         .subscribe()
@@ -346,7 +399,7 @@ async fn state_notifications<P: PacketPool>(
         };
 
         let input = patterns.input();
-        let state_json = state_to_json(engine_state, &input);
+        let state_json = state_to_json(engine_state, &input, is_streaming(stream));
         server
             .ossm_service
             .current_state
@@ -355,7 +408,25 @@ async fn state_notifications<P: PacketPool>(
     }
 }
 
-fn state_to_json(state: EngineState, input: &PatternInput) -> String<MAX_STATE_LENGTH> {
+/// Whether streaming is active. It overrides the pattern state reported to
+/// remotes.
+fn is_streaming(stream: Option<&StreamSender>) -> bool {
+    stream.is_some_and(StreamSender::is_active)
+}
+
+/// Stop streaming, then the pattern engine.
+fn stop(patterns: &PatternSender, stream: Option<&StreamSender>) {
+    if let Some(stream) = stream {
+        stream.stop();
+    }
+    patterns.stop();
+}
+
+fn state_to_json(
+    state: EngineState,
+    input: &PatternInput,
+    streaming: bool,
+) -> String<MAX_STATE_LENGTH> {
     let pattern_name = match state {
         EngineState::Playing(idx) | EngineState::Paused(idx) => commands::pattern_list()
             .get(idx)
@@ -365,6 +436,7 @@ fn state_to_json(state: EngineState, input: &PatternInput) -> String<MAX_STATE_L
     };
     let mut out: String<MAX_STATE_LENGTH> = String::new();
     let state_str = match state {
+        _ if streaming => "streaming",
         EngineState::Idle => "idle",
         EngineState::Homing => "homing",
         EngineState::Ready => "ready",
@@ -391,6 +463,7 @@ fn process_command(
     command: &String<MAX_COMMAND_LENGTH>,
     server: &Server<'_>,
     patterns: &'static PatternSender,
+    stream: Option<&'static StreamSender>,
 ) {
     info!("BLE Command {}", command);
 
@@ -428,7 +501,7 @@ fn process_command(
                 }
                 "go" => match action {
                     "simplePenetration" | "strokeEngine" => patterns.play(0),
-                    "menu" => patterns.stop(),
+                    "menu" => stop(patterns, stream),
                     _ => {
                         error!("Unknown go action: {}", action);
                         fail = true;
