@@ -35,7 +35,10 @@ pub struct LiteSession {
     stream: Option<&'static StreamSender>,
     points: u32,
     invalid: u32,
+    /// Points this session could not hand to the stream engine.
     dropped: u32,
+    /// The stream engine's drop count when the session started.
+    engine_dropped_at_start: u32,
     unsupported: u32,
 }
 
@@ -47,6 +50,7 @@ impl LiteSession {
             points: 0,
             invalid: 0,
             dropped: 0,
+            engine_dropped_at_start: stream.map_or(0, StreamSender::dropped),
             unsupported: 0,
         }
     }
@@ -94,11 +98,17 @@ impl LiteSession {
     }
 
     /// Log what this session streamed and ignored.
+    ///
+    /// Dropped points include those the stream engine dropped further down
+    /// (a full planner queue) while the session lasted.
     pub fn log_summary(&self) {
-        if [self.points, self.invalid, self.dropped, self.unsupported] != [0; 4] {
+        let dropped = self.stream.map_or(0, |stream| {
+            stream.dropped().wrapping_sub(self.engine_dropped_at_start)
+        });
+        if [self.points, self.invalid, dropped, self.unsupported] != [0; 4] {
             info!(
                 "[lite] session: {} points streamed, {} invalid writes, {} points dropped (queue full), {} points ignored (no streaming)",
-                self.points, self.invalid, self.dropped, self.unsupported
+                self.points, self.invalid, dropped, self.unsupported
             );
         }
     }

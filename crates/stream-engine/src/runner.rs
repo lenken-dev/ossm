@@ -4,6 +4,7 @@ use embassy_time::{Duration, Instant, Ticker};
 use log::{info, warn};
 use ossm::{MotionLimits, MotionSender};
 
+use crate::PushError;
 use crate::engine::{EngineCommand, StreamEngine};
 use crate::input::StreamInput;
 use crate::sequencer::StreamSequencer;
@@ -127,13 +128,13 @@ impl StreamRunner {
 
         info!("Stream started");
         let mut sequencer = StreamSequencer::new(limits, self.input());
-        push(&mut sequencer, start.0);
+        self.push(&mut sequencer, start.0);
         let mut ticker = Ticker::every(tick);
 
         'stream: loop {
             while let Ok(cmd) = engine.commands.try_receive() {
                 match Point::from_command(cmd) {
-                    Some(point) => push(&mut sequencer, point),
+                    Some(point) => self.push(&mut sequencer, point),
                     None => break 'stream,
                 }
             }
@@ -170,11 +171,21 @@ impl StreamRunner {
     fn input(&self) -> StreamInput {
         self.engine.input.try_get().unwrap_or(StreamInput::DEFAULT)
     }
-}
 
-fn push(sequencer: &mut StreamSequencer, point: Point) {
-    if let Err(error) = sequencer.push(point.received_ms, point.position, point.duration_ms) {
-        warn!("Stream point dropped: {error:?}");
+    /// Queue a point. Drops for a full queue are counted in the engine and
+    /// logged at 1, 2, 4, 8, ... per stream.
+    fn push(&self, sequencer: &mut StreamSequencer, point: Point) {
+        match sequencer.push(point.received_ms, point.position, point.duration_ms) {
+            Ok(()) => {}
+            Err(PushError::QueueFull) => {
+                self.engine.dropped.fetch_add(1, Ordering::Relaxed);
+                let dropped = sequencer.stats().dropped;
+                if dropped.is_power_of_two() {
+                    warn!("Stream queue full, point dropped ({dropped} so far)");
+                }
+            }
+            Err(error) => warn!("Stream point dropped: {error:?}"),
+        }
     }
 }
 
@@ -188,7 +199,7 @@ mod tests {
     use embassy_futures::{block_on, poll_once};
 
     use super::*;
-    use crate::StreamSender;
+    use crate::{StreamPlanner, StreamSender};
 
     fn split() -> (StreamRunner, StreamSender) {
         Box::leak(Box::new(StreamEngine::new())).split()
@@ -210,6 +221,28 @@ mod tests {
         assert_eq!(start.0.position, 42.0);
         // Later points stay queued for the run.
         assert_eq!(runner.engine.commands.len(), 1);
+    }
+
+    #[test]
+    fn counts_points_dropped_for_a_full_queue() {
+        let (runner, sender) = split();
+        for _ in 0..StreamPlanner::CAPACITY {
+            sender.push(50.0, 100).unwrap();
+        }
+        assert_eq!(sender.push(50.0, 100), Err(PushError::QueueFull));
+        assert_eq!(sender.dropped(), 1);
+
+        let mut sequencer = StreamSequencer::new(&MotionLimits::DEFAULT, StreamInput::DEFAULT);
+        let point = Point {
+            received_ms: 0,
+            position: 50.0,
+            duration_ms: 100,
+        };
+        for _ in 0..=StreamPlanner::CAPACITY {
+            runner.push(&mut sequencer, point);
+        }
+        assert_eq!(sequencer.stats().dropped, 1);
+        assert_eq!(sender.dropped(), 2);
     }
 
     #[test]
