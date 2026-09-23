@@ -23,6 +23,14 @@ export interface ChartSeries {
   unit?: string;
 }
 
+/** Points drawn over the focused series, on its Y scale. */
+export interface ChartOverlay {
+  x: number[];
+  /** Raw values, transformed like the focused series */
+  data: number[];
+  color: string;
+}
+
 type RootProps = ComponentProps<typeof Box>;
 
 function Root(props: RootProps) {
@@ -83,6 +91,10 @@ interface CanvasProps extends Omit<
   formatYTick?: (value: number) => string;
   /** Called with the index at the scrub position, or null on leave */
   onScrub?: (index: number | null) => void;
+  /** Markers joined by a dashed line, drawn over the focused series */
+  overlay?: ChartOverlay;
+  /** X-axis tick values for the domain. Defaults to d3's ticks. */
+  xTicks?: (min: number, max: number) => number[];
 }
 
 function defaultFormatY(v: number, yRange: number): string {
@@ -94,6 +106,33 @@ function defaultFormatY(v: number, yRange: number): string {
   return v.toFixed(2);
 }
 
+type Point = readonly [number, number];
+
+/**
+ * Reduce points (in x order) to the first, last, highest and lowest of each
+ * pixel column, keeping their order.
+ */
+function columnExtremes(points: readonly Point[]): Point[] {
+  const out: Point[] = [];
+  let i = 0;
+  while (i < points.length) {
+    const column = Math.floor(points[i][0]);
+    let j = i;
+    let lo = i;
+    let hi = i;
+    while (j + 1 < points.length && Math.floor(points[j + 1][0]) === column) {
+      j++;
+      if (points[j][1] < points[lo][1]) lo = j;
+      if (points[j][1] > points[hi][1]) hi = j;
+    }
+    for (const k of [...new Set([i, lo, hi, j])].sort((a, b) => a - b)) {
+      out.push(points[k]);
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
 function Canvas({
   series,
   xData,
@@ -103,6 +142,8 @@ function Canvas({
   formatXTick,
   formatYTick,
   onScrub,
+  overlay,
+  xTicks: xTicksFn,
   ...boxProps
 }: CanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -193,7 +234,9 @@ function Canvas({
     ctx.strokeStyle = axisColor;
     ctx.lineWidth = 1;
     const yTicks = focusedY.ticks(5);
-    const xTicks = xScale.ticks(8);
+    const xTicks = xTicksFn
+      ? xTicksFn(xData[0], xData[xData.length - 1])
+      : xScale.ticks(8);
 
     for (const tick of xTicks) {
       const x = Math.round(xScale(tick)) + 0.5;
@@ -240,6 +283,39 @@ function Canvas({
     ctx.stroke();
 
     ctx.globalAlpha = 1.0;
+
+    // Overlay markers, clipped to the plot area
+    if (overlay && overlay.x.length > 0) {
+      const scale = focusedSeries.scale ?? 1;
+      const offset = focusedSeries.offset ?? 0;
+      const points = overlay.x.map(
+        (x, i) => [xScale(x), focusedY(overlay.data[i] * scale + offset)] as const,
+      );
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, plotW, plotH);
+      ctx.clip();
+      // Dense overlays keep each pixel column's extremes, drawn solid.
+      const dense = points.length > plotW / 2;
+      ctx.strokeStyle = overlay.color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash(dense ? [] : [3, 3]);
+      ctx.beginPath();
+      const line = dense ? columnExtremes(points) : points;
+      line.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Markers only while they stay distinguishable
+      if (points.length <= plotW / 6) {
+        ctx.fillStyle = overlay.color;
+        for (const [x, y] of points) {
+          ctx.beginPath();
+          ctx.arc(x, y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
 
     // X-axis labels
     const fmtX = formatXTick ?? ((v: number) => String(Math.round(v)));
@@ -294,6 +370,8 @@ function Canvas({
     margin,
     formatXTick,
     formatYTick,
+    overlay,
+    xTicksFn,
   ]);
 
   const handleMouseMove = useCallback(
