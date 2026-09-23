@@ -14,6 +14,7 @@ compile_error!(
 
 mod board;
 mod indicator;
+mod mode;
 mod motor;
 mod radio;
 
@@ -23,7 +24,7 @@ pub use motor::Config as MotorConfig;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
-use embassy_time::{Delay, Duration, Ticker};
+use embassy_time::{Duration, Ticker};
 use esp_hal::{
     interrupt::{Priority, software::SoftwareInterruptControl},
     peripherals::{BT, CPU_CTRL, SW_INTERRUPT, TIMG0, WIFI},
@@ -33,8 +34,9 @@ use esp_hal::{
 use esp_rtos::embassy::InterruptExecutor;
 use log::info;
 use ossm::{MechanicalConfig, MotionController, MotionLimits, Ossm};
-use pattern_engine::{AnyPattern, PatternEngine, PatternSender};
+use pattern_engine::{PatternEngine, PatternSender};
 use static_cell::StaticCell;
+use stream_engine::{StreamEngine, StreamSender};
 
 extern crate alloc;
 
@@ -50,6 +52,7 @@ const UPDATE_INTERVAL_SECS: f64 = 0.01;
 
 static OSSM_CELL: StaticCell<Ossm> = StaticCell::new();
 static PATTERNS_CELL: StaticCell<PatternEngine> = StaticCell::new();
+static STREAM_CELL: StaticCell<StreamEngine> = StaticCell::new();
 
 static EXECUTOR_CORE_1: StaticCell<InterruptExecutor<2>> = StaticCell::new();
 static APP_CORE_STACK: StaticCell<Stack<32768>> = StaticCell::new();
@@ -137,10 +140,21 @@ pub async fn run(spawner: Spawner, config: Config) {
 
     let (runner, pattern_observer, patterns) = PATTERNS_CELL.init(PatternEngine::new()).split();
     let patterns: &'static PatternSender = mk_static!(PatternSender, patterns);
+    let (stream_runner, stream) = STREAM_CELL.init(StreamEngine::new()).split();
+    let stream: &'static StreamSender = mk_static!(StreamSender, stream);
 
     indicator::start(&spawner, indicator, motion_observer, pattern_observer);
 
     radio::start(&spawner, config.wifi, config.bt, patterns, &limits);
 
-    runner.run(&motion, AnyPattern::all_builtin(), Delay).await
+    mode::Modes {
+        motion: &motion,
+        limits: &limits,
+        patterns,
+        pattern_runner: runner,
+        stream,
+        stream_runner,
+    }
+    .run()
+    .await
 }

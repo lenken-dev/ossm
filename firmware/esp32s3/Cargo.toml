@@ -35,6 +35,7 @@ status-indicator = { path = "../../crates/status-indicator", optional = true }
 ossm = { path = "../../ossm" }
 ossm-esp = { path = "../../ossm-esp", features = ["esp32s3"] }
 pattern-engine = { path = "../../crates/pattern-engine" }
+stream-engine = { path = "../../crates/stream-engine" }
 ossm-m5-remote = { path = "../../crates/ossm-m5-remote", features = [
     "esp32s3",
 ] }
