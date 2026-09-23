@@ -697,3 +697,27 @@ impl<'a, B: Board> MotionController<'a, B> {
         self.channels.motion_state.publish_phase(self.phase());
     }
 }
+
+#[cfg(feature = "sim")]
+impl<B: Board> MotionController<'_, B> {
+    /// The planned motion at the last controller sample: position as a
+    /// machine position (0.0–1.0), signed velocity in machine range per
+    /// second, and signed acceleration in machine range per second squared.
+    /// Positive values point toward the maximum position.
+    ///
+    /// Unlike [`MotionState`](crate::MotionState), keeps the direction of
+    /// velocity and acceleration, for simulators that chart trajectories.
+    pub fn planned_motion(&self) -> (f64, f64, f64) {
+        let range = self.limits.max_position_mm - self.limits.min_position_mm;
+        if range <= 0.0 {
+            return (0.0, 0.0, 0.0);
+        }
+        let position_mm = self.output.new_position[0]
+            .clamp(self.limits.min_position_mm, self.limits.max_position_mm);
+        (
+            (position_mm - self.limits.min_position_mm) / range,
+            self.output.new_velocity[0] / range,
+            self.output.new_acceleration[0] / range,
+        )
+    }
+}
