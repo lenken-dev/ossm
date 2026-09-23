@@ -20,6 +20,7 @@ function wasmHotReload(): Plugin {
         "ossm/core/src",
         "ossm/drivers/sim-motor/src",
         "ossm/crates/pattern-engine/src",
+        "ossm/crates/stream-engine/src",
       ].map((d) => path.resolve(workspaceRoot, d));
 
       for (const dir of rustDirs) {
