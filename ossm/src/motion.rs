@@ -1,7 +1,10 @@
 use rsruckig::prelude::*;
 use num_traits::float::Float;
 
-use crate::command::{Cancelled, MotionCommand, StateCommand, StateResponse};
+use crate::command::{
+    Cancelled, MotionCommand, StateCommand, StateResponse, StreamCommand, StreamMove,
+};
+use crate::planner::stream::{Event, StepStatus, StreamExecutor, StreamGoal, StreamLimits};
 use crate::state::MotionPhase;
 use crate::{Board, MotionLimits, Ossm};
 
@@ -25,6 +28,8 @@ enum StopReason {
     Pause,
     Disable,
     Home,
+    /// Streaming motion ended or could not continue; ends in `Ready`.
+    Stream,
 }
 
 /// The last-commanded motion intent, independent of what ruckig is currently
@@ -63,6 +68,11 @@ pub struct MotionController<'a, B: Board> {
     /// The last-instructed motion target. `Some` when a move has been commanded,
     /// `None` when there is no active motion intent (e.g. disabled, just homed).
     target: Option<MotionTarget>,
+    /// The trajectory was planned from streaming moves. Cleared, with
+    /// `stream_ended` signalled, when streaming motion ends.
+    streaming: bool,
+    /// Plans and samples streaming trajectories on the shared ruckig state.
+    stream: StreamExecutor,
     ruckig: Ruckig<1, ThrowErrorHandler>,
     input: InputParameter<1>,
     output: OutputParameter<1>,
@@ -94,6 +104,8 @@ impl<'a, B: Board> MotionController<'a, B> {
             state: MotionState::Disabled,
             limits,
             target: None,
+            streaming: false,
+            stream: StreamExecutor::new(),
             ruckig: Ruckig::<1, ThrowErrorHandler>::new(None, update_interval_secs),
             input,
             output: OutputParameter::new(None),
@@ -112,6 +124,15 @@ impl<'a, B: Board> MotionController<'a, B> {
             return Err(e);
         }
 
+        // Streaming commands take effect on this tick's sample, so a move
+        // can follow one that completes in motion without a coasting tick.
+        // Pattern commands keep their place after the tick.
+        match self.channels.stream_cmd.try_take() {
+            Some(StreamCommand::Move(cmd)) => self.process_stream_move(cmd).await,
+            Some(StreamCommand::End) => self.end_stream(),
+            None => {}
+        }
+
         self.tick().await?;
 
         if let Ok(cmd) = self.channels.state_cmd.try_receive() {
@@ -123,6 +144,29 @@ impl<'a, B: Board> MotionController<'a, B> {
         }
 
         Ok(())
+    }
+
+    /// End streaming motion with a controlled stop, dropping any intent to
+    /// resume it. `stream_ended` is signalled once streaming has ended.
+    fn end_stream(&mut self) {
+        if !self.streaming {
+            self.channels.stream_ended.signal(());
+            return;
+        }
+        match self.state {
+            MotionState::Moving => self.stop_stream(),
+            // Already stopping; finish as a stream termination.
+            MotionState::Stopping(StopReason::Pause) => {
+                self.state = MotionState::Stopping(StopReason::Stream);
+            }
+            MotionState::Paused => {
+                self.target = None;
+                self.channels.move_resp.signal(Err(Cancelled));
+                self.transition(MotionState::Ready);
+            }
+            // Stopping for another reason; streaming ends with it.
+            _ => {}
+        }
     }
 
     async fn process_state_command(&mut self, cmd: StateCommand) -> Result<(), B::Error> {
@@ -160,7 +204,11 @@ impl<'a, B: Board> MotionController<'a, B> {
                 self.channels.move_resp.signal(Err(Cancelled));
                 self.stop(StopReason::Disable);
             }
-            (MotionState::Stopping(_), StateCommand::Disable) => {
+            (MotionState::Stopping(reason), StateCommand::Disable) => {
+                // A paused or streaming move is abandoned with the stop.
+                if matches!(reason, StopReason::Pause | StopReason::Stream) {
+                    self.channels.move_resp.signal(Err(Cancelled));
+                }
                 self.state = MotionState::Stopping(StopReason::Disable);
             }
 
@@ -207,6 +255,12 @@ impl<'a, B: Board> MotionController<'a, B> {
     }
 
     async fn process_move_command(&mut self, cmd: MotionCommand) {
+        if self.streaming {
+            // Callers must await `end_stream` first; reject so that no
+            // waiter hangs.
+            self.channels.move_resp.signal(Err(Cancelled));
+            return;
+        }
         match self.state {
             MotionState::Ready => {
                 self.set_motion_target(cmd);
@@ -231,24 +285,133 @@ impl<'a, B: Board> MotionController<'a, B> {
         }
     }
 
+    /// Apply a streaming move immediately, bypassing the pattern replanning
+    /// gate.
+    async fn process_stream_move(&mut self, cmd: StreamMove) {
+        let starting = match self.state {
+            MotionState::Ready => true,
+            MotionState::Moving => !self.streaming,
+            MotionState::Stopping(StopReason::Stream) => false,
+            _ => return,
+        };
+
+        let speed = self.fraction_to_velocity(cmd.speed);
+        let target = MotionTarget {
+            position: self.fraction_to_mm(cmd.position),
+            velocity: speed,
+            jerk: self.fraction_to_jerk(cmd.jerk, speed),
+            torque: None,
+        };
+        let range = self.limits.max_position_mm - self.limits.min_position_mm;
+        if starting {
+            self.stream.start(&self.input, &self.output);
+        }
+        if !self.request_stream_move(target, cmd.velocity * range, cmd.duration) {
+            // A required stop is still being planned.
+            return;
+        }
+        self.target = Some(target);
+        self.streaming = true;
+
+        if starting {
+            self.apply_torque().await;
+        }
+        if self.state != MotionState::Moving {
+            self.transition(MotionState::Moving);
+        }
+    }
+
+    /// Request a streaming move toward `target` (mm), arriving with
+    /// `velocity` (mm/s) after at least `duration` seconds.
+    /// Returns `false` if the executor refused it for an outstanding stop.
+    fn request_stream_move(&mut self, target: MotionTarget, velocity: f64, duration: f64) -> bool {
+        let goal = StreamGoal {
+            position: target.position,
+            velocity,
+            min_duration: duration,
+        };
+        let limits = StreamLimits {
+            min_position: self.limits.min_position_mm,
+            max_position: self.limits.max_position_mm,
+            max_velocity: target.velocity,
+            max_acceleration: self.limits.max_acceleration_mm_s2,
+            jerk: target.jerk,
+            max_jerk: self.limits.max_jerk_mm_s3,
+        };
+        self.stream.request_move(goal, limits)
+    }
+
+    /// Bring streaming motion to a controlled stop.
+    fn stop_stream(&mut self) {
+        self.stream.request_stop();
+        self.transition(MotionState::Stopping(StopReason::Stream));
+    }
+
+    /// Advance a streaming trajectory, recovering from calculation failures.
+    fn step_stream(&mut self) -> StepStatus {
+        let step = self
+            .stream
+            .step(&mut self.ruckig, &mut self.input, &mut self.output);
+
+        if let Some(calc) = step.calculation {
+            let kind = if calc.stop { "stop" } else { "move" };
+            let attempt = calc.attempt;
+            if calc.out_of_range {
+                log::warn!("Stream {kind} leaves the machine range (attempt {attempt})");
+            } else if !calc.succeeded {
+                log::warn!("Stream {kind} calculation failed (attempt {attempt})");
+            } else if attempt > 0 {
+                log::warn!("Stream {kind} calculated with reduced jerk (attempt {attempt})");
+            } else if calc.timed {
+                log::trace!("Stream {kind} calculated (timed)");
+            } else {
+                log::trace!("Stream {kind} calculated");
+            }
+        }
+        if step.coasting {
+            log::trace!("Stream coasting");
+        }
+        match step.event {
+            Event::None => {}
+            Event::NoFollowUp => {
+                log::warn!("Stream move completed in motion without a follow-up, stopping");
+            }
+            Event::MoveFailed => log::error!("Stream move could not be calculated, stopping"),
+            Event::Held => log::error!("Stream stop could not be calculated, holding"),
+        }
+        if step.event != Event::None && self.state == MotionState::Moving {
+            self.transition(MotionState::Stopping(StopReason::Stream));
+        }
+        step.status
+    }
+
     /// Sample the ruckig trajectory and send the position to the board.
     async fn tick(&mut self) -> Result<(), B::Error> {
         if !matches!(self.state, MotionState::Moving | MotionState::Stopping(_)) {
             return Ok(());
         }
 
-        let result = match self.ruckig.update(&self.input, &mut self.output) {
-            Ok(result) => result,
-            Err(_error) => {
-                // Testing placeholder. Uncomment to see error, but spams the log.
-                // log::info!("Ruckig Error {:?}", _error);
-                return Ok(());
-            },
-        };
+        let status = if self.streaming {
+            self.step_stream()
+        } else {
+            let result = match self.ruckig.update(&self.input, &mut self.output) {
+                Ok(result) => result,
+                Err(_error) => {
+                    // Testing placeholder. Uncomment to see error, but spams the log.
+                    // log::info!("Ruckig Error {:?}", _error);
+                    return Ok(());
+                }
+            };
 
-        if !matches!(result, RuckigResult::Working | RuckigResult::Finished) {
-            return Ok(());
-        }
+            if !matches!(result, RuckigResult::Working | RuckigResult::Finished) {
+                return Ok(());
+            }
+            if result == RuckigResult::Finished {
+                StepStatus::Arrived
+            } else {
+                StepStatus::Working
+            }
+        };
 
         let mm = self.output.new_position[0]
             .clamp(self.limits.min_position_mm, self.limits.max_position_mm);
@@ -260,7 +423,10 @@ impl<'a, B: Board> MotionController<'a, B> {
         self.output.pass_to_input(&mut self.input);
         self.publish_state();
 
-        if result == RuckigResult::Finished {
+        // `StepStatus::ArrivedInMotion` is not a move completion: the
+        // follow-up move usually arrives before the next tick, and the
+        // executor stops on the next tick otherwise.
+        if status == StepStatus::Arrived {
             match self.state {
                 MotionState::Stopping(StopReason::Pause) => {
                     self.transition(MotionState::Paused);
@@ -276,6 +442,11 @@ impl<'a, B: Board> MotionController<'a, B> {
                         return Err(e);
                     }
                 },
+                MotionState::Stopping(StopReason::Stream) => {
+                    self.target = None;
+                    self.channels.move_resp.signal(Err(Cancelled));
+                    self.transition(MotionState::Ready);
+                }
                 _ => {
                     self.target = None;
                     self.channels.move_resp.signal(Ok(()));
@@ -324,6 +495,11 @@ impl<'a, B: Board> MotionController<'a, B> {
     }
 
     fn stop(&mut self, reason: StopReason) {
+        if self.streaming {
+            self.stream.request_stop();
+            self.transition(MotionState::Stopping(reason));
+            return;
+        }
         // Switch to velocity control and target zero velocity. Ruckig handles
         // the jerk-limited deceleration trajectory — no manual math needed.
         self.input.control_interface = ControlInterface::Velocity;
@@ -333,6 +509,16 @@ impl<'a, B: Board> MotionController<'a, B> {
     }
 
     async fn resume(&mut self) {
+        if self.streaming
+            && let Some(target) = self.target
+        {
+            // Continue to the last streamed target, ending at rest.
+            if self.request_stream_move(target, 0.0, 0.0) {
+                self.apply_torque().await;
+                self.transition(MotionState::Moving);
+            }
+            return;
+        }
         // Switch back to position control and restore the instructed target.
         self.input.control_interface = ControlInterface::Position;
         self.sync_ruckig();
@@ -349,7 +535,7 @@ impl<'a, B: Board> MotionController<'a, B> {
             MotionState::Moving | MotionState::Paused => {
                 self.channels.move_resp.signal(Err(Cancelled));
             }
-            MotionState::Stopping(StopReason::Pause) => {
+            MotionState::Stopping(StopReason::Pause | StopReason::Stream) => {
                 self.channels.move_resp.signal(Err(Cancelled));
             }
             MotionState::Stopping(StopReason::Disable | StopReason::Home) => {
@@ -418,6 +604,11 @@ impl<'a, B: Board> MotionController<'a, B> {
     /// This may cause some jerk, but is acceptable compared to the alternative over greatly overshooting the target.
     fn sync_ruckig(&mut self) {
         if let Some(target) = &self.target {
+            // Pattern moves end at rest, in position control; a streaming
+            // move may have left these set.
+            self.input.control_interface = ControlInterface::Position;
+            self.input.target_velocity[0] = 0.0;
+            self.input.minimum_duration = None;
             self.input.target_position[0] = target.position;
             self.input.max_jerk[0] = target.jerk;
             self.input.max_velocity[0] = target.velocity;
@@ -494,6 +685,15 @@ impl<'a, B: Board> MotionController<'a, B> {
     }
 
     fn transition(&mut self, new_state: MotionState) {
+        if self.streaming
+            && !matches!(
+                new_state,
+                MotionState::Moving | MotionState::Stopping(_) | MotionState::Paused
+            )
+        {
+            self.streaming = false;
+            self.channels.stream_ended.signal(());
+        }
         self.state = new_state;
         self.publish_state();
         self.channels.motion_state.publish_phase(self.phase());

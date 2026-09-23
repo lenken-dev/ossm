@@ -18,8 +18,11 @@ mod state;
 pub mod transport;
 
 pub use board::Board;
-pub use command::{Cancelled, MotionCommand, StateCommand, StateResponse};
-use command::{MoveChannel, MoveResponseSignal, StateChannel, StateResponseSignal};
+pub use command::{Cancelled, MotionCommand, StateCommand, StateResponse, StreamMove};
+use command::{
+    MoveChannel, MoveResponseSignal, StateChannel, StateResponseSignal, StreamEndedSignal,
+    StreamSignal,
+};
 pub use limits::MotionLimits;
 pub use mechanical::MechanicalConfig;
 pub use motion::MotionController;
@@ -64,6 +67,12 @@ pub struct Ossm {
     pub(crate) state_cmd: StateChannel,
     pub(crate) state_resp: StateResponseSignal,
     pub(crate) move_resp: MoveResponseSignal,
+    /// Streaming commands; separate from `move_cmd` so they never replace a
+    /// pattern command.
+    pub(crate) stream_cmd: StreamSignal,
+    /// Signalled whenever streaming ends, and for an end command when not
+    /// streaming.
+    pub(crate) stream_ended: StreamEndedSignal,
     pub(crate) motion_state: MotionStateChannels,
 }
 
@@ -74,6 +83,8 @@ impl Ossm {
             state_cmd: StateChannel::new(),
             state_resp: StateResponseSignal::new(),
             move_resp: MoveResponseSignal::new(),
+            stream_cmd: StreamSignal::new(),
+            stream_ended: StreamEndedSignal::new(),
             motion_state: MotionStateChannels::new(),
         }
     }
