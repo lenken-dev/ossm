@@ -83,6 +83,17 @@ impl PatternSender {
         });
     }
 
+    /// Set depth and stroke in one update, so no reader sees one without the
+    /// other. Both are clamped to `0.0..=1.0`.
+    pub fn set_depth_and_stroke(&self, depth: f64, stroke: f64) {
+        self.engine.input.sender().send_modify(|opt| {
+            if let Some(input) = opt {
+                input.depth = depth.clamp(0.0, 1.0);
+                input.stroke = stroke.clamp(0.0, 1.0);
+            }
+        });
+    }
+
     /// Set sensation (pattern-specific). Clamped to `-1.0..=1.0`.
     pub fn set_sensation(&self, value: f64) {
         self.engine.input.sender().send_modify(|opt| {
