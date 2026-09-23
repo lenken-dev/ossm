@@ -2,15 +2,19 @@ extern crate alloc;
 use alloc::string::String;
 
 mod recorder;
+mod stream_recorder;
 
 use ossm::planner::RuckigPlanner;
 use ossm::{MotionLimits, MotionReceiver, MotionSender, Ossm};
 use pattern_engine::{AnyPattern, PatternInput, SharedPatternInput};
-use recorder::PatternRecorder;
+use recorder::{PatternRecorder, Sample};
 use static_cell::StaticCell;
+use stream_engine::StreamInput;
+use stream_recorder::StreamRecorder;
 use wasm_bindgen::prelude::*;
 
 static RECORDER_OSSM_CELL: StaticCell<Ossm> = StaticCell::new();
+static STREAM_OSSM_CELL: StaticCell<Ossm> = StaticCell::new();
 static RECORDER_INPUT: SharedPatternInput = SharedPatternInput::new();
 
 const LIMITS: MotionLimits = MotionLimits::DEFAULT;
@@ -23,6 +27,7 @@ const TIMESTEP_MS: f64 = 10.0;
 pub struct TrajectoryRecorder {
     receiver: MotionReceiver,
     motion: MotionSender,
+    stream: StreamRecorder,
 }
 
 #[wasm_bindgen]
@@ -30,7 +35,13 @@ impl TrajectoryRecorder {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         let (receiver, _observer, motion) = RECORDER_OSSM_CELL.init(Ossm::new()).split();
-        Self { receiver, motion }
+        let (stream_receiver, _observer, stream_motion) =
+            STREAM_OSSM_CELL.init(Ossm::new()).split();
+        Self {
+            receiver,
+            motion,
+            stream: StreamRecorder::new(stream_receiver, stream_motion, LIMITS),
+        }
     }
 
     pub fn min_position_mm(&self) -> f64 {
@@ -89,21 +100,43 @@ impl TrajectoryRecorder {
             max_samples,
         );
 
-        let mut position = alloc::vec::Vec::with_capacity(samples.len());
-        let mut velocity = alloc::vec::Vec::with_capacity(samples.len());
-        let mut acceleration = alloc::vec::Vec::with_capacity(samples.len());
+        TrajectoryResult::from_samples(&samples)
+    }
 
-        for s in &samples {
-            position.push(s.position as f32);
-            velocity.push(s.velocity as f32);
-            acceleration.push(s.acceleration as f32);
-        }
-
-        TrajectoryResult {
-            position: position.into_boxed_slice(),
-            velocity: velocity.into_boxed_slice(),
-            acceleration: acceleration.into_boxed_slice(),
-        }
+    /// Record streamed motion (a funscript) returning the same arrays as
+    /// [`record`](Self::record).
+    ///
+    /// Point `k` asks to reach `pos[k]` (0-100, 100 = shallow end) at
+    /// `at_ms[k]`. The machine starts at rest at the first point, which is
+    /// sample 0; sample `i` is `i` timesteps after `at_ms[0]`. Each following
+    /// point is sent `lookahead_points` points before the start of its
+    /// segment (0 sends it as its segment starts, like a funscript player).
+    /// The points and settings run through the same stream sequencer and
+    /// motion controller as the firmware. Recording ends after
+    /// `max_samples`, or once the last point is due, nothing is left to
+    /// send, and the machine is at rest.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_stream(
+        &mut self,
+        at_ms: &[u32],
+        pos: &[f64],
+        depth: f64,
+        stroke: f64,
+        velocity: f64,
+        jerk: f64,
+        lookahead_points: usize,
+        max_samples: usize,
+    ) -> TrajectoryResult {
+        let input = StreamInput {
+            depth,
+            stroke,
+            velocity,
+            jerk,
+        };
+        let samples = self
+            .stream
+            .record(at_ms, pos, input, lookahead_points, max_samples);
+        TrajectoryResult::from_samples(&samples)
     }
 
     pub fn pattern_count(&self) -> usize {
@@ -140,6 +173,15 @@ impl TrajectoryResult {
     #[wasm_bindgen(getter)]
     pub fn acceleration(&self) -> Box<[f32]> {
         self.acceleration.clone()
+    }
+
+    fn from_samples(samples: &[Sample]) -> Self {
+        let collect = |f: fn(&Sample) -> f64| samples.iter().map(|s| f(s) as f32).collect();
+        Self {
+            position: collect(|s| s.position),
+            velocity: collect(|s| s.velocity),
+            acceleration: collect(|s| s.acceleration),
+        }
     }
 
     fn empty() -> Self {
