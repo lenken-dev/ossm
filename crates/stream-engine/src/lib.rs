@@ -14,6 +14,9 @@
 //! [`StreamStep`]s (streaming moves and stops), once per controller tick. [`StreamEngine`] wraps
 //! it for firmware: [`StreamSender`] feeds points and settings, and
 //! [`StreamRunner`] steps the sequencer and drives the motion controller.
+//! The runner waits for a stream's first point separately
+//! ([`StreamRunner::wait_for_stream`]), so a host can switch into streaming
+//! and prepare the machine before running it.
 //!
 //! The planner and sequencer are synchronous and clock-agnostic: the caller
 //! passes the current time in milliseconds to every call.
@@ -30,6 +33,6 @@ pub use engine::StreamEngine;
 pub use input::StreamInput;
 pub use planner::{MoveRequest, PlannerConfig, PlannerStats, PushError, StreamPlanner};
 pub use range::StrokeRange;
-pub use runner::StreamRunner;
+pub use runner::{ActiveGuard, StreamRunner, StreamStart};
 pub use sender::StreamSender;
 pub use sequencer::{StreamSequencer, StreamStep};

@@ -1,3 +1,5 @@
+use core::sync::atomic::Ordering;
+
 use embassy_time::Instant;
 
 use crate::PushError;
@@ -69,6 +71,13 @@ impl StreamSender {
     /// `0.0..=1.0`.
     pub fn set_jerk(&self, value: f64) {
         self.modify(|input| input.jerk = value);
+    }
+
+    /// Whether streaming is active: the runner is running, or its host holds
+    /// an [`ActiveGuard`](crate::ActiveGuard) (see
+    /// [`StreamRunner::activate`](crate::StreamRunner::activate)).
+    pub fn is_active(&self) -> bool {
+        self.engine.active.load(Ordering::Acquire) > 0
     }
 
     /// Current stream input (depth, stroke, velocity, jerk).
