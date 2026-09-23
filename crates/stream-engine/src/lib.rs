@@ -20,9 +20,13 @@
 //!
 //! The planner and sequencer are synchronous and clock-agnostic: the caller
 //! passes the current time in milliseconds to every call.
+//!
+//! [`lite`] parses the OSSM-Lite streaming protocol and maps its settings
+//! onto depth and stroke, for remotes that speak it.
 
 mod engine;
 mod input;
+pub mod lite;
 mod planner;
 mod range;
 mod runner;
