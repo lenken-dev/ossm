@@ -32,3 +32,9 @@
   height: 12px;
   border-radius: 2px;
 }
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
