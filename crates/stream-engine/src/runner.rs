@@ -14,7 +14,7 @@ use crate::sequencer::StreamSequencer;
 #[derive(Debug, Clone, Copy)]
 pub struct StreamStart(Point);
 
-/// A streamed point, stamped with its reception time.
+/// A streamed point, stamped with its reception time plus any delay.
 #[derive(Debug, Clone, Copy)]
 struct Point {
     received_ms: u64,
