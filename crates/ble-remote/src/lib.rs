@@ -1,6 +1,8 @@
 #![no_std]
 
+mod latency;
 mod lite;
+mod stream;
 
 use core::{
     fmt::Write,
@@ -10,7 +12,7 @@ use core::{
 pub const CONNECTIONS_MAX: usize = 1;
 pub const L2CAP_CHANNELS_MAX: usize = 2;
 pub const MAX_COMMAND_LENGTH: usize = 64;
-pub const MAX_STATE_LENGTH: usize = 128;
+pub const MAX_STATE_LENGTH: usize = 160;
 pub const MAX_PATTERN_LENGTH: usize = 1024;
 
 use embassy_executor::Spawner;
@@ -24,11 +26,14 @@ use static_cell::StaticCell;
 use stream_engine::StreamSender;
 use trouble_host::prelude::*;
 
+use crate::latency::LatencyCompensation;
 use crate::lite::LiteSession;
+use crate::stream::StreamSession;
 
 const SERVICE_UUID: Uuid = uuid!("522b443a-4f53-534d-0001-420badbabe69");
 const PRIMARY_COMMAND_UUID: Uuid = uuid!("522b443a-4f53-534d-1000-420badbabe69");
 const SPEED_KNOB_UUID: Uuid = uuid!("522b443a-4f53-534d-1010-420badbabe69");
+const LATENCY_COMPENSATION_UUID: Uuid = uuid!("522b443a-4f53-534d-1030-420badbabe69");
 const CURRENT_STATE_UUID: Uuid = uuid!("522b443a-4f53-534d-2000-420badbabe69");
 const PATTERN_LIST_UUID: Uuid = uuid!("522b443a-4f53-534d-3000-420badbabe69");
 const PATTERN_DESCRIPTION_UUID: Uuid = uuid!("522b443a-4f53-534d-3010-420badbabe69");
@@ -54,11 +59,14 @@ struct Server {
 
 #[gatt_service(uuid = SERVICE_UUID)]
 struct OssmService {
-    #[characteristic(uuid = PRIMARY_COMMAND_UUID, read, write)]
+    #[characteristic(uuid = PRIMARY_COMMAND_UUID, read, write, write_without_response)]
     primary_command: String<MAX_COMMAND_LENGTH>,
 
     #[characteristic(uuid = SPEED_KNOB_UUID, read, write)]
     speed_knob: String<16>,
+
+    #[characteristic(uuid = LATENCY_COMPENSATION_UUID, read, write)]
+    latency_compensation: String<{ latency::MAX_CONFIG_LENGTH }>,
 
     #[characteristic(uuid = CURRENT_STATE_UUID, read, notify)]
     current_state: String<MAX_STATE_LENGTH>,
@@ -74,7 +82,7 @@ struct OssmService {
 #[gatt_service(uuid = lite::SERVICE_UUID)]
 struct LiteService {
     #[characteristic(uuid = lite::STREAM_UUID, read, write, write_without_response)]
-    stream: String<{ lite::MAX_STREAM_LENGTH }>,
+    stream: String<{ stream::MAX_POINT_LENGTH }>,
 
     #[characteristic(uuid = lite::SPEED_UUID, read, write)]
     speed: String<{ lite::MAX_SETTING_LENGTH }>,
@@ -118,8 +126,13 @@ fn get_pattern_description(index: usize) -> String<MAX_PATTERN_LENGTH> {
     output
 }
 
-/// Start the BLE remote. Without a `stream`, the OSSM-Lite service is not
-/// advertised and ignores streamed points.
+/// Start the BLE remote.
+///
+/// Two funscript players can stream: the OSSM-Lite one through its own
+/// service, and the official OSSM one through `go:streaming` and
+/// `stream:<position>:<duration ms>` commands. Without a `stream`, the
+/// OSSM-Lite service is not advertised, streamed points are ignored, and
+/// `go:streaming` fails.
 pub fn start(
     spawner: &Spawner,
     connector: BleConnector<'static>,
@@ -213,8 +226,11 @@ pub async fn ble_events_task(
                     .with_attribute_server(&server)
                     .expect("Could not transform connection into GATT connection");
 
-                let events = gatt_events_task(&server, &gatt_connection, patterns, stream);
-                let notify = state_notifications(&server, &gatt_connection, patterns, stream);
+                let latency = LatencyCompensation::new();
+                let events =
+                    gatt_events_task(&server, &gatt_connection, patterns, stream, &latency);
+                let notify =
+                    state_notifications(&server, &gatt_connection, patterns, stream, &latency);
 
                 match select(events, notify).await {
                     Either::First(res) => {
@@ -254,22 +270,29 @@ async fn gatt_events_task<P: PacketPool>(
     connection: &GattConnection<'_, '_, P>,
     patterns: &'static PatternSender,
     stream: Option<&'static StreamSender>,
+    latency: &LatencyCompensation,
 ) -> Result<(), Error> {
-    let mut lite = LiteSession::new(patterns, stream);
+    let mut session = StreamSession::new(stream);
+    let lite = LiteSession::new(patterns);
     let reason = loop {
         match connection.next().await {
             GattConnectionEvent::Disconnected { reason } => break reason,
             GattConnectionEvent::Gatt { event } => {
                 let mut write = false;
                 let mut event_handle = 0;
+                let mut latency_reply = None;
                 match &event {
                     GattEvent::Read(event) => {
                         if event.handle() == server.ossm_service.current_state.handle {
                             let engine_state = patterns.state();
                             let input = patterns.input();
                             let state_json =
-                                state_to_json(engine_state, &input, is_streaming(stream));
+                                state_to_json(engine_state, &input, is_streaming(stream), latency);
                             server.set(&server.ossm_service.current_state, &state_json)?;
+                        }
+                        if event.handle() == server.ossm_service.latency_compensation.handle {
+                            server
+                                .set(&server.ossm_service.latency_compensation, &latency.text())?;
                         }
                         if event.handle() == server.ossm_service.pattern_list.handle {
                             let patterns = get_all_patterns_json();
@@ -280,7 +303,12 @@ async fn gatt_events_task<P: PacketPool>(
                     GattEvent::Write(event) => {
                         write = true;
                         event_handle = event.handle();
-                        lite.on_write(server, event_handle, event.data());
+                        if event_handle == server.ossm_service.latency_compensation.handle {
+                            let reply = latency.on_write(event.data());
+                            info!("Latency compensation: {}", reply);
+                            latency_reply = Some(reply);
+                        }
+                        lite.on_write(server, &mut session, event_handle, event.data());
                     }
                     GattEvent::Other(_) => {}
                 };
@@ -293,13 +321,18 @@ async fn gatt_events_task<P: PacketPool>(
                     }
                 };
 
+                // Replace the written value with the reply once the write is applied.
+                if let Some(reply) = latency_reply {
+                    server.set(&server.ossm_service.latency_compensation, &reply)?;
+                }
+
                 // This is here because the event needs to be accepted before the data can be accessed
                 if write {
                     if event_handle == server.ossm_service.primary_command.handle {
                         let command: String<MAX_COMMAND_LENGTH> =
                             server.get(&server.ossm_service.primary_command)?;
 
-                        process_command(&command, server, patterns, stream);
+                        process_command(&command, server, patterns, stream, &mut session, latency);
                     }
                     if event_handle == server.ossm_service.pattern_description.handle {
                         let command: String<MAX_PATTERN_LENGTH> =
@@ -327,7 +360,7 @@ async fn gatt_events_task<P: PacketPool>(
     };
     CONNECTED.store(false, Ordering::Release);
     info!("[gatt] disconnected: {:?}", reason);
-    lite.log_summary();
+    session.log_summary();
     Ok(())
 }
 
@@ -386,6 +419,7 @@ async fn state_notifications<P: PacketPool>(
     connection: &GattConnection<'_, '_, P>,
     patterns: &'static PatternSender,
     stream: Option<&'static StreamSender>,
+    latency: &LatencyCompensation,
 ) -> Result<(), Error> {
     let mut sub = patterns
         .subscribe()
@@ -399,7 +433,7 @@ async fn state_notifications<P: PacketPool>(
         };
 
         let input = patterns.input();
-        let state_json = state_to_json(engine_state, &input, is_streaming(stream));
+        let state_json = state_to_json(engine_state, &input, is_streaming(stream), latency);
         server
             .ossm_service
             .current_state
@@ -426,6 +460,7 @@ fn state_to_json(
     state: EngineState,
     input: &PatternInput,
     streaming: bool,
+    latency: &LatencyCompensation,
 ) -> String<MAX_STATE_LENGTH> {
     let pattern_name = match state {
         EngineState::Playing(idx) | EngineState::Paused(idx) => commands::pattern_list()
@@ -452,9 +487,10 @@ fn state_to_json(
     let depth = (input.depth * 100.0) as u32;
     // Map internal -1.0..1.0 back to BLE protocol 0–100.
     let sensation = ((input.sensation + 1.0) * 50.0) as u32;
+    let buffer = latency.buffer_value();
     let _ = write!(
         out,
-        r#"{{"state":"{state_str}","speed":{speed},"stroke":{stroke},"sensation":{sensation},"depth":{depth},"pattern":{idx},"patternName":"{pattern_name}"}}"#,
+        r#"{{"state":"{state_str}","speed":{speed},"stroke":{stroke},"sensation":{sensation},"depth":{depth},"buffer":{buffer},"pattern":{idx},"patternName":"{pattern_name}"}}"#,
     );
     out
 }
@@ -464,7 +500,17 @@ fn process_command(
     server: &Server<'_>,
     patterns: &'static PatternSender,
     stream: Option<&'static StreamSender>,
+    session: &mut StreamSession,
+    latency: &LatencyCompensation,
 ) {
+    // Points arrive many times a second; the session counts them instead of
+    // logging each.
+    if let Some(point) = command.strip_prefix("stream:") {
+        let streamed = session.push(point.as_bytes(), latency.delay_ms());
+        respond(server, command, !streamed);
+        return;
+    }
+
     info!("BLE Command {}", command);
 
     let mut split_command = command.split(":");
@@ -476,7 +522,12 @@ fn process_command(
             match cmd {
                 "set" => {
                     if let Some(value) = split_command.next() {
-                        if let Ok(value) = value.parse::<u32>() {
+                        if action == "buffer" {
+                            if !latency.set_buffer(value) {
+                                error!("Could not parse buffer value");
+                                fail = true;
+                            }
+                        } else if let Ok(value) = value.parse::<u32>() {
                             let normalized = value as f64 / 100.0;
                             match action {
                                 "speed" => patterns.set_speed(normalized),
@@ -501,6 +552,7 @@ fn process_command(
                 }
                 "go" => match action {
                     "simplePenetration" | "strokeEngine" => patterns.play(0),
+                    "streaming" => fail = !go_streaming(patterns, stream),
                     "menu" => stop(patterns, stream),
                     _ => {
                         error!("Unknown go action: {}", action);
@@ -521,17 +573,43 @@ fn process_command(
         fail = true;
     }
 
+    respond(server, command, fail);
+}
+
+/// Prepare for streaming by the official funscript player: stop a pattern
+/// session, which also zeroes the speed, so that streamed points can take
+/// over once the speed is raised. An active stream is left alone. Fails
+/// without streaming.
+fn go_streaming(patterns: &PatternSender, stream: Option<&StreamSender>) -> bool {
+    let Some(stream) = stream else {
+        error!("Streaming unavailable");
+        return false;
+    };
+    if !stream.is_active()
+        && matches!(
+            patterns.state(),
+            EngineState::Playing(_) | EngineState::Paused(_)
+        )
+    {
+        patterns.stop();
+    }
+    true
+}
+
+/// Reply to a command in the command characteristic: `ok:` or `fail:`
+/// followed by the command.
+fn respond(server: &Server<'_>, command: &str, fail: bool) {
     let mut response_str: String<MAX_COMMAND_LENGTH> = String::new();
     if fail {
         response_str.write_str("fail:").expect("Should always fit");
-        if response_str.write_str(command.as_str()).is_err() {
+        if response_str.write_str(command).is_err() {
             response_str
                 .write_str("overflow")
                 .expect("Should always fit");
         }
     } else {
         response_str.write_str("ok:").expect("Should always fit");
-        if response_str.write_str(command.as_str()).is_err() {
+        if response_str.write_str(command).is_err() {
             response_str
                 .write_str("overflow")
                 .expect("Should always fit");
