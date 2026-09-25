@@ -10,7 +10,7 @@ use crate::sender::StreamSender;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum EngineCommand {
-    /// A streamed point, stamped with its reception time.
+    /// A streamed point, stamped with its reception time plus any delay.
     Point {
         received_ms: u64,
         position: f64,

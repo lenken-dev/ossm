@@ -31,13 +31,26 @@ impl StreamSender {
     /// unlike a point dropped by the planner, does not advance the stream
     /// timeline. Both drops are counted in [`dropped`](Self::dropped).
     pub fn push(&self, position: f64, duration_ms: u32) -> Result<(), PushError> {
+        self.push_delayed(position, duration_ms, 0)
+    }
+
+    /// Stream a point as [`push`](Self::push) does, but as if received
+    /// `delay_ms` from now: for a client that sends its points that much
+    /// ahead of time. Only a stream that has caught up is shifted; points
+    /// queued behind earlier ones keep their schedule.
+    pub fn push_delayed(
+        &self,
+        position: f64,
+        duration_ms: u32,
+        delay_ms: u32,
+    ) -> Result<(), PushError> {
         if !position.is_finite() {
             return Err(PushError::InvalidPosition);
         }
         self.engine
             .commands
             .try_send(EngineCommand::Point {
-                received_ms: Instant::now().as_millis(),
+                received_ms: Instant::now().as_millis() + u64::from(delay_ms),
                 position,
                 duration_ms,
             })
