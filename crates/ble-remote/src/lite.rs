@@ -8,12 +8,13 @@
 use core::fmt::Write;
 
 use heapless::String;
-use log::{info, warn};
+use log::info;
 use pattern_engine::PatternSender;
-use stream_engine::{PushError, StreamSender, StrokeRange, lite};
+use stream_engine::{StrokeRange, lite};
 use trouble_host::prelude::*;
 
 use crate::Server;
+use crate::stream::StreamSession;
 
 pub const SERVICE_UUID: Uuid = uuid!("4f53534d-0000-0000-0000-000000000000");
 pub const STREAM_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-53747265616d");
@@ -21,38 +22,20 @@ pub const SPEED_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-005370656564");
 pub const MAX_DEPTH_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-4d6178446570");
 pub const MIN_DEPTH_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-4d696e446570");
 
-pub const MAX_STREAM_LENGTH: usize = 32;
 pub const MAX_SETTING_LENGTH: usize = 16;
 
 /// What the stream characteristic reads as. The player reads it once to
 /// check that the firmware streams.
 const STREAM_READY: &str = "Ready";
 
-/// The OSSM-Lite service of one connection, with counts of the writes it
-/// ignored.
+/// The OSSM-Lite service of one connection.
 pub struct LiteSession {
     patterns: &'static PatternSender,
-    stream: Option<&'static StreamSender>,
-    points: u32,
-    invalid: u32,
-    /// Points this session could not hand to the stream engine.
-    dropped: u32,
-    /// The stream engine's drop count when the session started.
-    engine_dropped_at_start: u32,
-    unsupported: u32,
 }
 
 impl LiteSession {
-    pub fn new(patterns: &'static PatternSender, stream: Option<&'static StreamSender>) -> Self {
-        Self {
-            patterns,
-            stream,
-            points: 0,
-            invalid: 0,
-            dropped: 0,
-            engine_dropped_at_start: stream.map_or(0, StreamSender::dropped),
-            unsupported: 0,
-        }
+    pub fn new(patterns: &'static PatternSender) -> Self {
+        Self { patterns }
     }
 
     /// Refresh the value of a characteristic of this service before a read
@@ -78,75 +61,42 @@ impl LiteSession {
 
     /// Act on a write to a characteristic of this service. Other handles
     /// are ignored.
-    pub fn on_write(&mut self, server: &Server<'_>, handle: u16, data: &[u8]) {
+    pub fn on_write(
+        &self,
+        server: &Server<'_>,
+        session: &mut StreamSession,
+        handle: u16,
+        data: &[u8],
+    ) {
         let service = &server.lite_service;
         if handle == service.stream.handle {
-            self.on_point(data);
+            session.push(data, 0);
         } else if handle == service.speed.handle {
-            self.on_setting("speed", data, |patterns, speed| patterns.set_speed(speed));
+            self.on_setting(session, "speed", data, |patterns, speed| {
+                patterns.set_speed(speed)
+            });
         } else if handle == service.max_depth.handle {
-            self.on_setting("max depth", data, |patterns, max| {
+            self.on_setting(session, "max depth", data, |patterns, max| {
                 let range = lite::with_max_depth(stroke_range(patterns), max);
                 patterns.set_depth_and_stroke(range.depth, range.stroke);
             });
         } else if handle == service.min_depth.handle {
-            self.on_setting("min depth", data, |patterns, min| {
+            self.on_setting(session, "min depth", data, |patterns, min| {
                 let range = lite::with_min_depth(stroke_range(patterns), min);
                 patterns.set_depth_and_stroke(range.depth, range.stroke);
             });
         }
     }
 
-    /// Log what this session streamed and ignored.
-    ///
-    /// Dropped points include those the stream engine dropped further down
-    /// (a full planner queue) while the session lasted.
-    pub fn log_summary(&self) {
-        let dropped = self.stream.map_or(0, |stream| {
-            stream.dropped().wrapping_sub(self.engine_dropped_at_start)
-        });
-        if [self.points, self.invalid, dropped, self.unsupported] != [0; 4] {
-            info!(
-                "[lite] session: {} points streamed, {} invalid writes, {} points dropped (queue full), {} points ignored (no streaming)",
-                self.points, self.invalid, dropped, self.unsupported
-            );
-        }
-    }
-
-    fn on_point(&mut self, data: &[u8]) {
-        let Some(stream) = self.stream else {
-            if count(&mut self.unsupported) {
-                warn!(
-                    "[lite] streaming unavailable, point ignored ({} so far)",
-                    self.unsupported
-                );
-            }
-            return;
-        };
-        if data.len() > MAX_STREAM_LENGTH {
-            self.invalid_write(data);
-            return;
-        }
-        match lite::parse_point(data) {
-            Ok(point) => match stream.push(point.position, point.duration_ms) {
-                Ok(()) => self.points = self.points.saturating_add(1),
-                Err(PushError::QueueFull) => {
-                    if count(&mut self.dropped) {
-                        warn!(
-                            "[lite] stream queue full, point dropped ({} so far)",
-                            self.dropped
-                        );
-                    }
-                }
-                Err(PushError::InvalidPosition) => self.invalid_write(data),
-            },
-            Err(_) => self.invalid_write(data),
-        }
-    }
-
-    fn on_setting(&mut self, name: &str, data: &[u8], apply: impl FnOnce(&PatternSender, f64)) {
+    fn on_setting(
+        &self,
+        session: &mut StreamSession,
+        name: &str,
+        data: &[u8],
+        apply: impl FnOnce(&PatternSender, f64),
+    ) {
         if data.len() > MAX_SETTING_LENGTH {
-            self.invalid_write(data);
+            session.invalid_write(data);
             return;
         }
         match lite::parse_setting(data) {
@@ -154,17 +104,7 @@ impl LiteSession {
                 info!("[lite] set {} {}", name, lite::setting_percent(value));
                 apply(self.patterns, value);
             }
-            Err(_) => self.invalid_write(data),
-        }
-    }
-
-    fn invalid_write(&mut self, data: &[u8]) {
-        if count(&mut self.invalid) {
-            warn!(
-                "[lite] invalid write ignored ({} so far): {:?}",
-                self.invalid,
-                core::str::from_utf8(data).unwrap_or("<not text>")
-            );
+            Err(_) => session.invalid_write(data),
         }
     }
 }
@@ -181,11 +121,4 @@ fn percent_text(fraction: f64) -> String<MAX_SETTING_LENGTH> {
     let mut text = String::new();
     write!(text, "{}", lite::setting_percent(fraction)).expect("Always fits");
     text
-}
-
-/// Count an event; true at the first and then at power-of-two counts, to
-/// log at a low rate.
-fn count(counter: &mut u32) -> bool {
-    *counter = counter.saturating_add(1);
-    counter.is_power_of_two()
 }
