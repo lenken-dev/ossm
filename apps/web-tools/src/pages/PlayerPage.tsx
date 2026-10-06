@@ -26,6 +26,10 @@ const TICK_MS = 10;
 /** Speed limit of the funscript speed sliders until the user changes it, in percent. */
 const DEFAULT_SPEED_LIMIT = 5;
 
+/** Where the machine moves along the depth and stroke sliders; out is towards home. */
+const DEPTH_ENDS: [string, string] = ["Out", "In"];
+const STROKE_ENDS: [string, string] = ["In", "Out"];
+
 const isHomed = (state: OssmState | null) => state?.state === "ready" || state?.state === "streaming";
 
 /** Why the machine does not follow the funscript, or `null` when it does. */
@@ -519,8 +523,8 @@ function PatternControls({ ossm, state, endStream }: {
         </Select.Root>
         {description && <Text size="1" color="gray" as="p" mt="1">{description}</Text>}
       </Box>
-      <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} />
-      <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} />
+      <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} ends={DEPTH_ENDS} />
+      <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} ends={STROKE_ENDS} />
       <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
       <SettingSlider ossm={ossm} setting="sensation" label="Sensation" value={state.sensation} />
       <Button
@@ -666,8 +670,8 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }
         </Dialog.Description>
         <Flex direction="column" gap="3">
           <SpeedSlider ossm={ossm} value={state.speed} limit={speedLimit} setLimit={setSpeedLimit} />
-          <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} disabled={still} onChange={() => track(0)} />
-          <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} disabled={still} onChange={() => track(100)} />
+          <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} ends={DEPTH_ENDS} disabled={still} onChange={() => track(0)} />
+          <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} ends={STROKE_ENDS} disabled={still} onChange={() => track(100)} />
           <Flex gap="2">
             <Button variant="soft" disabled={still} style={{ flex: 1 }} onClick={() => track(0)}>
               Move to depth
@@ -809,6 +813,9 @@ function ScriptPreview({ script, reverse, videoRef, notice }: {
           Machine not moving: {notice}
         </Text>
       )}
+      {/* The graph shows stream positions: 100 (top) is the shallow end, out towards home. */}
+      <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8 }}>Out</Text>
+      <Text size="1" color="gray" style={{ position: "absolute", bottom: 4, right: 8 }}>In</Text>
     </Box>
   );
 }
