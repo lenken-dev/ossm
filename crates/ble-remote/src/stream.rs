@@ -27,10 +27,12 @@ pub const LOOKAHEAD: u8 = 5;
 
 pub const MAX_LOOKAHEAD_LENGTH: usize = 4;
 
-/// [`LOOKAHEAD`] as the stream look-ahead characteristic reads.
-pub fn lookahead_text() -> String<MAX_LOOKAHEAD_LENGTH> {
+/// What the stream look-ahead characteristic reads: [`LOOKAHEAD`], or `0`
+/// without `streaming`.
+pub fn lookahead_text(streaming: bool) -> String<MAX_LOOKAHEAD_LENGTH> {
     let mut text = String::new();
-    write!(text, "{LOOKAHEAD}").expect("Always fits");
+    let lookahead = if streaming { LOOKAHEAD } else { 0 };
+    write!(text, "{lookahead}").expect("Always fits");
     text
 }
 
