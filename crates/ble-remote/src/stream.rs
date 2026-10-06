@@ -4,12 +4,35 @@
 //! points as `<position>:<duration ms>` text (see [`lite::parse_point`]).
 //! The session hands them to the stream engine and counts those it had to
 //! ignore, for a summary when the connection ends.
+//!
+//! A player that finds the stream look-ahead characteristic may send points
+//! ahead of time: up to [`LOOKAHEAD`] beyond the point the machine is
+//! heading to. A move ends in motion only if its following point is queued
+//! when the move starts, so sending them that early leaves room for BLE
+//! delays. Such a player ends the stream with `stream:end` whenever its
+//! queued points no longer apply (seek, pause, stall, or a change to how it
+//! generates points); the next point starts a new stream.
 
+use core::fmt::Write;
+
+use heapless::String;
 use log::{info, warn};
 use stream_engine::{PushError, StreamSender, lite};
 
 /// Longest point text accepted.
 pub const MAX_POINT_LENGTH: usize = 32;
+
+/// Points a player may send beyond the point the machine is heading to.
+pub const LOOKAHEAD: u8 = 5;
+
+pub const MAX_LOOKAHEAD_LENGTH: usize = 4;
+
+/// [`LOOKAHEAD`] as the stream look-ahead characteristic reads.
+pub fn lookahead_text() -> String<MAX_LOOKAHEAD_LENGTH> {
+    let mut text = String::new();
+    write!(text, "{LOOKAHEAD}").expect("Always fits");
+    text
+}
 
 pub struct StreamSession {
     stream: Option<&'static StreamSender>,
