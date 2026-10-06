@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type MediaHTMLAttributes, type RefObject, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MediaHTMLAttributes, type RefObject, type SyntheticEvent } from "react";
 import { Box, Button, Callout, Dialog, Flex, IconButton, SegmentedControl, Select, Separator, Switch, Text } from "@radix-ui/themes";
 import { Cross2Icon, ExclamationTriangleIcon, GearIcon, HomeIcon, StopIcon, UploadIcon } from "@radix-ui/react-icons";
 import { bisectLeft } from "d3";
 import { useAppearance } from "../hooks/useAppearance";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm, type Ossm, type OssmState, type PatternInfo } from "../player/ble";
-import { FunscriptStream } from "../player/stream";
+import { FunscriptStream, simplify } from "../player/stream";
 import { parseFunscript, type Funscript } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
@@ -91,6 +91,9 @@ export default function PlayerPage() {
   // Only the latest picked script may replace the script or the error.
   const scriptGeneration = useRef(0);
   const [reverse, setReverse] = useState(false);
+  const [simplified, setSimplified] = usePersistedState("ossm:playerSimplify", true, localStorage);
+  /** The script as streamed and previewed. */
+  const played = useMemo(() => script && simplified ? simplify(script) : script, [script, simplified]);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
   const [offset, setOffset] = usePersistedState("ossm:playerOffset", 0);
   const stream = useRef(new FunscriptStream());
@@ -165,19 +168,19 @@ export default function PlayerPage() {
   // that does not stop playback (rate, offset, script) the next one starts
   // right away.
   useEffect(() => {
-    if (mode !== "funscript" || paused || blocked || !ossm || !script) return;
+    if (mode !== "funscript" || paused || blocked || !ossm || !played) return;
     const id = setInterval(() => {
       const video = videoRef.current;
       if (!video || video.seeking || video.readyState < video.HAVE_FUTURE_DATA || video.playbackRate <= 0) return;
       const media = video.currentTime * 1000 + offset;
-      for (const p of stream.current.tick(script, media, video.playbackRate, reverse, ossm.lookahead)) {
+      for (const p of stream.current.tick(played, media, video.playbackRate, reverse, ossm.lookahead)) {
         const late = p.lateBy > 0 ? ` late by ${Math.round(p.lateBy)} ms` : "";
         const note = `#${p.index} at=${p.at} media=${Math.round(p.media)} ahead=${p.ahead} ${p.first ? "first" : "chained"}${late}`;
         void ossm.streamPoint(p.position, p.duration, note, late ? "warn" : "log");
       }
     }, TICK_MS);
     return () => clearInterval(id);
-  }, [mode, paused, blocked, ossm, script, offset, reverse]);
+  }, [mode, paused, blocked, ossm, played, offset, reverse]);
 
   // Video events that matter; in funscript mode all but `playing` end the stream.
   const videoEvent = (e: SyntheticEvent<HTMLMediaElement>) => {
@@ -353,6 +356,12 @@ export default function PlayerPage() {
                 <Switch checked={reverse} disabled={!paused} onCheckedChange={setReverse} />
               </Flex>
             </Text>
+            <Text as="label" size="2" weight="medium">
+              <Flex align="center" justify="between" gap="2">
+                Simplify
+                <Switch checked={simplified} disabled={!paused} onCheckedChange={setSimplified} />
+              </Flex>
+            </Text>
             {ready && (
               <Button
                 variant="soft"
@@ -456,8 +465,8 @@ export default function PlayerPage() {
       )}
       {silentUrl && <audio {...mediaProps} src={silentUrl} style={{ width: "100%", flexShrink: 0 }} />}
       {mode === "funscript" &&
-        (script ? (
-          <ScriptPreview script={script} reverse={reverse} videoRef={videoRef} notice={blocked} />
+        (played ? (
+          <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} />
         ) : (
           <Flex align="center" justify="center" flexShrink="0" height={`${PREVIEW_HEIGHT}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
             <Button variant="soft" onClick={() => scriptInput.current?.click()}>
