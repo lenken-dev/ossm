@@ -196,7 +196,7 @@ mod tests {
         let first = step_move(seq.tick(0, 0.0));
         assert!(close(first.position, 0.5));
         assert!(close(first.duration, 0.5));
-        assert!(close(first.velocity, 0.5)); // slower adjacent average speed
+        assert!(close(first.velocity, 0.75)); // mean adjacent average speed
         assert!(close(first.speed, 0.5));
         assert!(close(first.jerk, 0.25));
 
