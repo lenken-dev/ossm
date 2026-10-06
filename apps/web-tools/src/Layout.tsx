@@ -22,6 +22,7 @@ import {
   BarChartIcon,
   LayersIcon,
   RocketIcon,
+  PlayIcon,
 } from "@radix-ui/react-icons";
 
 export default function Layout() {
@@ -99,6 +100,14 @@ export default function Layout() {
                         </Flex>
                       )}
                     </NavLink>
+                    <NavLink to="/player" onClick={() => setMenuOpen(false)} style={{ textDecoration: "none" }}>
+                      {({ isActive }) => (
+                        <Flex align="center" gap="2" px="2" py="2" style={{ borderRadius: 6, backgroundColor: isActive ? "var(--accent-3)" : "transparent" }}>
+                          <PlayIcon />
+                          <Text size="2" weight={isActive ? "medium" : "regular"}>Player</Text>
+                        </Flex>
+                      )}
+                    </NavLink>
                     <NavLink to="/diagram" onClick={() => setMenuOpen(false)} style={{ textDecoration: "none" }}>
                       {({ isActive }) => (
                         <Flex align="center" gap="2" px="2" py="2" style={{ borderRadius: 6, backgroundColor: isActive ? "var(--accent-3)" : "transparent" }}>
@@ -168,6 +177,13 @@ export default function Layout() {
                   {({ isActive }) => (
                     <TabNav.Link asChild active={isActive}>
                       <span>Graph</span>
+                    </TabNav.Link>
+                  )}
+                </NavLink>
+                <NavLink to="/player">
+                  {({ isActive }) => (
+                    <TabNav.Link asChild active={isActive}>
+                      <span>Player</span>
                     </TabNav.Link>
                   )}
                 </NavLink>
