@@ -48,14 +48,15 @@ export default function GraphPage() {
   );
 }
 
-export function GraphLayout({ sidebar, content }: { sidebar: ReactNode; content: ReactNode }) {
+export function GraphLayout({ sidebar, content, sidebarHidden }: { sidebar: ReactNode; content: ReactNode; sidebarHidden?: boolean }) {
   const isMobile = useIsMobile();
   return (
     <Flex
       direction={isMobile ? "column-reverse" : "row"}
       className={styles.root}
     >
-      <Box className={isMobile ? styles.sidebarMobile : styles.sidebarDesktop}>
+      {/* Hidden, not unmounted: the sidebar may hold an open dialog. */}
+      <Box className={isMobile ? styles.sidebarMobile : styles.sidebarDesktop} display={sidebarHidden ? "none" : undefined}>
         {sidebar}
       </Box>
       <Box className={styles.content}>
