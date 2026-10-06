@@ -225,6 +225,17 @@ export default function PlayerPage() {
                 <Text size="2" color="gray">
                   {blocked ?? (state.state === "ready" ? "Ready" : "Streaming")}
                 </Text>
+                <Button
+                  variant="soft"
+                  color="red"
+                  onClick={() => {
+                    videoRef.current?.pause();
+                    endStream("stop");
+                    void ossm.command("go:menu");
+                  }}
+                >
+                  <StopIcon /> Stop
+                </Button>
               </>
             )}
             <LabeledSlider
