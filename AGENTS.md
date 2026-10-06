@@ -17,3 +17,7 @@ Triage state uses the five canonical Matt Pocock skill labels. See `.agent-docs/
 ### Domain docs
 
 This repository uses a single-context layout focused on the Rust implementation. See `.agent-docs/domain.md`.
+
+## Build tool
+
+`just` is the build tool. Run `just --list` to list the available targets and their doc comments; read `justfile` for the exact recipes. `ossm-alt` is the main firmware target.
