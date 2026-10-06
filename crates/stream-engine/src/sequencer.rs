@@ -103,6 +103,16 @@ impl StreamSequencer {
         self.planner.push(now_ms, position, duration_ms)
     }
 
+    /// Make a point the only one (see [`StreamPlanner::push_latest`]).
+    pub fn push_latest(
+        &mut self,
+        now_ms: u64,
+        position: f64,
+        duration_ms: u32,
+    ) -> Result<(), PushError> {
+        self.planner.push_latest(now_ms, position, duration_ms)
+    }
+
     /// Forget all queued points and the current move. The caller must end
     /// the stream on the controller, since the last move may end in motion.
     pub fn clear(&mut self) {
