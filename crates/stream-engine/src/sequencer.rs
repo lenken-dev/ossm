@@ -243,8 +243,8 @@ mod tests {
         seq.set_input(full(0.0, 0.5));
         assert!(matches!(seq.tick(100, 0.1), Some(StreamStep::Stop)));
         assert!(seq.tick(110, 0.1).is_none());
-        // A follow-up would refine the current move, and a range change
-        // re-request it, but that target was consumed while holding.
+        // A range change would re-request the current move, but that
+        // target was consumed while holding.
         seq.push(200, 0.0, 1000).unwrap();
         seq.set_input(StreamInput {
             depth: 0.8,
