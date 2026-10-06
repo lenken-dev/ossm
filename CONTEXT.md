@@ -136,7 +136,7 @@ A move toward a stream point with a requested arrival time and arrival velocity.
 _Avoid_: Stream point
 
 **Look-ahead**:
-The stream points queued beyond the target of the current stream move. A stream move arrives in motion only when look-ahead exists; otherwise it ends at rest.
+The stream points queued beyond the target of a stream move. A stream move arrives in motion only when look-ahead exists as it is requested; a point that arrives later does not change the move, which ends at rest. A remote that supports it may send up to five points beyond the target so that the following point is queued in time.
 _Avoid_: Buffering
 
 **Skipped point**:
