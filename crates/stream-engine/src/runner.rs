@@ -14,12 +14,13 @@ use crate::sequencer::StreamSequencer;
 #[derive(Debug, Clone, Copy)]
 pub struct StreamStart(Point);
 
-/// A streamed point, stamped with its reception time plus any delay.
+/// A streamed point, stamped with its reception time.
 #[derive(Debug, Clone, Copy)]
 struct Point {
     received_ms: u64,
     position: f64,
     duration_ms: u32,
+    latest: bool,
 }
 
 impl Point {
@@ -30,10 +31,12 @@ impl Point {
                 received_ms,
                 position,
                 duration_ms,
+                latest,
             } => Some(Self {
                 received_ms,
                 position,
                 duration_ms,
+                latest,
             }),
             EngineCommand::Stop => None,
         }
@@ -175,7 +178,12 @@ impl StreamRunner {
     /// Queue a point. Drops for a full queue are counted in the engine and
     /// logged at 1, 2, 4, 8, ... per stream.
     fn push(&self, sequencer: &mut StreamSequencer, point: Point) {
-        match sequencer.push(point.received_ms, point.position, point.duration_ms) {
+        let pushed = if point.latest {
+            sequencer.push_latest(point.received_ms, point.position, point.duration_ms)
+        } else {
+            sequencer.push(point.received_ms, point.position, point.duration_ms)
+        };
+        match pushed {
             Ok(()) => {}
             Err(PushError::QueueFull) => {
                 self.engine.dropped.fetch_add(1, Ordering::Relaxed);
@@ -237,6 +245,7 @@ mod tests {
             received_ms: 0,
             position: 50.0,
             duration_ms: 100,
+            latest: false,
         };
         for _ in 0..=StreamPlanner::CAPACITY {
             runner.push(&mut sequencer, point);

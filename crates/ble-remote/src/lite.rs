@@ -70,7 +70,7 @@ impl LiteSession {
     ) {
         let service = &server.lite_service;
         if handle == service.stream.handle {
-            session.push(data, 0);
+            session.push(data, true);
         } else if handle == service.speed.handle {
             self.on_setting(session, "speed", data, |patterns, speed| {
                 patterns.set_speed(speed)
