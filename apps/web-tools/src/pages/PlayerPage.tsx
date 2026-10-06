@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { Box, Button, Callout, Flex, SegmentedControl, Select, Separator, Text } from "@radix-ui/themes";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { Box, Button, Callout, Flex, SegmentedControl, Select, Separator, Switch, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon, HomeIcon, StopIcon, UploadIcon } from "@radix-ui/react-icons";
+import { bisectLeft } from "d3";
+import { useAppearance } from "../hooks/useAppearance";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm, type Ossm, type OssmState, type PatternInfo } from "../player/ble";
+import { parseFunscript, type Funscript } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 
@@ -11,12 +14,27 @@ type PlayerMode = "pattern" | "funscript";
 /** How long a slider shows the user's value before following the device again; the device reports settings at least once a second. */
 const PENDING_MS = 1500;
 
+/** Preview graph height and the window it shows around the video time, in ms. */
+const PREVIEW_HEIGHT = 140;
+const PREVIEW_BEFORE_MS = 2000;
+const PREVIEW_AFTER_MS = 8000;
+
 export default function PlayerPage() {
   const [mode, setMode] = usePersistedState<PlayerMode>("ossm:playerMode", "pattern");
   const { ossm, state, connecting, error, connect, disconnect } = useOssm();
   const fileRef = useRef<HTMLInputElement>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [paused, setPaused] = useState(true);
+  const syncPaused = (e: { currentTarget: HTMLVideoElement }) => setPaused(e.currentTarget.paused);
+  const [script, setScript] = useState<Funscript | null>(null);
+  const [scriptError, setScriptError] = useState<string | null>(null);
+  // Only the latest picked script may replace the script or the error.
+  const scriptGeneration = useRef(0);
+  const [reverse, setReverse] = useState(false);
+  /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
+  const [offset, setOffset] = usePersistedState("ossm:playerOffset", 0);
 
   useEffect(() => {
     if (!videoFile) return;
@@ -25,10 +43,24 @@ export default function PlayerPage() {
     return () => URL.revokeObjectURL(url);
   }, [videoFile]);
 
+  const loadScript = async (file: File) => {
+    const generation = ++scriptGeneration.current;
+    try {
+      const parsed = parseFunscript(file.name, await file.text());
+      if (generation !== scriptGeneration.current) return;
+      setScript(parsed);
+      setScriptError(null);
+    } catch (e) {
+      if (generation !== scriptGeneration.current) return;
+      setScriptError(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   // Files are assigned by type; only what was picked is replaced.
   const openFiles = (files: FileList) => {
     for (const file of files) {
       if (file.type.startsWith("video/")) setVideoFile(file);
+      else if (mode === "funscript" && file.name.toLowerCase().endsWith(".funscript")) void loadScript(file);
     }
   };
 
@@ -88,6 +120,47 @@ export default function PlayerPage() {
             <PatternControls ossm={ossm} state={state} />
           </>
         )}
+        {mode === "funscript" && (
+          <>
+            <Separator size="4" />
+            <Text size="2" weight="medium" truncate title={script?.name}>
+              {script?.name ?? "No funscript loaded"}
+            </Text>
+            {scriptError && (
+              <Callout.Root color="red" size="1">
+                <Callout.Icon>
+                  <ExclamationTriangleIcon />
+                </Callout.Icon>
+                <Callout.Text>{scriptError}</Callout.Text>
+              </Callout.Root>
+            )}
+            {ossm && ossm.lookahead === 0 ? (
+              <Text size="2" color="gray">This firmware cannot stream.</Text>
+            ) : ossm && state && (
+              <>
+                <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} />
+                <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} />
+                <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
+                <SettingSlider ossm={ossm} setting="jerk" label="Jerk" value={state.jerk} />
+              </>
+            )}
+            <LabeledSlider
+              label="Sync offset"
+              value={offset}
+              display={`${offset > 0 ? "+" : ""}${offset} ms`}
+              min={-500}
+              max={500}
+              step={5}
+              onChange={setOffset}
+            />
+            <Text as="label" size="2" weight="medium">
+              <Flex align="center" justify="between" gap="2">
+                Reverse
+                <Switch checked={reverse} disabled={!paused} onCheckedChange={setReverse} />
+              </Flex>
+            </Text>
+          </>
+        )}
       </Flex>
     </>
   );
@@ -97,7 +170,7 @@ export default function PlayerPage() {
       <input
         ref={fileRef}
         type="file"
-        accept="video/*"
+        accept={mode === "funscript" ? "video/*,.funscript" : "video/*"}
         multiple
         hidden
         onChange={(e) => {
@@ -114,19 +187,26 @@ export default function PlayerPage() {
             </Button>
           </Flex>
           <video
+            ref={videoRef}
             src={videoUrl}
             controls
+            onPlay={syncPaused}
+            onPause={syncPaused}
+            onEmptied={syncPaused}
             style={{ width: "100%", minHeight: 0, flex: 1, background: "black" }}
           />
         </>
       ) : (
         <Flex direction="column" align="center" justify="center" gap="3" flexGrow="1">
-          <Text size="2" color="gray">Open a video to play it here.</Text>
+          <Text size="2" color="gray">
+            {mode === "funscript" ? "Open a video and a funscript to play them here." : "Open a video to play it here."}
+          </Text>
           <Button variant="soft" onClick={() => fileRef.current?.click()}>
             <UploadIcon /> Open video
           </Button>
         </Flex>
       )}
+      {mode === "funscript" && script && <ScriptPreview script={script} reverse={reverse} videoRef={videoRef} />}
     </Flex>
   );
 
@@ -219,6 +299,101 @@ function SettingSlider({ ossm, setting, label, value }: {
         clearTimeout(timer.current);
         timer.current = window.setTimeout(() => setPending(null), PENDING_MS);
         void ossm.command(`set:${setting}:${rounded}`);
+      }}
+    />
+  );
+}
+
+/** The script's raw points around the video time, redrawn every animation frame. Works without a video (time 0). */
+function ScriptPreview({ script, reverse, videoRef }: {
+  script: Funscript;
+  reverse: boolean;
+  videoRef: RefObject<HTMLVideoElement | null>;
+}) {
+  const [appearance] = useAppearance();
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    observer.observe(canvasRef.current!);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (width === 0) return;
+    const canvas = canvasRef.current!;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(PREVIEW_HEIGHT * dpr);
+    const ctx = canvas.getContext("2d")!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const isDark = appearance === "dark";
+    const gridColor = isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.15)";
+    const playheadColor = isDark ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.4)";
+    const lineColor = "#ec4899";
+    const pad = 6;
+    const y = (pos: number) => pad + (1 - (reverse ? 100 - pos : pos) / 100) * (PREVIEW_HEIGHT - 2 * pad);
+
+    let frame = 0;
+    const draw = () => {
+      frame = requestAnimationFrame(draw);
+      const now = (videoRef.current?.currentTime ?? 0) * 1000;
+      const from = now - PREVIEW_BEFORE_MS;
+      const to = now + PREVIEW_AFTER_MS;
+      const x = (at: number) => ((at - from) / (to - from)) * width;
+      ctx.clearRect(0, 0, width, PREVIEW_HEIGHT);
+
+      ctx.strokeStyle = gridColor;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const pos of [0, 50, 100]) {
+        const py = Math.round(y(pos)) + 0.5;
+        ctx.moveTo(0, py);
+        ctx.lineTo(width, py);
+      }
+      ctx.stroke();
+
+      // The points in the window and one beyond each edge, so the line reaches the edges.
+      const first = Math.max(bisectLeft(script.at, from) - 1, 0);
+      let last = first;
+      while (last < script.at.length - 1 && script.at[last] <= to) last++;
+      ctx.strokeStyle = lineColor;
+      ctx.fillStyle = lineColor;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      for (let i = first; i <= last; i++) ctx.lineTo(x(script.at[i]), y(script.pos[i]));
+      ctx.stroke();
+      for (let i = first; i <= last; i++) {
+        ctx.beginPath();
+        ctx.arc(x(script.at[i]), y(script.pos[i]), 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const px = Math.round(x(now)) + 0.5;
+      ctx.strokeStyle = playheadColor;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, PREVIEW_HEIGHT);
+      ctx.stroke();
+    };
+    draw();
+    return () => cancelAnimationFrame(frame);
+  }, [script, reverse, appearance, width, videoRef]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        display: "block",
+        width: "100%",
+        height: PREVIEW_HEIGHT,
+        flexShrink: 0,
+        borderRadius: 6,
+        background: "var(--gray-a2)",
       }}
     />
   );
