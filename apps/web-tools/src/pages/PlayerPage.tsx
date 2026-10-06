@@ -469,6 +469,8 @@ function PatternControls({ ossm, state, endStream }: {
       <Button
         variant="soft"
         color="red"
+        size="3"
+        style={{ height: 64 }}
         onClick={() => {
           endStream("stop");
           void ossm.command("go:menu");
