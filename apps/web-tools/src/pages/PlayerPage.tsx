@@ -95,7 +95,7 @@ export default function PlayerPage() {
   /** The script as streamed and previewed. */
   const played = useMemo(() => script && simplified ? simplify(script) : script, [script, simplified]);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
-  const [offset, setOffset] = usePersistedState("ossm:playerOffset", 0);
+  const [offset, setOffset] = usePersistedState("ossm:playerOffset", -50);
   const stream = useRef(new FunscriptStream());
   /** Depth and stroke set since connecting or entering funscript mode. */
   const [configured, setConfigured] = useState(false);
@@ -165,7 +165,7 @@ export default function PlayerPage() {
 
   // The send loop. It keeps running, throttled, in background tabs. A stream
   // starts on the first tick while the video actually plays, so after an end
-  // that does not stop playback (rate, offset, script) the next one starts
+  // that does not stop playback (rate, script) the next one starts
   // right away.
   useEffect(() => {
     if (mode !== "funscript" || paused || blocked || !ossm || !played) return;
@@ -344,10 +344,8 @@ export default function PlayerPage() {
                 min={-500}
                 max={500}
                 step={5}
-                onChange={(v) => {
-                  endStream("offset");
-                  setOffset(v);
-                }}
+                disabled={!paused}
+                onChange={setOffset}
               />
             )}
             <Text as="label" size="2" weight="medium">
