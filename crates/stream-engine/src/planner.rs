@@ -364,8 +364,10 @@ impl StreamPlanner {
     }
 
     /// Arrival velocity toward `next`: zero unless travel continues in the
-    /// same direction, then the slower of the two adjacent average speeds
-    /// (which cannot overshoot either segment's pace), limited.
+    /// same direction, then the mean of the two adjacent average speeds, so
+    /// the velocity changes toward the next segment's pace without dipping
+    /// at the point. Limited to twice the slower one, from which a segment
+    /// can still slow to rest at its pace, and to the maximum speed.
     fn arrival_velocity(
         &self,
         now_ms: u64,
@@ -381,7 +383,9 @@ impl StreamPlanner {
         }
         let speed_in = average_speed(travel_in, target.at_ms.saturating_sub(now_ms));
         let speed_out = average_speed(travel_out, next.at_ms.saturating_sub(target.at_ms));
-        let speed = speed_in.min(speed_out).min(self.config.max_velocity);
+        let speed = ((speed_in + speed_out) / 2.0)
+            .min(2.0 * speed_in.min(speed_out))
+            .min(self.config.max_velocity);
         speed.copysign(travel_out)
     }
 }
@@ -495,7 +499,7 @@ mod tests {
         p.push(0, 50.0, 500).unwrap(); // 0.5 in 0.5 s from the shallow end
         p.push(0, 0.0, 1000).unwrap(); // 0.5 in 1 s, same direction
         let request = p.poll(0, 0.0).unwrap();
-        assert!(close(request.velocity, 0.5));
+        assert!(close(request.velocity, 0.75));
 
         let mut p = planner();
         p.push(0, 50.0, 500).unwrap();
