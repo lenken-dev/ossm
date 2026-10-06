@@ -37,6 +37,7 @@ const LATENCY_COMPENSATION_UUID: Uuid = uuid!("522b443a-4f53-534d-1030-420badbab
 const CURRENT_STATE_UUID: Uuid = uuid!("522b443a-4f53-534d-2000-420badbabe69");
 const PATTERN_LIST_UUID: Uuid = uuid!("522b443a-4f53-534d-3000-420badbabe69");
 const PATTERN_DESCRIPTION_UUID: Uuid = uuid!("522b443a-4f53-534d-3010-420badbabe69");
+const STREAM_LOOKAHEAD_UUID: Uuid = uuid!("522b443a-4f53-534d-5000-420badbabe69");
 
 /// AD type of an incomplete list of 128-bit service UUIDs. The advertisement
 /// and the scan response each list one of the two services.
@@ -76,6 +77,9 @@ struct OssmService {
 
     #[characteristic(uuid = PATTERN_DESCRIPTION_UUID, read, write)]
     pattern_description: String<MAX_PATTERN_LENGTH>,
+
+    #[characteristic(uuid = STREAM_LOOKAHEAD_UUID, read)]
+    stream_lookahead: String<{ stream::MAX_LOOKAHEAD_LENGTH }>,
 }
 
 /// OSSM-Lite compatible streaming service (see [`lite`]).
@@ -296,6 +300,12 @@ async fn gatt_events_task<P: PacketPool>(
                             server
                                 .set(&server.ossm_service.latency_compensation, &latency.text())?;
                         }
+                        if event.handle() == server.ossm_service.stream_lookahead.handle {
+                            server.set(
+                                &server.ossm_service.stream_lookahead,
+                                &stream::lookahead_text(),
+                            )?;
+                        }
                         if event.handle() == server.ossm_service.pattern_list.handle {
                             let patterns = get_all_patterns_json();
                             server.set(&server.ossm_service.pattern_list, &patterns)?;
@@ -512,6 +522,17 @@ fn process_command(
     session: &mut StreamSession,
     latency: &LatencyCompensation,
 ) {
+    if command.as_str() == "stream:end" {
+        info!("BLE Command {}", command);
+        if let Some(stream) = stream {
+            stream.stop();
+        } else {
+            error!("Streaming unavailable");
+        }
+        respond(server, command, stream.is_none());
+        return;
+    }
+
     // Points arrive many times a second; the session counts them instead of
     // logging each.
     if let Some(point) = command.strip_prefix("stream:") {
