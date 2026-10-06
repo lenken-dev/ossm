@@ -48,7 +48,7 @@ export default function GraphPage() {
   );
 }
 
-function GraphLayout({ sidebar, content }: { sidebar: ReactNode; content: ReactNode }) {
+export function GraphLayout({ sidebar, content }: { sidebar: ReactNode; content: ReactNode }) {
   const isMobile = useIsMobile();
   return (
     <Flex
