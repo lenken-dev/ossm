@@ -76,3 +76,28 @@ export class FunscriptStream {
     return points;
   }
 }
+
+/** Simplify keeps a point inside a same-direction run once this long after the last kept one, in ms. */
+const SIMPLIFY_GAP_MS = 500;
+
+/**
+ * The script without the points inside a run in one direction: it keeps the
+ * ends, every change of direction (including the start and end of a hold),
+ * and points at least `SIMPLIFY_GAP_MS` after the last kept one, so slow
+ * runs keep their changes of speed.
+ */
+export function simplify(script: Funscript): Funscript {
+  const { at, pos } = script;
+  const last = at.length - 1;
+  const keep = [0];
+  for (let i = 1; i < last; i++) {
+    const turns = Math.sign(pos[i] - pos[i - 1]) !== Math.sign(pos[i + 1] - pos[i]);
+    if (turns || at[i] - at[keep[keep.length - 1]] >= SIMPLIFY_GAP_MS) keep.push(i);
+  }
+  keep.push(last);
+  return {
+    name: script.name,
+    at: Uint32Array.from(keep, (i) => at[i]),
+    pos: Float64Array.from(keep, (i) => pos[i]),
+  };
+}
