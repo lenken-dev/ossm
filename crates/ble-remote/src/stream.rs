@@ -22,13 +22,15 @@ use core::fmt::Write;
 
 use heapless::String;
 use log::{info, warn};
-use stream_engine::{PushError, StreamSender, lite};
+use stream_engine::{PushError, StreamPlanner, StreamSender, lite};
 
 /// Longest point text accepted.
 pub const MAX_POINT_LENGTH: usize = 32;
 
-/// Points a player may send beyond the point the machine is heading to.
-pub const LOOKAHEAD: u8 = 5;
+/// Points a player may send beyond the point the machine is heading to: the
+/// planner queue, less the next target, which stays queued until the
+/// current move ends.
+pub const LOOKAHEAD: usize = StreamPlanner::CAPACITY - 1;
 
 pub const MAX_LOOKAHEAD_LENGTH: usize = 4;
 
