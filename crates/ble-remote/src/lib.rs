@@ -135,8 +135,8 @@ fn get_pattern_description(index: usize) -> String<MAX_PATTERN_LENGTH> {
 /// Two funscript players can stream: the OSSM-Lite one through its own
 /// service, and the official OSSM one through `go:streaming` and
 /// `stream:<position>:<duration ms>` commands. Without a `stream`, the
-/// OSSM-Lite service is not advertised, streamed points are ignored, and
-/// `go:streaming` fails.
+/// OSSM-Lite service is not advertised, streamed points are ignored,
+/// `go:streaming` and `set:jerk` fail, and the stream look-ahead reads `0`.
 pub fn start(
     spawner: &Spawner,
     connector: BleConnector<'static>,
@@ -291,8 +291,7 @@ async fn gatt_events_task<P: PacketPool>(
                         if event.handle() == server.ossm_service.current_state.handle {
                             let engine_state = patterns.state();
                             let input = patterns.input();
-                            let state_json =
-                                state_to_json(engine_state, &input, is_streaming(stream), latency);
+                            let state_json = state_to_json(engine_state, &input, stream, latency);
                             debug!("Read State: {}", state_json);
                             server.set(&server.ossm_service.current_state, &state_json)?;
                         }
@@ -303,7 +302,7 @@ async fn gatt_events_task<P: PacketPool>(
                         if event.handle() == server.ossm_service.stream_lookahead.handle {
                             server.set(
                                 &server.ossm_service.stream_lookahead,
-                                &stream::lookahead_text(),
+                                &stream::lookahead_text(stream.is_some()),
                             )?;
                         }
                         if event.handle() == server.ossm_service.pattern_list.handle {
@@ -437,8 +436,13 @@ async fn state_notifications<P: PacketPool>(
         .subscribe()
         .expect("No state subscriber slots available");
     let mut heartbeat = Ticker::every(Duration::from_secs(1));
-    let mut old_state: (EngineState, PatternInput, bool, f64) =
-        (EngineState::Idle, PatternInput::DEFAULT, false, f64::NAN);
+    let mut old_state = (
+        EngineState::Idle,
+        PatternInput::DEFAULT,
+        false,
+        f32::NAN,
+        f64::NAN,
+    );
     loop {
         let engine_state = match select(sub.next_message_pure(), heartbeat.next()).await {
             Either::First(state) => state,
@@ -447,16 +451,18 @@ async fn state_notifications<P: PacketPool>(
 
         let input = patterns.input();
         let streaming = is_streaming(stream);
+        let jerk = stream.map_or(0.0, |stream| stream.input().jerk);
         let buffer = latency.buffer_value();
-        if old_state != (engine_state, input, streaming, buffer) {
-            let state_json = state_to_json(engine_state, &input, streaming, latency);
+        let current = (engine_state, input, streaming, jerk, buffer);
+        if old_state != current {
+            let state_json = state_to_json(engine_state, &input, stream, latency);
             debug!("Notify State: {}", state_json);
             server
                 .ossm_service
                 .current_state
                 .notify(connection, &state_json)
                 .await?;
-            old_state = (engine_state, input, streaming, buffer);
+            old_state = current;
         }
     }
 }
@@ -475,10 +481,11 @@ fn stop(patterns: &PatternSender, stream: Option<&StreamSender>) {
     patterns.stop();
 }
 
+/// The state JSON. Settings are 0–100 with one decimal, as `set:` takes them.
 fn state_to_json(
     state: EngineState,
     input: &PatternInput,
-    streaming: bool,
+    stream: Option<&StreamSender>,
     latency: &LatencyCompensation,
 ) -> String<MAX_STATE_LENGTH> {
     let pattern_name = match state {
@@ -490,7 +497,7 @@ fn state_to_json(
     };
     let mut out: String<MAX_STATE_LENGTH> = String::new();
     let state_str = match state {
-        _ if streaming => "streaming",
+        _ if is_streaming(stream) => "streaming",
         EngineState::Idle => "idle",
         EngineState::Homing => "homing",
         EngineState::Ready => "ready",
@@ -501,15 +508,16 @@ fn state_to_json(
         EngineState::Playing(i) | EngineState::Paused(i) => i,
         _ => 0,
     };
-    let speed = (input.velocity * 100.0) as u32;
-    let stroke = (input.stroke * 100.0) as u32;
-    let depth = (input.depth * 100.0) as u32;
+    let speed = input.velocity * 100.0;
+    let stroke = input.stroke * 100.0;
+    let depth = input.depth * 100.0;
     // Map internal -1.0..1.0 back to BLE protocol 0–100.
-    let sensation = ((input.sensation + 1.0) * 50.0) as u32;
+    let sensation = (input.sensation + 1.0) * 50.0;
+    let jerk = stream.map_or(0.0, |stream| stream.input().jerk * 100.0);
     let buffer = latency.buffer_value();
     let _ = write!(
         out,
-        r#"{{"state":"{state_str}","speed":{speed},"stroke":{stroke},"sensation":{sensation},"depth":{depth},"buffer":{buffer},"pattern":{idx},"patternName":"{pattern_name}"}}"#,
+        r#"{{"state":"{state_str}","speed":{speed:.1},"stroke":{stroke:.1},"sensation":{sensation:.1},"depth":{depth:.1},"jerk":{jerk:.1},"buffer":{buffer},"pattern":{idx},"patternName":"{pattern_name}"}}"#,
     );
     out
 }
@@ -550,40 +558,61 @@ fn process_command(
     if let Some(cmd) = split_command.next() {
         if let Some(action) = split_command.next() {
             match cmd {
-                "set" => {
-                    if let Some(value) = split_command.next() {
-                        if action == "buffer" {
-                            if !latency.set_buffer(value) {
-                                error!("Could not parse buffer value");
-                                fail = true;
-                            }
-                        } else if let Ok(value) = value.parse::<u32>() {
-                            let normalized = value as f64 / 100.0;
+                "set" => match (action, split_command.next()) {
+                    (_, None) => {
+                        error!("No value after set");
+                        fail = true;
+                    }
+                    ("buffer", Some(value)) => {
+                        if !latency.set_buffer(value) {
+                            error!("Could not parse buffer value");
+                            fail = true;
+                        }
+                    }
+                    ("pattern", Some(value)) => match value.parse::<usize>() {
+                        Ok(index) => patterns.play(index),
+                        Err(_) => {
+                            error!("Could not parse pattern index");
+                            fail = true;
+                        }
+                    },
+                    (_, Some(value)) => match parse_setting(value) {
+                        Some(value) => {
+                            let normalized = value / 100.0;
                             match action {
                                 "speed" => patterns.set_speed(normalized),
                                 "stroke" => patterns.set_stroke(normalized),
                                 "depth" => patterns.set_depth(normalized),
                                 // BLE sends 0–100; internal range is -1.0..1.0.
                                 "sensation" => patterns.set_sensation(normalized * 2.0 - 1.0),
-                                "pattern" => patterns.play(value as usize),
+                                "jerk" => match stream {
+                                    Some(stream) => stream.set_jerk(normalized),
+                                    None => {
+                                        error!("Streaming unavailable");
+                                        fail = true;
+                                    }
+                                },
                                 _ => {
                                     error!("Invalid set command {}", action);
                                     fail = true;
                                 }
                             }
-                        } else {
+                        }
+                        None => {
                             error!("Could not parse set value");
                             fail = true;
-                        };
-                    } else {
-                        error!("No value after set");
-                        fail = true;
-                    }
-                }
+                        }
+                    },
+                },
                 "go" => match action {
                     "simplePenetration" | "strokeEngine" => patterns.play(0),
                     "streaming" => fail = !go_streaming(patterns, stream),
                     "menu" => stop(patterns, stream),
+                    // Homing only starts from idle, so stop first.
+                    "home" => {
+                        stop(patterns, stream);
+                        patterns.home();
+                    }
                     _ => {
                         error!("Unknown go action: {}", action);
                         fail = true;
@@ -604,6 +633,12 @@ fn process_command(
     }
 
     respond(server, command, fail);
+}
+
+/// A setting value from a `set:` command: a finite decimal, clamped to 0–100.
+fn parse_setting(value: &str) -> Option<f64> {
+    let value = value.parse::<f64>().ok()?;
+    value.is_finite().then(|| value.clamp(0.0, 100.0))
 }
 
 /// Prepare for streaming by the official funscript player: stop a pattern
