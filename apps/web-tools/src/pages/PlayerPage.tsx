@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type RefObject, type SyntheticEvent } from "react";
+import { useEffect, useRef, useState, type MediaHTMLAttributes, type RefObject, type SyntheticEvent } from "react";
 import { Box, Button, Callout, Flex, SegmentedControl, Select, Separator, Switch, Text } from "@radix-ui/themes";
-import { ExclamationTriangleIcon, HomeIcon, StopIcon, UploadIcon } from "@radix-ui/react-icons";
+import { Cross2Icon, ExclamationTriangleIcon, HomeIcon, StopIcon, UploadIcon } from "@radix-ui/react-icons";
 import { bisectLeft } from "d3";
 import { useAppearance } from "../hooks/useAppearance";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -33,15 +33,43 @@ function blockReason(ossm: Ossm | null, state: OssmState | null): string | null 
   return null;
 }
 
+/**
+ * A silent WAV covering `ms` of script, the playback clock when there is no
+ * video, so playback, seeking and the stream work exactly as with one.
+ */
+// 3 kB per second (~11 MB per hour of script); write a clock if that ever hurts.
+function silence(ms: number): Blob {
+  const rate = 3000; // Chrome's lowest sample rate
+  const samples = Math.ceil((ms / 1000 + 1) * rate);
+  const header = new DataView(new ArrayBuffer(44));
+  const text = (offset: number, s: string) => [...s].forEach((c, i) => header.setUint8(offset + i, c.charCodeAt(0)));
+  text(0, "RIFF");
+  header.setUint32(4, 36 + samples, true);
+  text(8, "WAVEfmt ");
+  header.setUint32(16, 16, true); // fmt chunk size
+  header.setUint16(20, 1, true); // PCM
+  header.setUint16(22, 1, true); // mono
+  header.setUint32(24, rate, true);
+  header.setUint32(28, rate, true); // bytes per second
+  header.setUint16(32, 1, true); // bytes per frame
+  header.setUint16(34, 8, true); // bits per sample
+  text(36, "data");
+  header.setUint32(40, samples, true);
+  return new Blob([header, new Uint8Array(samples).fill(128)], { type: "audio/wav" });
+}
+
 export default function PlayerPage() {
   const [mode, setMode] = usePersistedState<PlayerMode>("ossm:playerMode", "pattern");
   const { ossm, state, connecting, error, connect, disconnect } = useOssm();
-  const fileRef = useRef<HTMLInputElement>(null);
+  const videoInput = useRef<HTMLInputElement>(null);
+  const scriptInput = useRef<HTMLInputElement>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [silentUrl, setSilentUrl] = useState<string | null>(null);
+  /** The video, or the silent clock without one. */
+  const videoRef = useRef<HTMLMediaElement>(null);
   const [paused, setPaused] = useState(true);
-  const syncPaused = (e: { currentTarget: HTMLVideoElement }) => setPaused(e.currentTarget.paused);
+  const syncPaused = (e: { currentTarget: HTMLMediaElement }) => setPaused(e.currentTarget.paused);
   const [script, setScript] = useState<Funscript | null>(null);
   const [scriptError, setScriptError] = useState<string | null>(null);
   // Only the latest picked script may replace the script or the error.
@@ -107,17 +135,34 @@ export default function PlayerPage() {
   }, [mode, paused, blocked, ossm, script, offset, reverse]);
 
   // Video events that matter; in funscript mode all but `playing` end the stream.
-  const videoEvent = (e: SyntheticEvent<HTMLVideoElement>) => {
+  const videoEvent = (e: SyntheticEvent<HTMLMediaElement>) => {
     log(`video ${e.type}`);
     if (mode === "funscript" && e.type !== "playing") endStream(e.type);
   };
 
   useEffect(() => {
+    setVideoUrl(null);
     if (!videoFile) return;
     const url = URL.createObjectURL(videoFile);
     setVideoUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [videoFile]);
+
+  const silentMs = mode === "funscript" && !videoFile && script ? script.at[script.at.length - 1] : null;
+  useEffect(() => {
+    setSilentUrl(null);
+    if (silentMs == null) return;
+    const url = URL.createObjectURL(silence(silentMs));
+    setSilentUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [silentMs]);
+
+  /** Before the silent clock unmounts: its events no longer reach React then. */
+  const dropSilence = (reason: string) => {
+    if (!silentUrl) return;
+    endStream(reason);
+    setPaused(true);
+  };
 
   const loadScript = async (file: File) => {
     const generation = ++scriptGeneration.current;
@@ -133,14 +178,6 @@ export default function PlayerPage() {
     }
   };
 
-  // Files are assigned by type; only what was picked is replaced.
-  const openFiles = (files: FileList) => {
-    for (const file of files) {
-      if (file.type.startsWith("video/")) setVideoFile(file);
-      else if (mode === "funscript" && file.name.toLowerCase().endsWith(".funscript")) void loadScript(file);
-    }
-  };
-
   const sidebar = (
     <>
       <Box p="3" pb="0">
@@ -148,6 +185,7 @@ export default function PlayerPage() {
           value={mode}
           onValueChange={(v) => {
             log(`mode ${v}`);
+            dropSilence("mode");
             setMode(v as PlayerMode);
           }}
           style={{ width: "100%" }}
@@ -203,9 +241,16 @@ export default function PlayerPage() {
         {mode === "funscript" && (
           <>
             <Separator size="4" />
-            <Text size="2" weight="medium" truncate title={script?.name}>
-              {script?.name ?? "No funscript loaded"}
-            </Text>
+            <Flex align="center" justify="between" gap="2">
+              <Text size="2" weight="medium" truncate title={script?.name}>
+                {script?.name ?? "No funscript loaded"}
+              </Text>
+              {script && (
+                <Button variant="soft" onClick={() => scriptInput.current?.click()}>
+                  <UploadIcon /> Open
+                </Button>
+              )}
+            </Flex>
             {scriptError && (
               <Callout.Root color="red" size="1">
                 <Callout.Icon>
@@ -262,16 +307,55 @@ export default function PlayerPage() {
     </>
   );
 
+  const mediaProps = {
+    ref: (el: HTMLMediaElement | null) => void (videoRef.current = el),
+    controls: true,
+    onPlay: (e) => {
+      syncPaused(e);
+      if (mode === "funscript" && blocked) {
+        log(`play blocked: ${blocked}`);
+        e.currentTarget.pause();
+      }
+    },
+    onPause: (e) => {
+      syncPaused(e);
+      videoEvent(e);
+    },
+    onEmptied: (e) => {
+      syncPaused(e);
+      videoEvent(e);
+    },
+    onPlaying: videoEvent,
+    onSeeking: videoEvent,
+    onWaiting: videoEvent,
+    onRateChange: videoEvent,
+    onEnded: videoEvent,
+  } satisfies MediaHTMLAttributes<HTMLMediaElement> & { ref: unknown };
+
   const content = (
     <Flex direction="column" gap="3" p="3" height="100%">
       <input
-        ref={fileRef}
+        ref={videoInput}
         type="file"
-        accept={mode === "funscript" ? "video/*,.funscript" : "video/*"}
-        multiple
+        accept="video/*"
         hidden
         onChange={(e) => {
-          if (e.target.files) openFiles(e.target.files);
+          const file = e.target.files?.[0];
+          if (file) {
+            dropSilence("video");
+            setVideoFile(file);
+          }
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={scriptInput}
+        type="file"
+        accept=".funscript"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void loadScript(file);
           e.target.value = "";
         }}
       />
@@ -279,48 +363,47 @@ export default function PlayerPage() {
         <>
           <Flex align="center" justify="between" gap="2">
             <Text size="2" weight="medium" truncate title={videoFile?.name}>{videoFile?.name}</Text>
-            <Button variant="soft" onClick={() => fileRef.current?.click()}>
-              <UploadIcon /> Open
-            </Button>
+            <Flex gap="2">
+              <Button variant="soft" onClick={() => videoInput.current?.click()}>
+                <UploadIcon /> Open
+              </Button>
+              <Button
+                variant="soft"
+                color="gray"
+                onClick={() => {
+                  // The video unmounts, so its pause and emptied events never reach React.
+                  endStream("close");
+                  setPaused(true);
+                  setVideoFile(null);
+                }}
+              >
+                <Cross2Icon /> Close
+              </Button>
+            </Flex>
           </Flex>
-          <video
-            ref={videoRef}
-            src={videoUrl}
-            controls
-            onPlay={(e) => {
-              syncPaused(e);
-              if (mode === "funscript" && blocked) {
-                log(`play blocked: ${blocked}`);
-                e.currentTarget.pause();
-              }
-            }}
-            onPause={(e) => {
-              syncPaused(e);
-              videoEvent(e);
-            }}
-            onEmptied={(e) => {
-              syncPaused(e);
-              videoEvent(e);
-            }}
-            onPlaying={videoEvent}
-            onSeeking={videoEvent}
-            onWaiting={videoEvent}
-            onRateChange={videoEvent}
-            onEnded={videoEvent}
-            style={{ width: "100%", minHeight: 0, flex: 1, background: "black" }}
-          />
+          <video {...mediaProps} src={videoUrl} style={{ width: "100%", minHeight: 0, flex: 1, background: "black" }} />
         </>
       ) : (
         <Flex direction="column" align="center" justify="center" gap="3" flexGrow="1">
           <Text size="2" color="gray">
-            {mode === "funscript" ? "Open a video and a funscript to play them here." : "Open a video to play it here."}
+            {mode === "funscript" ? "Open a video to play it with the funscript." : "Open a video to play it here."}
           </Text>
-          <Button variant="soft" onClick={() => fileRef.current?.click()}>
+          <Button variant="soft" onClick={() => videoInput.current?.click()}>
             <UploadIcon /> Open video
           </Button>
         </Flex>
       )}
-      {mode === "funscript" && script && <ScriptPreview script={script} reverse={reverse} videoRef={videoRef} />}
+      {silentUrl && <audio {...mediaProps} src={silentUrl} style={{ width: "100%", flexShrink: 0 }} />}
+      {mode === "funscript" &&
+        (script ? (
+          <ScriptPreview script={script} reverse={reverse} videoRef={videoRef} />
+        ) : (
+          <Flex align="center" justify="center" flexShrink="0" height={`${PREVIEW_HEIGHT}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
+            <Button variant="soft" onClick={() => scriptInput.current?.click()}>
+              <UploadIcon /> Open funscript
+            </Button>
+          </Flex>
+        ))}
     </Flex>
   );
 
@@ -437,7 +520,7 @@ function SettingSlider({ ossm, setting, label, value }: {
 function ScriptPreview({ script, reverse, videoRef }: {
   script: Funscript;
   reverse: boolean;
-  videoRef: RefObject<HTMLVideoElement | null>;
+  videoRef: RefObject<HTMLMediaElement | null>;
 }) {
   const [appearance] = useAppearance();
   const canvasRef = useRef<HTMLCanvasElement>(null);
