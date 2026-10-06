@@ -74,7 +74,8 @@ pub enum PushError {
 /// Counters for diagnostics and evaluation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PlannerStats {
-    /// Move requests issued, including refinements of the current move.
+    /// Move requests issued, including re-requests after a stroke range
+    /// change.
     pub moves: u32,
     /// Points skipped because they were late, or unreachable in time on the
     /// way to a later point in the same direction.
@@ -94,14 +95,6 @@ struct Point {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Active {
-    target: Point,
-    /// The move was requested without a following point, so its arrival
-    /// velocity may be improved once one arrives.
-    awaits_next: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
 struct LastRequest {
     issued_ms: u64,
     velocity: f64,
@@ -118,7 +111,8 @@ pub struct StreamPlanner {
     queue: Deque<Point, CAPACITY>,
     /// Arrival time of the most recently pushed point.
     last_at_ms: Option<u64>,
-    active: Option<Active>,
+    /// Target of the move in progress.
+    active: Option<Point>,
     /// Target of the most recent request, kept after it is reached.
     last_target: Option<Point>,
     /// The stroke range changed after the last request.
@@ -168,13 +162,9 @@ impl StreamPlanner {
         self.queue.is_empty() && !self.range_pending
     }
 
-    /// Treat the current move as not executed: it is neither refined nor
-    /// re-requested after a stroke range change. Queued points keep their
-    /// schedule.
+    /// Treat the current move as not executed: it is not re-requested after
+    /// a stroke range change. Queued points keep their schedule.
     pub fn discard_current(&mut self) {
-        if let Some(active) = &mut self.active {
-            active.awaits_next = false;
-        }
         self.last_target = None;
         self.range_pending = false;
     }
@@ -232,13 +222,16 @@ impl StreamPlanner {
     ///
     /// `machine_position` is the controller's current planned machine
     /// position (0.0–1.0).
+    ///
+    /// Each move is requested once, with the arrival velocity its following
+    /// point allows if that point is already queued. A point that arrives
+    /// later does not change the move, which then ends at rest. Only a stroke
+    /// range change re-requests it.
     pub fn poll(&mut self, now_ms: u64, machine_position: f64) -> Option<MoveRequest> {
-        if let Some(active) = self.active {
-            if now_ms < active.target.at_ms {
-                return self.refine(now_ms, machine_position, active);
-            }
-            self.active = None;
+        if self.active.is_some_and(|target| now_ms < target.at_ms) {
+            return self.correct_range(now_ms, machine_position);
         }
+        self.active = None;
 
         if self.queue.is_empty() {
             return self.correct_range(now_ms, machine_position);
@@ -260,39 +253,8 @@ impl StreamPlanner {
         Some(self.request(now_ms, machine_position, target))
     }
 
-    /// Re-request the current move when it can be improved: a following
-    /// point arrived after it was requested, or the stroke range changed.
-    fn refine(&mut self, now_ms: u64, from: f64, active: Active) -> Option<MoveRequest> {
-        let lookahead = active.awaits_next && !self.queue.is_empty();
-        if !lookahead && !self.range_pending {
-            return None;
-        }
-
-        let interval = u64::from(self.config.min_replan_interval_ms);
-        if !self.range_pending && active.target.at_ms < now_ms.saturating_add(interval) {
-            // Too close to arrival for an optional look-ahead replan.
-            if let Some(active) = &mut self.active {
-                active.awaits_next = false;
-            }
-            return None;
-        }
-        if self.recently_issued(now_ms) {
-            return None;
-        }
-
-        let request = self.build_request(now_ms, from, active.target);
-        if !self.range_pending && request.velocity == 0.0 {
-            // The following point reverses direction; the move stays as is.
-            if let Some(active) = &mut self.active {
-                active.awaits_next = false;
-            }
-            return None;
-        }
-        Some(self.issue(now_ms, active.target, request))
-    }
-
-    /// With nothing queued, re-request the last target after a stroke range
-    /// change so the machine ends up inside the new range.
+    /// Re-request the current or last target after a stroke range change so
+    /// the machine ends up inside the new range.
     fn correct_range(&mut self, now_ms: u64, from: f64) -> Option<MoveRequest> {
         if !self.range_pending || self.recently_issued(now_ms) {
             return None;
@@ -357,10 +319,7 @@ impl StreamPlanner {
     }
 
     fn issue(&mut self, now_ms: u64, target: Point, request: MoveRequest) -> MoveRequest {
-        self.active = Some(Active {
-            target,
-            awaits_next: self.queue.is_empty(),
-        });
+        self.active = Some(target);
         self.last_target = Some(target);
         self.range_pending = false;
         self.last_request = Some(LastRequest {
@@ -556,7 +515,7 @@ mod tests {
             depth: 0.5,
             stroke: 1.0,
         };
-        // Near arrival: corrected although a look-ahead replan would not be.
+        // Near arrival: still corrected.
         let mut p = planner();
         p.push(0, 0.0, 1000).unwrap();
         p.poll(0, 0.0).unwrap();
@@ -576,27 +535,11 @@ mod tests {
     }
 
     #[test]
-    fn refines_a_stopping_move_when_travel_continues() {
+    fn never_refines_a_move_for_late_lookahead() {
         let mut p = planner();
         p.push(0, 50.0, 1000).unwrap();
-        let first = p.poll(0, 0.0).unwrap();
-        assert_eq!(first.velocity, 0.0);
-        assert!(p.poll(10, 0.01).is_none());
-
-        p.push(200, 0.0, 1000).unwrap();
-        let refined = p.poll(200, 0.1).unwrap();
-        assert!(close(refined.position, first.position));
-        assert_eq!(refined.arrival_ms, first.arrival_ms);
-        assert!(refined.velocity > 0.0);
-        assert!(p.poll(210, 0.11).is_none());
-    }
-
-    #[test]
-    fn keeps_a_stopping_move_before_a_reversal() {
-        let mut p = planner();
-        p.push(0, 50.0, 1000).unwrap();
-        p.poll(0, 0.0).unwrap();
-        p.push(200, 100.0, 1000).unwrap();
+        assert_eq!(p.poll(0, 0.0).unwrap().velocity, 0.0);
+        p.push(200, 0.0, 1000).unwrap(); // travel continues
         assert!(p.poll(200, 0.1).is_none());
         assert_eq!(p.stats().moves, 1);
     }
