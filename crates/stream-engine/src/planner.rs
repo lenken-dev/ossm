@@ -205,6 +205,27 @@ impl StreamPlanner {
         })
     }
 
+    /// Make a point the only one: reach `position` `duration_ms` from now,
+    /// replacing queued points and the current move.
+    ///
+    /// For a client that sends each point as its segment starts and nothing
+    /// ahead: the latest point always wins and timing follows its reception,
+    /// so late or stale points never hold the stream back.
+    pub fn push_latest(
+        &mut self,
+        now_ms: u64,
+        position: f64,
+        duration_ms: u32,
+    ) -> Result<(), PushError> {
+        if !position.is_finite() {
+            return Err(PushError::InvalidPosition);
+        }
+        self.queue.clear();
+        self.last_at_ms = None;
+        self.active = None;
+        self.push(now_ms, position, duration_ms)
+    }
+
     /// Forget all queued points and the current move.
     ///
     /// The caller is responsible for stopping motion, since the last request
@@ -542,6 +563,21 @@ mod tests {
         p.push(200, 0.0, 1000).unwrap(); // travel continues
         assert!(p.poll(200, 0.1).is_none());
         assert_eq!(p.stats().moves, 1);
+    }
+
+    #[test]
+    fn latest_point_replaces_queue_and_current_move() {
+        let mut p = planner();
+        p.push(0, 0.0, 1000).unwrap();
+        p.push(0, 100.0, 1000).unwrap();
+        p.poll(0, 0.0).unwrap();
+        // Due its duration after reception, not after the queue, and taken
+        // up before the current move ends.
+        p.push_latest(500, 50.0, 300).unwrap();
+        let request = p.poll(500, 0.5).unwrap();
+        assert!(close(request.position, 0.5));
+        assert_eq!(request.arrival_ms, 800);
+        assert!(p.is_idle());
     }
 
     #[test]
