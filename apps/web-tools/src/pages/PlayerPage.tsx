@@ -310,7 +310,7 @@ export default function PlayerPage() {
                 <Button onClick={openSetup}>Set depth and stroke</Button>
               ) : <>
                 <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
-                <SettingSlider ossm={ossm} setting="jerk" label="Jerk" value={state.jerk} />
+                <SettingSlider ossm={ossm} setting="jerk" label="Feel" value={state.jerk} ends={["Smooth", "Hard"]} />
                 <Button variant="soft" onClick={openSetup}>
                   Depth {state.depth.toFixed(0)}% · Stroke {state.stroke.toFixed(0)}%
                 </Button>
@@ -545,13 +545,14 @@ function PatternControls({ ossm, state, endStream }: {
  * before the device applied it does not make the slider jump back. Only user
  * changes are written.
  */
-function SettingSlider({ ossm, setting, label, value, max = 100, disabled, onChange }: {
+function SettingSlider({ ossm, setting, label, value, max = 100, disabled, ends, onChange }: {
   ossm: Ossm;
   setting: string;
   label: string;
   value: number;
   max?: number;
   disabled?: boolean;
+  ends?: [string, string];
   /** Called after each write is queued. */
   onChange?: () => void;
 }) {
@@ -569,6 +570,7 @@ function SettingSlider({ ossm, setting, label, value, max = 100, disabled, onCha
       max={max}
       step={0.1}
       disabled={disabled}
+      ends={ends}
       onChange={(v) => {
         const rounded = Math.round(v * 10) / 10;
         setPending(rounded);
