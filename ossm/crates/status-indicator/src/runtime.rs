@@ -1,11 +1,11 @@
 //! Hardware-independent startup and polling for any color indicator.
 
 use embassy_time::{Duration, Instant, Ticker};
-use ossm::MotionObserver;
+use ossm::{MotionObserver, fault};
 use pattern_engine::PatternObserver;
 
 use crate::{
-    ColorIndicator,
+    ColorIndicator, PANIC_COLOR, diagnostic,
     policy::{Output, POLL_INTERVAL_MS, Status, select},
 };
 
@@ -20,7 +20,8 @@ pub fn initialize<I: ColorIndicator>(indicator: I) -> Output<I> {
     output
 }
 
-/// Poll status and retry failed writes at the shared cadence.
+/// Poll status and retry failed writes at the shared cadence. A raised fault
+/// replaces status with its diagnostic code until restart.
 /// The platform supplies the concrete task and a clock for Embassy time.
 pub async fn run<I: ColorIndicator>(
     mut output: Output<I>,
@@ -31,6 +32,14 @@ pub async fn run<I: ColorIndicator>(
     let mut next_failure_log = Instant::now() + FAILURE_LOG_INTERVAL;
     loop {
         ticker.next().await;
+        if let Some(fault) = fault::raised() {
+            log::error!("Showing diagnostic code for {:?}; restart required", fault);
+            let mut indicator = output.into_inner();
+            // Off first so the color change is remembered rather than shown.
+            let _ = indicator.set_on(false);
+            let _ = indicator.set_color(PANIC_COLOR);
+            diagnostic::blink(&mut indicator, fault).await;
+        }
         let desired = select(engine.state(), motion.state().phase);
         if let Err(error) = output.apply(desired) {
             let now = Instant::now();
