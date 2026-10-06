@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MediaHTMLAttributes, type RefObject, type SyntheticEvent } from "react";
-import { Box, Button, Callout, Flex, SegmentedControl, Select, Separator, Switch, Text } from "@radix-ui/themes";
-import { Cross2Icon, ExclamationTriangleIcon, HomeIcon, StopIcon, UploadIcon } from "@radix-ui/react-icons";
+import { Box, Button, Callout, Dialog, Flex, IconButton, SegmentedControl, Select, Separator, Switch, Text } from "@radix-ui/themes";
+import { Cross2Icon, ExclamationTriangleIcon, GearIcon, HomeIcon, StopIcon, UploadIcon } from "@radix-ui/react-icons";
 import { bisectLeft } from "d3";
 import { useAppearance } from "../hooks/useAppearance";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -23,13 +23,25 @@ const PREVIEW_AFTER_MS = 8000;
 /** Send loop period in ms. */
 const TICK_MS = 10;
 
-/** Why the video may not play in funscript mode, or `null` when it may. */
-function blockReason(ossm: Ossm | null, state: OssmState | null): string | null {
-  if (!ossm || !state) return "not connected";
+/** Speed limit of the funscript speed sliders until the user changes it, in percent. */
+const DEFAULT_SPEED_LIMIT = 5;
+
+const isHomed = (state: OssmState | null) => state?.state === "ready" || state?.state === "streaming";
+
+/** Why the machine does not follow the funscript, or `null` when it does. */
+function blockReason(
+  ossm: Ossm | null,
+  state: OssmState | null,
+  configured: boolean,
+  setupOpen: boolean,
+): string | null {
+  if (!ossm || !state) return "Connect the OSSM";
   if (ossm.lookahead === 0) return "This firmware cannot stream";
   if (state.state === "homing") return "Homing…";
-  if (state.state !== "ready" && state.state !== "streaming") return "Home the machine first";
-  if (state.speed <= 0) return "Raise speed to start";
+  if (!isHomed(state)) return "Home the machine";
+  if (setupOpen) return "Setting up";
+  if (!configured) return "Set depth and stroke";
+  if (state.speed <= 0) return "Raise the speed";
   return null;
 }
 
@@ -78,7 +90,13 @@ export default function PlayerPage() {
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
   const [offset, setOffset] = usePersistedState("ossm:playerOffset", 0);
   const stream = useRef(new FunscriptStream());
-  const blocked = blockReason(ossm, state);
+  /** Depth and stroke set since connecting or entering funscript mode. */
+  const [configured, setConfigured] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [speedLimit, setSpeedLimit] = usePersistedState("ossm:playerSpeedLimit", DEFAULT_SPEED_LIMIT, localStorage);
+  const blocked = blockReason(ossm, state, configured, setupOpen);
+  /** Set up to play; only speed and jerk may change on the fly. */
+  const ready = !!ossm && ossm.lookahead > 0 && isHomed(state) && configured;
 
   /** Send `stream:end` if a stream is open. */
   const endStream = (reason: string) => {
@@ -97,6 +115,24 @@ export default function PlayerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, ossm]);
 
+  // Depth and stroke may have changed elsewhere (pattern mode, another remote).
+  useEffect(() => {
+    setConfigured(false);
+    setSetupOpen(false);
+  }, [ossm, mode]);
+
+  // The machine rests at home after homing; a depth of 0 starts the depth setup from there.
+  const lastState = useRef(state?.state);
+  useEffect(() => {
+    if (mode === "funscript" && lastState.current === "homing" && isHomed(state)) void ossm?.command("set:depth:0");
+    lastState.current = state?.state;
+  }, [mode, ossm, state]);
+
+  // The setup's speed limit also holds for a speed raised while playing or a lowered limit.
+  useEffect(() => {
+    if (setupOpen && ossm && state && state.speed > speedLimit) void ossm.command(`set:speed:${speedLimit}`);
+  }, [setupOpen, ossm, state, speedLimit]);
+
   // A disconnect closes the stream (nothing to send it to) and pauses the video.
   useEffect(
     () =>
@@ -107,13 +143,18 @@ export default function PlayerPage() {
     [ossm],
   );
 
-  // Pause when the machine stops being ready while playing.
+  // The video plays on without the machine; the machine stops once it is blocked.
   useEffect(() => {
-    const video = videoRef.current;
-    if (mode !== "funscript" || !blocked || !video || video.paused) return;
-    log(`paused: ${blocked}`);
-    video.pause();
+    if (mode === "funscript" && blocked) endStream(blocked);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, blocked]);
+
+  /** Pause the video and the machine, then ask for depth and stroke. */
+  const openSetup = () => {
+    videoRef.current?.pause();
+    endStream("setup");
+    setSetupOpen(true);
+  };
 
   // The send loop. It keeps running, throttled, in background tabs. A stream
   // starts on the first tick while the video actually plays, so after an end
@@ -208,16 +249,19 @@ export default function PlayerPage() {
               </Flex>
               <Button variant="soft" onClick={disconnect}>Disconnect</Button>
             </Flex>
-            <Button
-              variant="soft"
-              disabled={state?.state === "homing" || !paused}
-              onClick={() => {
-                endStream("home");
-                void ossm.command("go:home");
-              }}
-            >
-              <HomeIcon /> Home
-            </Button>
+            {(mode === "pattern" || !isHomed(state)) && (
+              <Button
+                variant={mode === "pattern" ? "soft" : "solid"}
+                loading={state?.state === "homing"}
+                disabled={mode === "pattern" && !paused}
+                onClick={() => {
+                  endStream("home");
+                  void ossm.command("go:home");
+                }}
+              >
+                <HomeIcon /> Home
+              </Button>
+            )}
           </>
         ) : (
           <Button loading={connecting} onClick={() => void connect()}>
@@ -261,46 +305,65 @@ export default function PlayerPage() {
             )}
             {ossm && ossm.lookahead === 0 ? (
               <Text size="2" color="gray">This firmware cannot stream.</Text>
-            ) : ossm && state && (
-              <>
-                <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} />
-                <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} />
+            ) : ossm && state && isHomed(state) && (
+              !configured ? (
+                <Button onClick={openSetup}>Set depth and stroke</Button>
+              ) : <>
                 <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
                 <SettingSlider ossm={ossm} setting="jerk" label="Jerk" value={state.jerk} />
+                <Button variant="soft" onClick={openSetup}>
+                  Depth {state.depth.toFixed(0)}% · Stroke {state.stroke.toFixed(0)}%
+                </Button>
                 <Text size="2" color="gray">
                   {blocked ?? (state.state === "ready" ? "Ready" : "Streaming")}
                 </Text>
-                <Button
-                  variant="soft"
-                  color="red"
-                  onClick={() => {
-                    videoRef.current?.pause();
-                    endStream("stop");
-                    void ossm.command("go:menu");
-                  }}
-                >
-                  <StopIcon /> Stop
-                </Button>
               </>
             )}
-            <LabeledSlider
-              label="Sync offset"
-              value={offset}
-              display={`${offset > 0 ? "+" : ""}${offset} ms`}
-              min={-500}
-              max={500}
-              step={5}
-              onChange={(v) => {
-                endStream("offset");
-                setOffset(v);
-              }}
-            />
+            {setupOpen && ossm && state && (
+              <SetupDialog
+                ossm={ossm}
+                state={state}
+                speedLimit={speedLimit}
+                setSpeedLimit={setSpeedLimit}
+                onDone={() => setConfigured(true)}
+                onClose={() => setSetupOpen(false)}
+              />
+            )}
+            {ready && (
+              <LabeledSlider
+                label="Sync offset"
+                value={offset}
+                display={`${offset > 0 ? "+" : ""}${offset} ms`}
+                min={-500}
+                max={500}
+                step={5}
+                onChange={(v) => {
+                  endStream("offset");
+                  setOffset(v);
+                }}
+              />
+            )}
             <Text as="label" size="2" weight="medium">
               <Flex align="center" justify="between" gap="2">
                 Reverse
                 <Switch checked={reverse} disabled={!paused} onCheckedChange={setReverse} />
               </Flex>
             </Text>
+            {ready && (
+              <Button
+                variant="soft"
+                color="red"
+                size="3"
+                style={{ height: 64 }}
+                onClick={() => {
+                  videoRef.current?.pause();
+                  endStream("stop");
+                  void ossm.command("go:menu");
+                }}
+              >
+                <StopIcon /> Stop
+              </Button>
+            )}
           </>
         )}
       </Flex>
@@ -310,13 +373,7 @@ export default function PlayerPage() {
   const mediaProps = {
     ref: (el: HTMLMediaElement | null) => void (videoRef.current = el),
     controls: true,
-    onPlay: (e) => {
-      syncPaused(e);
-      if (mode === "funscript" && blocked) {
-        log(`play blocked: ${blocked}`);
-        e.currentTarget.pause();
-      }
-    },
+    onPlay: syncPaused,
     onPause: (e) => {
       syncPaused(e);
       videoEvent(e);
@@ -396,7 +453,7 @@ export default function PlayerPage() {
       {silentUrl && <audio {...mediaProps} src={silentUrl} style={{ width: "100%", flexShrink: 0 }} />}
       {mode === "funscript" &&
         (script ? (
-          <ScriptPreview script={script} reverse={reverse} videoRef={videoRef} />
+          <ScriptPreview script={script} reverse={reverse} videoRef={videoRef} notice={blocked} />
         ) : (
           <Flex align="center" justify="center" flexShrink="0" height={`${PREVIEW_HEIGHT}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
             <Button variant="soft" onClick={() => scriptInput.current?.click()}>
@@ -488,11 +545,15 @@ function PatternControls({ ossm, state, endStream }: {
  * before the device applied it does not make the slider jump back. Only user
  * changes are written.
  */
-function SettingSlider({ ossm, setting, label, value }: {
+function SettingSlider({ ossm, setting, label, value, max = 100, disabled, onChange }: {
   ossm: Ossm;
   setting: string;
   label: string;
   value: number;
+  max?: number;
+  disabled?: boolean;
+  /** Called after each write is queued. */
+  onChange?: () => void;
 }) {
   const [pending, setPending] = useState<number | null>(null);
   const timer = useRef<number>(undefined);
@@ -505,24 +566,151 @@ function SettingSlider({ ossm, setting, label, value }: {
       value={shown}
       display={shown.toFixed(1)}
       min={0}
-      max={100}
+      max={max}
       step={0.1}
+      disabled={disabled}
       onChange={(v) => {
         const rounded = Math.round(v * 10) / 10;
         setPending(rounded);
         clearTimeout(timer.current);
         timer.current = window.setTimeout(() => setPending(null), PENDING_MS);
         void ossm.command(`set:${setting}:${rounded}`);
+        onChange?.();
       }}
     />
   );
 }
 
-/** The script's raw points around the video time, redrawn every animation frame. Works without a video (time 0). */
-function ScriptPreview({ script, reverse, videoRef }: {
+/** The speed setting up to `limit`, with a dialog to change the limit. */
+function SpeedSlider({ ossm, value, limit, setLimit }: {
+  ossm: Ossm;
+  value: number;
+  limit: number;
+  setLimit: (limit: number) => void;
+}) {
+  return (
+    <Flex align="end" gap="2">
+      <Box flexGrow="1">
+        <SettingSlider ossm={ossm} setting="speed" label={`Speed (max ${limit}%)`} value={value} max={limit} />
+      </Box>
+      <Dialog.Root>
+        <Dialog.Trigger>
+          <IconButton variant="soft" color="gray" aria-label="Speed limit">
+            <GearIcon />
+          </IconButton>
+        </Dialog.Trigger>
+        <Dialog.Content maxWidth="360px">
+          <Dialog.Title>Speed limit</Dialog.Title>
+          <Dialog.Description size="2" mb="4">
+            The highest speed the speed slider allows. Raise it once the machine moves as expected.
+          </Dialog.Description>
+          <LabeledSlider label="Limit" value={limit} display={`${limit}%`} min={1} max={100} step={1} onChange={setLimit} />
+          <Flex justify="end" mt="4">
+            <Dialog.Close>
+              <Button>Done</Button>
+            </Dialog.Close>
+          </Flex>
+        </Dialog.Content>
+      </Dialog.Root>
+    </Flex>
+  );
+}
+
+/**
+ * Sets the depth and the stroke while the machine follows them. A change
+ * streams one point to the end it sets, the deep end (depth) or the shallow
+ * end (stroke), unless the machine already heads there; the firmware
+ * re-requests the last point whenever the stroke range changes. Changes wait
+ * for a speed above zero, so the machine moves no faster than the speed shown.
+ */
+function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }: {
+  ossm: Ossm;
+  state: OssmState;
+  speedLimit: number;
+  setSpeedLimit: (limit: number) => void;
+  onDone: () => void;
+  onClose: () => void;
+}) {
+  /** Depth and stroke of the last setup done, shown for reference. */
+  const [last, setLast] = usePersistedState<{ depth: number; stroke: number } | null>("ossm:playerLastSetup", null, localStorage);
+  /** The stream position last sent while the speed was above zero: 0 (deep end) or 100 (shallow end). */
+  const tracking = useRef<number | null>(null);
+  // At speed zero the firmware holds and resumes only with the next point.
+  useEffect(() => {
+    if (state.speed <= 0) tracking.current = null;
+  }, [state.speed]);
+
+  const track = (position: number) => {
+    if (tracking.current === position) return;
+    tracking.current = position;
+    void ossm.streamPoint(position, 0, "(setup)");
+  };
+
+  /** End the tracking stream, the machine stays where it is. */
+  const close = () => {
+    if (tracking.current !== null) void ossm.command("stream:end", "(setup)");
+    tracking.current = null;
+    onClose();
+  };
+
+  const still = state.speed <= 0;
+  return (
+    <Dialog.Root open onOpenChange={(open) => !open && close()}>
+      <Dialog.Content maxWidth="420px">
+        <Dialog.Title>Set depth and stroke</Dialog.Title>
+        <Dialog.Description size="2" mb="4">
+          The machine follows the slider you move. Depth is the deepest point while playing; 100% extends the
+          machine fully. Stroke sets the shallowest point.
+        </Dialog.Description>
+        <Flex direction="column" gap="3">
+          <SpeedSlider ossm={ossm} value={state.speed} limit={speedLimit} setLimit={setSpeedLimit} />
+          <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} disabled={still} onChange={() => track(0)} />
+          <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} disabled={still} onChange={() => track(100)} />
+          <Flex gap="2">
+            <Button variant="soft" disabled={still} style={{ flex: 1 }} onClick={() => track(0)}>
+              Move to depth
+            </Button>
+            <Button variant="soft" disabled={still} style={{ flex: 1 }} onClick={() => track(100)}>
+              Move to stroke
+            </Button>
+          </Flex>
+          {/* Deliberately no button to apply these: the machine would jump to them, and a
+              value from another session or setup may be too deep, which risks injury. */}
+          {last && (
+            <Text size="2" color="gray">
+              Last set: depth {last.depth.toFixed(1)}%, stroke {last.stroke.toFixed(1)}%
+            </Text>
+          )}
+          {still && (
+            <Text size="2" color="gray">Raise the speed to change depth and stroke; the machine moves at that speed.</Text>
+          )}
+        </Flex>
+        <Flex justify="end" gap="2" mt="4">
+          <Button
+            onClick={() => {
+              setLast({ depth: state.depth, stroke: state.stroke });
+              onDone();
+              close();
+            }}
+          >
+            Done
+          </Button>
+        </Flex>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+/**
+ * The script's raw points around the video time, redrawn every animation
+ * frame. Works without a video (time 0). `notice` says why the machine does
+ * not follow.
+ */
+function ScriptPreview({ script, reverse, videoRef, notice }: {
   script: Funscript;
   reverse: boolean;
   videoRef: RefObject<HTMLMediaElement | null>;
+  notice: string | null;
 }) {
   const [appearance] = useAppearance();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -599,16 +787,26 @@ function ScriptPreview({ script, reverse, videoRef }: {
   }, [script, reverse, appearance, width, videoRef]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{
-        display: "block",
-        width: "100%",
-        height: PREVIEW_HEIGHT,
-        flexShrink: 0,
-        borderRadius: 6,
-        background: "var(--gray-a2)",
-      }}
-    />
+    <Box position="relative" flexShrink="0">
+      <canvas
+        ref={canvasRef}
+        style={{
+          display: "block",
+          width: "100%",
+          height: PREVIEW_HEIGHT,
+          borderRadius: 6,
+          background: "var(--gray-a2)",
+        }}
+      />
+      {notice && (
+        <Text
+          size="1"
+          color="amber"
+          style={{ position: "absolute", top: 6, left: 8, padding: "2px 6px", borderRadius: 4, background: "var(--color-panel-solid)" }}
+        >
+          Machine not moving: {notice}
+        </Text>
+      )}
+    </Box>
   );
 }

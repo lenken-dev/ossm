@@ -294,6 +294,7 @@ export function LabeledSlider({
   min,
   max,
   step,
+  disabled,
   onChange,
 }: {
   label: string;
@@ -302,6 +303,7 @@ export function LabeledSlider({
   min: number;
   max: number;
   step: number;
+  disabled?: boolean;
   onChange: (v: number) => void;
 }) {
   return (
@@ -310,7 +312,7 @@ export function LabeledSlider({
         <Text size="2" weight="medium">{label}</Text>
         <Text size="2" color="gray">{display}</Text>
       </Flex>
-      <Slider min={min} max={max} step={step} value={[value]} onValueChange={([v]) => onChange(v)} />
+      <Slider min={min} max={max} step={step} value={[value]} disabled={disabled} onValueChange={([v]) => onChange(v)} />
     </Box>
   );
 }
