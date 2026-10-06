@@ -10,11 +10,14 @@ use crate::sender::StreamSender;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum EngineCommand {
-    /// A streamed point, stamped with its reception time plus any delay.
+    /// A streamed point, stamped with its reception time.
     Point {
         received_ms: u64,
         position: f64,
         duration_ms: u32,
+        /// Replaces queued points (see
+        /// [`StreamPlanner::push_latest`](crate::StreamPlanner::push_latest)).
+        latest: bool,
     },
     Stop,
 }

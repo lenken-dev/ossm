@@ -24,7 +24,6 @@ export interface OssmState {
   sensation: number;
   depth: number;
   jerk: number;
-  buffer: number;
   pattern: number;
   patternName: string;
 }

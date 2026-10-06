@@ -5,13 +5,18 @@
 //! The session hands them to the stream engine and counts those it had to
 //! ignore, for a summary when the connection ends.
 //!
-//! A player that finds the stream look-ahead characteristic may send points
+//! A player that reads the stream look-ahead characteristic may send points
 //! ahead of time: up to [`LOOKAHEAD`] beyond the point the machine is
 //! heading to. A move ends in motion only if its following point is queued
 //! when the move starts, so sending them that early leaves room for BLE
 //! delays. Such a player ends the stream with `stream:end` whenever its
 //! queued points no longer apply (seek, pause, stall, or a change to how it
 //! generates points); the next point starts a new stream.
+//!
+//! Every other player (OSSM-Lite, the official OSSM one) sends each point as
+//! its segment starts and never ends a stream, so its points are streamed
+//! latest-only (see [`StreamSender::push_latest`]): nothing queued can make
+//! the machine run behind or keep moving after the player stopped.
 
 use core::fmt::Write;
 
@@ -45,6 +50,8 @@ pub struct StreamSession {
     /// The stream engine's drop count when the session started.
     engine_dropped_at_start: u32,
     unsupported: u32,
+    /// The player read the look-ahead, so it may send points ahead.
+    sends_ahead: bool,
 }
 
 impl StreamSession {
@@ -56,12 +63,25 @@ impl StreamSession {
             dropped: 0,
             engine_dropped_at_start: stream.map_or(0, StreamSender::dropped),
             unsupported: 0,
+            sends_ahead: false,
         }
     }
 
-    /// Parse a point and stream it as if received `delay_ms` from now (see
-    /// [`StreamSender::push_delayed`]). Returns whether it was streamed.
-    pub fn push(&mut self, data: &[u8], delay_ms: u32) -> bool {
+    /// The player read the look-ahead: queue its `stream:` points from now
+    /// on instead of streaming them latest-only.
+    pub fn allow_lookahead(&mut self) {
+        self.sends_ahead = true;
+    }
+
+    /// Parse and stream a `stream:` command point: queued if the player may
+    /// send ahead, else latest-only. Returns whether it was streamed.
+    pub fn push_command(&mut self, data: &[u8]) -> bool {
+        self.push(data, !self.sends_ahead)
+    }
+
+    /// Parse a point and stream it, latest-only if `latest` (see
+    /// [`StreamSender::push_latest`]). Returns whether it was streamed.
+    pub fn push(&mut self, data: &[u8], latest: bool) -> bool {
         let Some(stream) = self.stream else {
             if count(&mut self.unsupported) {
                 warn!(
@@ -79,7 +99,12 @@ impl StreamSession {
             self.invalid_write(data);
             return false;
         };
-        match stream.push_delayed(point.position, point.duration_ms, delay_ms) {
+        let pushed = if latest {
+            stream.push_latest(point.position, point.duration_ms)
+        } else {
+            stream.push(point.position, point.duration_ms)
+        };
+        match pushed {
             Ok(()) => {
                 self.points = self.points.saturating_add(1);
                 true
