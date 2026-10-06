@@ -635,6 +635,7 @@ function SpeedSlider({ ossm, value, limit, setLimit }: {
  * end (stroke), unless the machine already heads there; the firmware
  * re-requests the last point whenever the stroke range changes. Changes wait
  * for a speed above zero, so the machine moves no faster than the speed shown.
+ * Done returns the machine to the stroke end.
  */
 function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }: {
   ossm: Ossm;
@@ -703,7 +704,12 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }
             onClick={() => {
               setLast({ depth: state.depth, stroke: state.stroke });
               onDone();
-              close();
+              // Start playing from the shallow end; the stream stays open so the machine gets there.
+              if (still) close();
+              else {
+                track(100);
+                onClose();
+              }
             }}
           >
             Done
