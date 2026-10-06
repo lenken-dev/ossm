@@ -1,8 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type MediaHTMLAttributes, type RefObject, type SyntheticEvent } from "react";
-import { Box, Button, Callout, Dialog, Flex, IconButton, SegmentedControl, Select, Separator, Switch, Text } from "@radix-ui/themes";
-import { Cross2Icon, ExclamationTriangleIcon, GearIcon, HomeIcon, StopIcon, UploadIcon } from "@radix-ui/react-icons";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type RefObject, type SyntheticEvent } from "react";
+import { Box, Button, Callout, Dialog, Flex, IconButton, Popover, SegmentedControl, Select, Separator, Switch, Text } from "@radix-ui/themes";
+import {
+  CheckIcon,
+  Cross2Icon,
+  EnterFullScreenIcon,
+  ExclamationTriangleIcon,
+  ExitFullScreenIcon,
+  GearIcon,
+  HamburgerMenuIcon,
+  HomeIcon,
+  MoveIcon,
+  StopIcon,
+  UploadIcon,
+} from "@radix-ui/react-icons";
 import { bisectLeft } from "d3";
 import { useAppearance } from "../hooks/useAppearance";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm, type Ossm, type OssmState, type PatternInfo } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
@@ -19,6 +32,64 @@ const PENDING_MS = 1500;
 const PREVIEW_HEIGHT = 140;
 const PREVIEW_BEFORE_MS = 2000;
 const PREVIEW_AFTER_MS = 8000;
+
+/** Place and look of the graph over the video in theater mode. */
+interface OverlayStyle {
+  /** Position and size, in fractions of the video area. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  lineWidth: number;
+  /** Opacity of the black background, in percent. */
+  background: number;
+}
+/** Full width, ending above Chrome's video controls in most window sizes. */
+const DEFAULT_OVERLAY: OverlayStyle = { x: 0, y: 0.7, width: 1, height: 0.18, lineWidth: 2, background: 0 };
+
+/** Smallest graph over the video while resizing, in px; room for the corner handles. */
+const OVERLAY_MIN_WIDTH = 120;
+const OVERLAY_MIN_HEIGHT = 60;
+
+/** Resize handles of the graph over the video, by the edges they move: corners and edges. */
+const RESIZE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+const CORNER_HANDLE = 24;
+const EDGE_HANDLE = 40;
+/** Side length in px from which an edge handle fits between the corner handles. */
+const EDGE_HANDLE_ROOM = 2 * CORNER_HANDLE + EDGE_HANDLE + 16;
+
+/** Where a resize handle sits and how it looks: an L in a corner, a bar along an edge. */
+function handleStyle(handle: string): CSSProperties {
+  const border = "4px solid white";
+  const corner = handle.length === 2;
+  const across = 12;
+  return {
+    position: "absolute",
+    width: corner ? CORNER_HANDLE : "ns".includes(handle) ? EDGE_HANDLE : across,
+    height: corner ? CORNER_HANDLE : "ns".includes(handle) ? across : EDGE_HANDLE,
+    borderRadius: corner ? 6 : undefined,
+    cursor: `${handle}-resize`,
+    filter: "drop-shadow(0 0 1px black) drop-shadow(0 0 2px black)",
+    ...(handle.includes("n") ? { top: 0, borderTop: border } : handle.includes("s") ? { bottom: 0, borderBottom: border } : { top: `calc(50% - ${EDGE_HANDLE / 2}px)` }),
+    ...(handle.includes("w") ? { left: 0, borderLeft: border } : handle.includes("e") ? { right: 0, borderRight: border } : { left: `calc(50% - ${EDGE_HANDLE / 2}px)` }),
+  };
+}
+
+/**
+ * One axis of dragging the graph over the video: its start and size, in
+ * fractions of the video area, after its start and/or end edge moved by
+ * `delta`. Moving both edges moves the graph.
+ */
+function dragAxis(pos: number, size: number, delta: number, startEdge: boolean, endEdge: boolean, min: number): [number, number] {
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+  if (startEdge && endEdge) return [clamp(pos + delta, 0, 1 - size), size];
+  if (startEdge) {
+    const moved = clamp(pos + delta, 0, pos + size - min);
+    return [moved, pos + size - moved];
+  }
+  if (endEdge) return [pos, clamp(size + delta, min, 1 - pos)];
+  return [pos, size];
+}
 
 /** Send loop period in ms. */
 const TICK_MS = 10;
@@ -82,6 +153,48 @@ export default function PlayerPage() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [silentUrl, setSilentUrl] = useState<string | null>(null);
+  const [theater, setTheater] = useState(false);
+  const [showGraph, setShowGraph] = useState(true);
+  const [showControls, setShowControls] = useState(true);
+  const isMobile = useIsMobile();
+  const [overlay, setOverlay] = usePersistedState("ossm:playerOverlay", DEFAULT_OVERLAY, localStorage);
+  /** Moving and resizing the graph; otherwise clicks go through it to the video. */
+  const [arranging, setArranging] = useState(false);
+  /** The video area, which the graph's position and size are fractions of. */
+  const stageRef = useRef<HTMLDivElement>(null);
+
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    if (!arranging || !stageRef.current) return;
+    const observer = new ResizeObserver(([entry]) => setStageSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
+    observer.observe(stageRef.current);
+    return () => observer.disconnect();
+  }, [arranging, videoUrl]);
+
+  /**
+   * Drag `edges` (some of "nsew") of the graph over the video with the pointer;
+   * all four move it. It stays inside the video area and at least the minimum size.
+   */
+  const dragOverlay = (e: PointerEvent<HTMLElement>, edges: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const stage = stageRef.current!.getBoundingClientRect();
+    const start = overlay;
+    const target = e.currentTarget;
+    const [startX, startY] = [e.clientX, e.clientY];
+    const move = (m: globalThis.PointerEvent) => {
+      const dx = (m.clientX - startX) / stage.width;
+      const dy = (m.clientY - startY) / stage.height;
+      const [x, width] = dragAxis(start.x, start.width, dx, edges.includes("w"), edges.includes("e"), OVERLAY_MIN_WIDTH / stage.width);
+      const [y, height] = dragAxis(start.y, start.height, dy, edges.includes("n"), edges.includes("s"), OVERLAY_MIN_HEIGHT / stage.height);
+      setOverlay({ ...start, x, y, width, height });
+    };
+    target.setPointerCapture(e.pointerId);
+    target.addEventListener("pointermove", move);
+    target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
+  };
+  /** Theater mode needs a video and a wide screen; closing the video leaves theater mode. */
+  const inTheater = theater && !!videoUrl && !isMobile;
   /** The video, or the silent clock without one. */
   const videoRef = useRef<HTMLMediaElement>(null);
   const [paused, setPaused] = useState(true);
@@ -226,8 +339,74 @@ export default function PlayerPage() {
     }
   };
 
+  /** Show and hide the controls pane and the graph in theater mode; in the pane while it is shown. */
+  const theaterToggles = (style?: CSSProperties) => (
+    <Flex gap="2" style={style}>
+      <IconButton
+        variant="surface"
+        aria-label={showControls ? "Hide controls" : "Show controls"}
+        onClick={() => setShowControls(!showControls)}
+      >
+        <HamburgerMenuIcon />
+      </IconButton>
+      {/* The graph toggle and its settings, joined into one split button. */}
+      {mode === "funscript" && played && (
+        <Flex>
+          <IconButton
+            variant="surface"
+            aria-label={showGraph ? "Hide graph" : "Show graph"}
+            onClick={() => setShowGraph(!showGraph)}
+            style={showGraph ? { borderTopRightRadius: 0, borderBottomRightRadius: 0 } : undefined}
+          >
+            <GraphIcon />
+          </IconButton>
+          {showGraph && (
+            <Popover.Root>
+              <Popover.Trigger>
+                <IconButton variant="surface" aria-label="Graph settings" style={{ marginLeft: -1, borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}>
+                  <GearIcon />
+                </IconButton>
+              </Popover.Trigger>
+              <Popover.Content width="260px">
+                <Flex direction="column" gap="3">
+                  <LabeledSlider
+                    label="Line width"
+                    value={overlay.lineWidth}
+                    display={`${overlay.lineWidth} px`}
+                    min={1}
+                    max={8}
+                    step={0.5}
+                    onChange={(lineWidth) => setOverlay({ ...overlay, lineWidth })}
+                  />
+                  <LabeledSlider
+                    label="Background"
+                    value={overlay.background}
+                    display={`${overlay.background}%`}
+                    min={0}
+                    max={100}
+                    step={5}
+                    onChange={(background) => setOverlay({ ...overlay, background })}
+                  />
+                  <Popover.Close>
+                    <Button variant="soft" onClick={() => setArranging(true)}>
+                      <MoveIcon /> Move and resize
+                    </Button>
+                  </Popover.Close>
+                  <Button variant="soft" color="gray" onClick={() => setOverlay(DEFAULT_OVERLAY)}>
+                    Reset
+                  </Button>
+                </Flex>
+              </Popover.Content>
+            </Popover.Root>
+          )}
+        </Flex>
+      )}
+    </Flex>
+  );
+
   const sidebar = (
     <>
+      {inTheater && theaterToggles({ padding: "var(--space-3)", paddingBottom: 0 })}
       <Box p="3" pb="0">
         <SegmentedControl.Root
           value={mode}
@@ -383,7 +562,7 @@ export default function PlayerPage() {
   } satisfies MediaHTMLAttributes<HTMLMediaElement> & { ref: unknown };
 
   const content = (
-    <Flex direction="column" gap="3" p="3" height="100%">
+    <Flex direction="column" gap="3" p={inTheater ? "0" : "3"} height="100%">
       <input
         ref={videoInput}
         type="file"
@@ -411,9 +590,14 @@ export default function PlayerPage() {
       />
       {videoUrl ? (
         <>
-          <Flex align="center" justify="between" gap="2">
+          {!inTheater && <Flex align="center" justify="between" gap="2">
             <Text size="2" weight="medium" truncate title={videoFile?.name}>{videoFile?.name}</Text>
             <Flex gap="2">
+              {!isMobile && (
+                <Button variant="soft" onClick={() => setTheater(true)}>
+                  <EnterFullScreenIcon /> Theater
+                </Button>
+              )}
               <Button variant="soft" onClick={() => videoInput.current?.click()}>
                 <UploadIcon /> Open
               </Button>
@@ -430,8 +614,59 @@ export default function PlayerPage() {
                 <Cross2Icon /> Close
               </Button>
             </Flex>
-          </Flex>
-          <video {...mediaProps} src={videoUrl} style={{ width: "100%", minHeight: 0, flex: 1, background: "black" }} />
+          </Flex>}
+          {/* The video stays at this place in the tree, so toggling theater mode does not reload it. */}
+          <Box ref={stageRef} position="relative" flexGrow="1" minHeight="0">
+            <video {...mediaProps} src={videoUrl} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", background: "black" }} />
+            {inTheater && mode === "funscript" && played && showGraph && (
+              // While arranging, drag the graph to move it and its handles to resize it; otherwise
+              // clicks go through to the video. Done sits in its middle, clear of the handles.
+              <Box
+                position="absolute"
+                style={{
+                  left: `${overlay.x * 100}%`,
+                  top: `${overlay.y * 100}%`,
+                  width: `${overlay.width * 100}%`,
+                  height: `${overlay.height * 100}%`,
+                  ...(arranging
+                    ? { cursor: "move", borderRadius: 6, outline: "2px dashed white", boxShadow: "0 0 0 3px rgba(0,0,0,0.5)" }
+                    : { pointerEvents: "none" }),
+                }}
+                onPointerDown={(e) => dragOverlay(e, "nsew")}
+              >
+                <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} overlay={overlay} />
+                {arranging &&
+                  RESIZE_HANDLES.filter(
+                    (h) => h.length === 2 || ("ns".includes(h) ? overlay.width * stageSize.width : overlay.height * stageSize.height) >= EDGE_HANDLE_ROOM,
+                  ).map((h) => (
+                    <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />
+                  ))}
+                {/* Stops the pointer here, so pressing Done does not start a drag. */}
+                {arranging && (
+                  <Box
+                    position="absolute"
+                    style={{ left: "50%", top: "50%", translate: "-50% -50%", cursor: "auto" }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <Button onClick={() => setArranging(false)}>
+                      <CheckIcon /> Done
+                    </Button>
+                  </Box>
+                )}
+              </Box>
+            )}
+            {/* Where the hidden pane would appear, at the pane's padding so they do not jump. */}
+            {inTheater && !showControls && theaterToggles({ position: "absolute", left: "var(--space-3)", top: "var(--space-3)" })}
+            {inTheater && (
+              <Button
+                variant="surface"
+                onClick={() => setTheater(false)}
+                style={{ position: "absolute", top: "var(--space-3)", right: "var(--space-3)" }}
+              >
+                <ExitFullScreenIcon /> Exit
+              </Button>
+            )}
+          </Box>
         </>
       ) : (
         <Flex direction="column" align="center" justify="center" gap="3" flexGrow="1">
@@ -452,7 +687,7 @@ export default function PlayerPage() {
           <Callout.Text>{scriptError}</Callout.Text>
         </Callout.Root>
       )}
-      {mode === "funscript" &&
+      {mode === "funscript" && !inTheater &&
         (script && played ? (
           <>
             <Flex align="center" justify="between" gap="2">
@@ -487,7 +722,17 @@ export default function PlayerPage() {
     </Flex>
   );
 
-  return <GraphLayout sidebar={sidebar} content={content} />;
+  // Theater mode pins the page to the window. No z-index, so dialogs and
+  // menus, portalled to the end of the body, still open above it.
+  return (
+    <div
+      style={inTheater
+        ? { position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "var(--color-background)" }
+        : { display: "contents" }}
+    >
+      <GraphLayout sidebar={sidebar} content={content} sidebarHidden={inTheater && !showControls} />
+    </div>
+  );
 }
 
 /** Pattern mode: play, adjust and stop the device's patterns. */
@@ -732,42 +977,57 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }
   );
 }
 
+/** A line through points, like the script graph. */
+function GraphIcon() {
+  const points = [[1.5, 11], [5, 4], [9.5, 10], [13.5, 3]];
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="currentColor">
+      <polyline points={points.join(" ")} fill="none" stroke="currentColor" strokeLinejoin="round" />
+      {points.map(([cx, cy]) => <circle key={cx} cx={cx} cy={cy} r="1.5" />)}
+    </svg>
+  );
+}
+
 /**
  * The script's raw points around the video time, redrawn every animation
  * frame. Works without a video (time 0). `notice` says why the machine does
  * not follow.
  */
-function ScriptPreview({ script, reverse, videoRef, notice }: {
+function ScriptPreview({ script, reverse, videoRef, notice, overlay }: {
   script: Funscript;
   reverse: boolean;
   videoRef: RefObject<HTMLMediaElement | null>;
   notice: string | null;
+  /** Drawn over the video in this style, filling its parent, with colors for a dark backdrop. */
+  overlay?: OverlayStyle;
 }) {
+  const lineWidth = overlay?.lineWidth ?? 2;
+  const overlaid = !!overlay;
   const [appearance] = useAppearance();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [width, setWidth] = useState(0);
+  const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
-    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
     observer.observe(canvasRef.current!);
     return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
-    if (width === 0) return;
+    if (width === 0 || height === 0) return;
     const canvas = canvasRef.current!;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(PREVIEW_HEIGHT * dpr);
+    canvas.height = Math.round(height * dpr);
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const isDark = appearance === "dark";
+    const isDark = overlaid || appearance === "dark";
     const gridColor = isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.15)";
-    const playheadColor = isDark ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.4)";
+    const playheadColor = isDark ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.7)";
     const lineColor = "#ec4899";
     const pad = 6;
-    const y = (pos: number) => pad + (1 - (reverse ? 100 - pos : pos) / 100) * (PREVIEW_HEIGHT - 2 * pad);
+    const y = (pos: number) => pad + (1 - (reverse ? 100 - pos : pos) / 100) * (height - 2 * pad);
 
     let frame = 0;
     const draw = () => {
@@ -776,7 +1036,7 @@ function ScriptPreview({ script, reverse, videoRef, notice }: {
       const from = now - PREVIEW_BEFORE_MS;
       const to = now + PREVIEW_AFTER_MS;
       const x = (at: number) => ((at - from) / (to - from)) * width;
-      ctx.clearRect(0, 0, width, PREVIEW_HEIGHT);
+      ctx.clearRect(0, 0, width, height);
 
       ctx.strokeStyle = gridColor;
       ctx.lineWidth = 1;
@@ -794,39 +1054,45 @@ function ScriptPreview({ script, reverse, videoRef, notice }: {
       while (last < script.at.length - 1 && script.at[last] <= to) last++;
       ctx.strokeStyle = lineColor;
       ctx.fillStyle = lineColor;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = lineWidth;
       ctx.lineJoin = "round";
       ctx.beginPath();
       for (let i = first; i <= last; i++) ctx.lineTo(x(script.at[i]), y(script.pos[i]));
       ctx.stroke();
       for (let i = first; i <= last; i++) {
         ctx.beginPath();
-        ctx.arc(x(script.at[i]), y(script.pos[i]), 3, 0, Math.PI * 2);
+        ctx.arc(x(script.at[i]), y(script.pos[i]), lineWidth + 1, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      const px = Math.round(x(now)) + 0.5;
+      // Over the video, a dark halo keeps the playhead visible on bright frames.
+      const px = Math.round(x(now));
       ctx.strokeStyle = playheadColor;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 2;
+      if (overlaid) {
+        ctx.shadowColor = "black";
+        ctx.shadowBlur = 4;
+      }
       ctx.beginPath();
       ctx.moveTo(px, 0);
-      ctx.lineTo(px, PREVIEW_HEIGHT);
+      ctx.lineTo(px, height);
       ctx.stroke();
+      ctx.shadowBlur = 0;
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [script, reverse, appearance, width, videoRef]);
+  }, [script, reverse, appearance, width, videoRef, overlaid, height, lineWidth]);
 
   return (
-    <Box position="relative" flexShrink="0">
+    <Box position="relative" flexShrink="0" height={overlay ? "100%" : undefined}>
       <canvas
         ref={canvasRef}
         style={{
           display: "block",
           width: "100%",
-          height: PREVIEW_HEIGHT,
+          height: overlay ? "100%" : PREVIEW_HEIGHT,
           borderRadius: 6,
-          background: "var(--gray-a2)",
+          background: overlay ? `rgba(0,0,0,${overlay.background / 100})` : "var(--gray-a2)",
         }}
       />
       {notice && (
