@@ -124,19 +124,19 @@ The mode in which a remote client drives motion with timed stream points instead
 _Avoid_: Pattern playback
 
 **Stream point**:
-A streamed target: a position from zero (deepest) to one hundred (shallowest) within the stroke range, and a duration. It is due that duration after the later of its reception, plus any stream delay, and the previous point's scheduled arrival.
+A streamed target: a position from zero (deepest) to one hundred (shallowest) within the stroke range, and a duration. It is due that duration after the later of its reception and the previous point's scheduled arrival.
 _Avoid_: Stroke position, move
 
-**Stream delay**:
-The time added to a stream point's reception by a remote that sends its points that far ahead of their schedule. It gives look-ahead without shifting the stream's timing. The official OSSM funscript player sets it as its buffer while latency compensation is enabled.
-_Avoid_: Latency, buffering
+**Latest-only point**:
+A stream point from a remote that does not use look-ahead (the OSSM-Lite and official OSSM funscript players). It replaces all queued points and the current move, and is due its duration after its reception, so the machine never runs behind or keeps moving after the remote stops sending.
+_Avoid_: Buffered point
 
 **Stream move**:
 A move toward a stream point with a requested arrival time and arrival velocity. Unlike a pattern move it may end in motion, so another stream move or a controlled stop must follow it.
 _Avoid_: Stream point
 
 **Look-ahead**:
-The stream points queued beyond the target of a stream move. A stream move arrives in motion only when look-ahead exists as it is requested; a point that arrives later does not change the move, which ends at rest. A remote that supports it may send up to five points beyond the target so that the following point is queued in time.
+The stream points queued beyond the target of a stream move. A stream move arrives in motion only when look-ahead exists as it is requested; a point that arrives later does not change the move, which ends at rest. A remote that reads the look-ahead may send that many points beyond the target (the stream queue less one) so that the following point is queued in time; points from other remotes are latest-only.
 _Avoid_: Buffering
 
 **Skipped point**:
