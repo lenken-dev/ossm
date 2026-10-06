@@ -124,3 +124,11 @@ The machine's physical output for communicating status to a person, such as a co
 
 **Status system**:
 The policy that determines which machine conditions to communicate and how to express them through a status indicator.
+
+**Fault**:
+A condition the machine can only leave by restarting, such as an unresponsive motor during setup.
+_Avoid_: Error, motion controller fault
+
+**Diagnostic code**:
+A repeating group of blinks whose count identifies a fault, shown in panic red on a colored light.
+_Avoid_: Error code, status color
