@@ -292,24 +292,6 @@ export default function PlayerPage() {
         {mode === "funscript" && (
           <>
             <Separator size="4" />
-            <Flex align="center" justify="between" gap="2">
-              <Text size="2" weight="medium" truncate title={script?.name}>
-                {script?.name ?? "No funscript loaded"}
-              </Text>
-              {script && (
-                <Button variant="soft" onClick={() => scriptInput.current?.click()}>
-                  <UploadIcon /> Open
-                </Button>
-              )}
-            </Flex>
-            {scriptError && (
-              <Callout.Root color="red" size="1">
-                <Callout.Icon>
-                  <ExclamationTriangleIcon />
-                </Callout.Icon>
-                <Callout.Text>{scriptError}</Callout.Text>
-              </Callout.Root>
-            )}
             {ossm && ossm.lookahead === 0 ? (
               <Text size="2" color="gray">This firmware cannot stream.</Text>
             ) : ossm && state && isHomed(state) && (
@@ -462,9 +444,39 @@ export default function PlayerPage() {
         </Flex>
       )}
       {silentUrl && <audio {...mediaProps} src={silentUrl} style={{ width: "100%", flexShrink: 0 }} />}
+      {mode === "funscript" && scriptError && (
+        <Callout.Root color="red" size="1">
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
+          <Callout.Text>{scriptError}</Callout.Text>
+        </Callout.Root>
+      )}
       {mode === "funscript" &&
-        (played ? (
-          <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} />
+        (script && played ? (
+          <>
+            <Flex align="center" justify="between" gap="2">
+              <Text size="2" weight="medium" truncate title={script.name}>{script.name}</Text>
+              <Flex gap="2">
+                <Button variant="soft" onClick={() => scriptInput.current?.click()}>
+                  <UploadIcon /> Open
+                </Button>
+                <Button
+                  variant="soft"
+                  color="gray"
+                  onClick={() => {
+                    dropSilence("close");
+                    endStream("close");
+                    setScript(null);
+                    setScriptError(null);
+                  }}
+                >
+                  <Cross2Icon /> Close
+                </Button>
+              </Flex>
+            </Flex>
+            <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} />
+          </>
         ) : (
           <Flex align="center" justify="center" flexShrink="0" height={`${PREVIEW_HEIGHT}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
             <Button variant="soft" onClick={() => scriptInput.current?.click()}>
