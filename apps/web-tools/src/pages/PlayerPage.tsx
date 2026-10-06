@@ -28,8 +28,9 @@ type PlayerMode = "pattern" | "funscript";
 /** How long a slider shows the user's value before following the device again; the device reports settings at least once a second. */
 const PENDING_MS = 1500;
 
-/** Preview graph height and the window it shows around the video time, in ms. */
+/** Default and smallest height of the preview graph below the video, in px, and the window it shows around the video time, in ms. */
 const PREVIEW_HEIGHT = 140;
+const PREVIEW_MIN_HEIGHT = 60;
 const PREVIEW_BEFORE_MS = 2000;
 const PREVIEW_AFTER_MS = 8000;
 
@@ -40,6 +41,7 @@ interface OverlayStyle {
   y: number;
   width: number;
   height: number;
+  /** Also the line width of the graph below the video. */
   lineWidth: number;
   /** Opacity of the black background, in percent. */
   background: number;
@@ -158,6 +160,8 @@ export default function PlayerPage() {
   const [showControls, setShowControls] = useState(true);
   const isMobile = useIsMobile();
   const [overlay, setOverlay] = usePersistedState("ossm:playerOverlay", DEFAULT_OVERLAY, localStorage);
+  /** Height of the graph below the video, in px. */
+  const [graphHeight, setGraphHeight] = usePersistedState("ossm:playerGraphHeight", PREVIEW_HEIGHT, localStorage);
   /** Moving and resizing the graph; otherwise clicks go through it to the video. */
   const [arranging, setArranging] = useState(false);
   /** The video area, which the graph's position and size are fractions of. */
@@ -189,6 +193,18 @@ export default function PlayerPage() {
       const [y, height] = dragAxis(start.y, start.height, dy, edges.includes("n"), edges.includes("s"), OVERLAY_MIN_HEIGHT / stage.height);
       setOverlay({ ...start, x, y, width, height });
     };
+    target.setPointerCapture(e.pointerId);
+    target.addEventListener("pointermove", move);
+    target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
+  };
+  /** Drag the top edge of the graph below the video to set its height; at most most of the window. */
+  const dragGraphHeight = (e: PointerEvent<HTMLElement>) => {
+    e.preventDefault();
+    const start = graphHeight;
+    const target = e.currentTarget;
+    const startY = e.clientY;
+    const move = (m: globalThis.PointerEvent) =>
+      setGraphHeight(Math.round(Math.min(Math.max(start - (m.clientY - startY), PREVIEW_MIN_HEIGHT), window.innerHeight * 0.7)));
     target.setPointerCapture(e.pointerId);
     target.addEventListener("pointermove", move);
     target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
@@ -339,6 +355,18 @@ export default function PlayerPage() {
     }
   };
 
+  const lineWidthSlider = (
+    <LabeledSlider
+      label="Line width"
+      value={overlay.lineWidth}
+      display={`${overlay.lineWidth} px`}
+      min={1}
+      max={8}
+      step={0.5}
+      onChange={(lineWidth) => setOverlay({ ...overlay, lineWidth })}
+    />
+  );
+
   /** Show and hide the controls pane and the graph in theater mode; in the pane while it is shown. */
   const theaterToggles = (style?: CSSProperties) => (
     <Flex gap="2" style={style}>
@@ -369,15 +397,7 @@ export default function PlayerPage() {
               </Popover.Trigger>
               <Popover.Content width="260px">
                 <Flex direction="column" gap="3">
-                  <LabeledSlider
-                    label="Line width"
-                    value={overlay.lineWidth}
-                    display={`${overlay.lineWidth} px`}
-                    min={1}
-                    max={8}
-                    step={0.5}
-                    onChange={(lineWidth) => setOverlay({ ...overlay, lineWidth })}
-                  />
+                  {lineWidthSlider}
                   <LabeledSlider
                     label="Background"
                     value={overlay.background}
@@ -634,7 +654,7 @@ export default function PlayerPage() {
                 }}
                 onPointerDown={(e) => dragOverlay(e, "nsew")}
               >
-                <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} overlay={overlay} />
+                <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} lineWidth={overlay.lineWidth} overlay={overlay} />
                 {arranging &&
                   RESIZE_HANDLES.filter(
                     (h) => h.length === 2 || ("ns".includes(h) ? overlay.width * stageSize.width : overlay.height * stageSize.height) >= EDGE_HANDLE_ROOM,
@@ -693,6 +713,29 @@ export default function PlayerPage() {
             <Flex align="center" justify="between" gap="2">
               <Text size="2" weight="medium" truncate title={script.name}>{script.name}</Text>
               <Flex gap="2">
+                <Popover.Root>
+                  <Popover.Trigger>
+                    <IconButton variant="soft" color="gray" aria-label="Graph settings">
+                      <GearIcon />
+                    </IconButton>
+                  </Popover.Trigger>
+                  <Popover.Content width="260px">
+                    <Flex direction="column" gap="3">
+                      {lineWidthSlider}
+                      <Text size="1" color="gray">Drag the top edge of the graph to change its height.</Text>
+                      <Button
+                        variant="soft"
+                        color="gray"
+                        onClick={() => {
+                          setOverlay({ ...overlay, lineWidth: DEFAULT_OVERLAY.lineWidth });
+                          setGraphHeight(PREVIEW_HEIGHT);
+                        }}
+                      >
+                        Reset
+                      </Button>
+                    </Flex>
+                  </Popover.Content>
+                </Popover.Root>
                 <Button variant="soft" onClick={() => scriptInput.current?.click()}>
                   <UploadIcon /> Open
                 </Button>
@@ -710,10 +753,26 @@ export default function PlayerPage() {
                 </Button>
               </Flex>
             </Flex>
-            <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} />
+            <Box position="relative" flexShrink="0">
+              <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} lineWidth={overlay.lineWidth} height={graphHeight} />
+              <Box
+                title="Drag to resize"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: "calc(50% - 20px)",
+                  width: 40,
+                  height: 12,
+                  borderTop: "4px solid var(--gray-a8)",
+                  cursor: "ns-resize",
+                  touchAction: "none",
+                }}
+                onPointerDown={dragGraphHeight}
+              />
+            </Box>
           </>
         ) : (
-          <Flex align="center" justify="center" flexShrink="0" height={`${PREVIEW_HEIGHT}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
+          <Flex align="center" justify="center" flexShrink="0" height={`${graphHeight}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
             <Button variant="soft" onClick={() => scriptInput.current?.click()}>
               <UploadIcon /> Open funscript
             </Button>
@@ -993,15 +1052,17 @@ function GraphIcon() {
  * frame. Works without a video (time 0). `notice` says why the machine does
  * not follow.
  */
-function ScriptPreview({ script, reverse, videoRef, notice, overlay }: {
+function ScriptPreview({ script, reverse, videoRef, notice, lineWidth, height: cssHeight, overlay }: {
   script: Funscript;
   reverse: boolean;
   videoRef: RefObject<HTMLMediaElement | null>;
   notice: string | null;
+  lineWidth: number;
+  /** In px; without, the graph fills its parent. */
+  height?: number;
   /** Drawn over the video in this style, filling its parent, with colors for a dark backdrop. */
   overlay?: OverlayStyle;
 }) {
-  const lineWidth = overlay?.lineWidth ?? 2;
   const overlaid = !!overlay;
   const [appearance] = useAppearance();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1084,13 +1145,13 @@ function ScriptPreview({ script, reverse, videoRef, notice, overlay }: {
   }, [script, reverse, appearance, width, videoRef, overlaid, height, lineWidth]);
 
   return (
-    <Box position="relative" flexShrink="0" height={overlay ? "100%" : undefined}>
+    <Box position="relative" flexShrink="0" height={cssHeight === undefined ? "100%" : undefined}>
       <canvas
         ref={canvasRef}
         style={{
           display: "block",
           width: "100%",
-          height: overlay ? "100%" : PREVIEW_HEIGHT,
+          height: cssHeight ?? "100%",
           borderRadius: 6,
           background: overlay ? `rgba(0,0,0,${overlay.background / 100})` : "var(--gray-a2)",
         }}
