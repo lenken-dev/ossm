@@ -43,6 +43,9 @@ interface Job {
   /** Coalescing key of a setting write (`set:speed:`); its text is replaced while pending. */
   key?: string;
   text: string;
+  /** Appended to the write's log line. */
+  note?: string;
+  level?: "log" | "warn";
   queued: number;
   run: (job: Job) => Promise<unknown>;
   promise: Promise<unknown>;
@@ -152,53 +155,58 @@ export class Ossm {
    * Write a command with response, then read and log the reply. Resolves to
    * the reply (`ok:<cmd>` / `fail:<cmd>`), or `undefined` when the write
    * failed. Pending writes of the same setting (`set:<name>:`) are coalesced:
-   * the latest value wins and its callers share the result.
+   * the latest value wins and its callers share the result. `note` is
+   * appended to the write's log line.
    */
-  command(text: string): Promise<string | undefined> {
+  command(text: string, note?: string): Promise<string | undefined> {
     const key = text.match(/^set:[^:]+:/)?.[0];
     const pending = key && this.queue.find((job) => job.key === key);
     if (pending) {
       pending.text = text;
       return pending.promise as Promise<string | undefined>;
     }
-    return this.enqueue(text, async (job) => {
+    return this.enqueue({ text, key, note }, async (job) => {
       if (!(await this.write(job, true))) return undefined;
       const reply = decode(await this.commandChar.readValue());
       log(`← ${reply}`, reply.startsWith("fail:") ? "warn" : "log");
       return reply;
-    }, key).catch(() => undefined);
+    }).catch(() => undefined);
   }
 
   /**
    * Stream a point (`stream:<position>:<duration ms>`) without response.
    * Position is 0 (deep) to 100 (shallow). Resolves to whether it was written.
+   * `note` is appended to the write's log line, logged at `level`.
    */
-  streamPoint(position: number, durationMs: number): Promise<boolean> {
+  streamPoint(position: number, durationMs: number, note?: string, level?: "log" | "warn"): Promise<boolean> {
     const text = `stream:${Math.round(position * 10) / 10}:${Math.round(durationMs)}`;
-    return this.enqueue(text, (job) => this.write(job, false)).catch(() => false);
+    return this.enqueue({ text, note, level }, (job) => this.write(job, false)).catch(() => false);
   }
 
   readPatterns(): Promise<PatternInfo[]> {
-    return this.enqueue("read patterns", async () =>
+    return this.enqueue({ text: "read patterns" }, async () =>
       JSON.parse(decode(await this.patternListChar.readValue())) as PatternInfo[],
     );
   }
 
   readDescription(idx: number): Promise<string> {
-    return this.enqueue(`read description ${idx}`, async () => {
+    return this.enqueue({ text: `read description ${idx}` }, async () => {
       await this.patternDescriptionChar.writeValueWithResponse(encoder.encode(String(idx)));
       return decode(await this.patternDescriptionChar.readValue());
     });
   }
 
-  private enqueue<T>(text: string, run: (job: Job) => Promise<T>, key?: string): Promise<T> {
+  private enqueue<T>(
+    job: Pick<Job, "text" | "key" | "note" | "level">,
+    run: (job: Job) => Promise<T>,
+  ): Promise<T> {
     let resolve!: Job["resolve"];
     let reject!: Job["reject"];
     const promise = new Promise((res, rej) => {
       resolve = res;
       reject = rej;
     });
-    this.queue.push({ key, text, queued: performance.now(), run, promise, resolve, reject });
+    this.queue.push({ ...job, queued: performance.now(), run, promise, resolve, reject });
     if (this.queue.length > QUEUE_WARN) log(`write queue: ${this.queue.length} pending`, "warn");
     void this.pump();
     return promise as Promise<T>;
@@ -230,7 +238,11 @@ export class Ossm {
       return false;
     }
     const end = performance.now();
-    log(`→ ${job.text} (queued ${(start - job.queued).toFixed(1)} ms, write ${(end - start).toFixed(1)} ms)`);
+    const note = job.note ? ` ${job.note}` : "";
+    log(
+      `→ ${job.text}${note} (queued ${(start - job.queued).toFixed(1)} ms, write ${(end - start).toFixed(1)} ms)`,
+      job.level,
+    );
     return true;
   }
 

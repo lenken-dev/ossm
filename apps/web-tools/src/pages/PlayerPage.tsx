@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject, type SyntheticEvent } from "react";
 import { Box, Button, Callout, Flex, SegmentedControl, Select, Separator, Switch, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon, HomeIcon, StopIcon, UploadIcon } from "@radix-ui/react-icons";
 import { bisectLeft } from "d3";
 import { useAppearance } from "../hooks/useAppearance";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm, type Ossm, type OssmState, type PatternInfo } from "../player/ble";
+import { FunscriptStream } from "../player/stream";
 import { parseFunscript, type Funscript } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
@@ -18,6 +19,19 @@ const PENDING_MS = 1500;
 const PREVIEW_HEIGHT = 140;
 const PREVIEW_BEFORE_MS = 2000;
 const PREVIEW_AFTER_MS = 8000;
+
+/** Send loop period in ms. */
+const TICK_MS = 10;
+
+/** Why the video may not play in funscript mode, or `null` when it may. */
+function blockReason(ossm: Ossm | null, state: OssmState | null): string | null {
+  if (!ossm || !state) return "not connected";
+  if (ossm.lookahead === 0) return "This firmware cannot stream";
+  if (state.state === "homing") return "Homing…";
+  if (state.state !== "ready" && state.state !== "streaming") return "Home the machine first";
+  if (state.speed <= 0) return "Raise speed to start";
+  return null;
+}
 
 export default function PlayerPage() {
   const [mode, setMode] = usePersistedState<PlayerMode>("ossm:playerMode", "pattern");
@@ -35,6 +49,68 @@ export default function PlayerPage() {
   const [reverse, setReverse] = useState(false);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
   const [offset, setOffset] = usePersistedState("ossm:playerOffset", 0);
+  const stream = useRef(new FunscriptStream());
+  const blocked = blockReason(ossm, state);
+
+  /** Send `stream:end` if a stream is open. */
+  const endStream = (reason: string) => {
+    if (!stream.current.end()) return;
+    const media = (videoRef.current?.currentTime ?? 0) * 1000 + offset;
+    void ossm?.command("stream:end", `(${reason}, media=${Math.round(media)})`);
+  };
+
+  // Entering funscript mode (or connecting in it) sends `go:streaming`. A
+  // stream left open in pattern mode is ended first, so the next one starts
+  // fresh.
+  useEffect(() => {
+    if (mode !== "funscript" || !ossm || ossm.lookahead === 0) return;
+    endStream("mode");
+    void ossm.command("go:streaming");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, ossm]);
+
+  // A disconnect closes the stream (nothing to send it to) and pauses the video.
+  useEffect(
+    () =>
+      ossm?.onDisconnect(() => {
+        stream.current.end();
+        videoRef.current?.pause();
+      }),
+    [ossm],
+  );
+
+  // Pause when the machine stops being ready while playing.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (mode !== "funscript" || !blocked || !video || video.paused) return;
+    log(`paused: ${blocked}`);
+    video.pause();
+  }, [mode, blocked]);
+
+  // The send loop. It keeps running, throttled, in background tabs. A stream
+  // starts on the first tick while the video actually plays, so after an end
+  // that does not stop playback (rate, offset, script) the next one starts
+  // right away.
+  useEffect(() => {
+    if (mode !== "funscript" || paused || blocked || !ossm || !script) return;
+    const id = setInterval(() => {
+      const video = videoRef.current;
+      if (!video || video.seeking || video.readyState < video.HAVE_FUTURE_DATA || video.playbackRate <= 0) return;
+      const media = video.currentTime * 1000 + offset;
+      for (const p of stream.current.tick(script, media, video.playbackRate, reverse, ossm.lookahead)) {
+        const late = p.lateBy > 0 ? ` late by ${Math.round(p.lateBy)} ms` : "";
+        const note = `#${p.index} at=${p.at} media=${Math.round(p.media)} ahead=${p.ahead} ${p.first ? "first" : "chained"}${late}`;
+        void ossm.streamPoint(p.position, p.duration, note, late ? "warn" : "log");
+      }
+    }, TICK_MS);
+    return () => clearInterval(id);
+  }, [mode, paused, blocked, ossm, script, offset, reverse]);
+
+  // Video events that matter; in funscript mode all but `playing` end the stream.
+  const videoEvent = (e: SyntheticEvent<HTMLVideoElement>) => {
+    log(`video ${e.type}`);
+    if (mode === "funscript" && e.type !== "playing") endStream(e.type);
+  };
 
   useEffect(() => {
     if (!videoFile) return;
@@ -48,6 +124,7 @@ export default function PlayerPage() {
     try {
       const parsed = parseFunscript(file.name, await file.text());
       if (generation !== scriptGeneration.current) return;
+      endStream("script");
       setScript(parsed);
       setScriptError(null);
     } catch (e) {
@@ -95,8 +172,11 @@ export default function PlayerPage() {
             </Flex>
             <Button
               variant="soft"
-              disabled={state?.state === "homing"}
-              onClick={() => void ossm.command("go:home")}
+              disabled={state?.state === "homing" || !paused}
+              onClick={() => {
+                endStream("home");
+                void ossm.command("go:home");
+              }}
             >
               <HomeIcon /> Home
             </Button>
@@ -117,7 +197,7 @@ export default function PlayerPage() {
         {mode === "pattern" && ossm && state && (
           <>
             <Separator size="4" />
-            <PatternControls ossm={ossm} state={state} />
+            <PatternControls ossm={ossm} state={state} endStream={endStream} />
           </>
         )}
         {mode === "funscript" && (
@@ -142,6 +222,9 @@ export default function PlayerPage() {
                 <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} />
                 <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
                 <SettingSlider ossm={ossm} setting="jerk" label="Jerk" value={state.jerk} />
+                <Text size="2" color="gray">
+                  {blocked ?? (state.state === "ready" ? "Ready" : "Streaming")}
+                </Text>
               </>
             )}
             <LabeledSlider
@@ -151,7 +234,10 @@ export default function PlayerPage() {
               min={-500}
               max={500}
               step={5}
-              onChange={setOffset}
+              onChange={(v) => {
+                endStream("offset");
+                setOffset(v);
+              }}
             />
             <Text as="label" size="2" weight="medium">
               <Flex align="center" justify="between" gap="2">
@@ -190,9 +276,26 @@ export default function PlayerPage() {
             ref={videoRef}
             src={videoUrl}
             controls
-            onPlay={syncPaused}
-            onPause={syncPaused}
-            onEmptied={syncPaused}
+            onPlay={(e) => {
+              syncPaused(e);
+              if (mode === "funscript" && blocked) {
+                log(`play blocked: ${blocked}`);
+                e.currentTarget.pause();
+              }
+            }}
+            onPause={(e) => {
+              syncPaused(e);
+              videoEvent(e);
+            }}
+            onEmptied={(e) => {
+              syncPaused(e);
+              videoEvent(e);
+            }}
+            onPlaying={videoEvent}
+            onSeeking={videoEvent}
+            onWaiting={videoEvent}
+            onRateChange={videoEvent}
+            onEnded={videoEvent}
             style={{ width: "100%", minHeight: 0, flex: 1, background: "black" }}
           />
         </>
@@ -214,7 +317,12 @@ export default function PlayerPage() {
 }
 
 /** Pattern mode: play, adjust and stop the device's patterns. */
-function PatternControls({ ossm, state }: { ossm: Ossm; state: OssmState }) {
+function PatternControls({ ossm, state, endStream }: {
+  ossm: Ossm;
+  state: OssmState;
+  /** Ends a stream left open by funscript mode before a pattern command. */
+  endStream: (reason: string) => void;
+}) {
   const [patterns, setPatterns] = useState<PatternInfo[]>([]);
   const [description, setDescription] = useState("");
   const active = state.state === "playing" || state.state === "paused";
@@ -246,7 +354,10 @@ function PatternControls({ ossm, state }: { ossm: Ossm; state: OssmState }) {
         <Text size="2" weight="medium" mb="1" as="div">Pattern</Text>
         <Select.Root
           value={selected == null ? "" : String(selected)}
-          onValueChange={(v) => void ossm.command(`set:pattern:${v}`)}
+          onValueChange={(v) => {
+            endStream("pattern");
+            void ossm.command(`set:pattern:${v}`);
+          }}
         >
           <Select.Trigger placeholder="Choose a pattern" style={{ width: "100%" }} />
           <Select.Content>
@@ -261,7 +372,14 @@ function PatternControls({ ossm, state }: { ossm: Ossm; state: OssmState }) {
       <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} />
       <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
       <SettingSlider ossm={ossm} setting="sensation" label="Sensation" value={state.sensation} />
-      <Button variant="soft" color="red" onClick={() => void ossm.command("go:menu")}>
+      <Button
+        variant="soft"
+        color="red"
+        onClick={() => {
+          endStream("stop");
+          void ossm.command("go:menu");
+        }}
+      >
         <StopIcon /> Stop
       </Button>
     </>
