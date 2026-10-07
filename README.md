@@ -79,6 +79,8 @@ Blinking red repeats a group of blinks separated by a longer pause:
 | 1 | The motor did not respond during startup. Check motor power and wiring, then restart. |
 | 2 | The motor was configured for this firmware. Power cycle the motor and the board. |
 
+On boards with a single-color user LED, such as the Seeed XIAO ESP32S3, the LED stays off during normal operation. It blinks the same codes, and stays on steadily after an error.
+
 ## Safety and disclaimers
 
 While every precaution has been taken to make this software as safe as possible, the authors and contributors accept no responsibility or liability for any damage, injury, or harm that may result from the use or misuse of this software. This software is provided "as is", without warranty of any kind, express or implied. Use at your own risk.
