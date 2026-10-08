@@ -59,15 +59,13 @@ const decode = (value: DataView) => decoder.decode(value);
  * run one at a time through a queue, since Web Bluetooth rejects concurrent
  * ones.
  */
-export class Ossm {
+export class Ossm extends EventTarget {
   /** Last state read or notified. */
   state: OssmState | null = null;
   private stateText = "";
   private queue: Job[] = [];
   private busy = false;
   private userDisconnect = false;
-  private stateListeners = new Set<(state: OssmState) => void>();
-  private disconnectListeners = new Set<() => void>();
 
   private constructor(
     readonly device: BluetoothDevice,
@@ -78,6 +76,7 @@ export class Ossm {
     private patternListChar: BluetoothRemoteGATTCharacteristic,
     private patternDescriptionChar: BluetoothRemoteGATTCharacteristic,
   ) {
+    super();
     device.addEventListener("gattserverdisconnected", this.handleDisconnected);
     stateChar.addEventListener("characteristicvaluechanged", () => {
       if (stateChar.value) this.handleState(decode(stateChar.value));
@@ -134,18 +133,6 @@ export class Ossm {
   disconnect() {
     this.userDisconnect = true;
     this.device.gatt?.disconnect();
-  }
-
-  /** Subscribe to state notifications; returns the unsubscribe function. */
-  onState(listener: (state: OssmState) => void) {
-    this.stateListeners.add(listener);
-    return () => void this.stateListeners.delete(listener);
-  }
-
-  /** Called once the connection is gone, whoever ended it. */
-  onDisconnect(listener: () => void) {
-    this.disconnectListeners.add(listener);
-    return () => void this.disconnectListeners.delete(listener);
   }
 
   /**
@@ -250,14 +237,14 @@ export class Ossm {
       return;
     }
     log(`← state ${text}`);
-    for (const listener of this.stateListeners) listener(this.state);
+    this.dispatchEvent(new Event("state"));
   }
 
   private handleDisconnected = () => {
     this.device.removeEventListener("gattserverdisconnected", this.handleDisconnected);
     log(`disconnected by the ${this.userDisconnect ? "user" : "device"}`);
     for (const job of this.queue.splice(0)) job.reject(new Error("Disconnected"));
-    for (const listener of this.disconnectListeners) listener();
+    this.dispatchEvent(new Event("disconnect"));
   };
 }
 
@@ -292,8 +279,8 @@ export function useOssm() {
         return;
       }
       ossmRef.current = next;
-      next.onState(setState);
-      next.onDisconnect(() => {
+      next.addEventListener("state", () => setState(next.state));
+      next.addEventListener("disconnect", () => {
         ossmRef.current = null;
         setOssm(null);
         setState(null);
