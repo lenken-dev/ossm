@@ -53,8 +53,8 @@ A fully stationary condition reached after suspending motion, with the intent to
 _Avoid_: Pause requested, stopping
 
 **Jerk setting**:
-A motion adjustment from zero to one selecting a smoother or choppier profile within the configured jerk limit.
-_Avoid_: Sensation, physical jerk value
+A motion adjustment from zero to one selecting a smoother or choppier profile within the configured jerk limit. While streaming, it follows the sensation setting.
+_Avoid_: Physical jerk value
 
 **Motion phase**:
 The motion controller's operational condition: disabled, enabled, ready, moving, stopping, or paused.
@@ -106,7 +106,7 @@ A target location within the stroke range, expressed as a fraction with zero at 
 _Avoid_: Machine position
 
 **Sensation**:
-A pattern-specific adjustment from minus one to one whose effect is defined by the selected pattern.
+A pattern-specific adjustment from minus one to one whose effect is defined by the selected pattern. While streaming, it sets the jerk setting.
 _Avoid_: Speed, torque
 
 **Playback state**:
