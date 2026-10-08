@@ -154,7 +154,7 @@ impl<'a, B: Board> MotionController<'a, B> {
             return;
         }
         match self.state {
-            MotionState::Moving => self.stop_stream(),
+            MotionState::Moving => self.stop(StopReason::Stream),
             // Already stopping; finish as a stream termination.
             MotionState::Stopping(StopReason::Pause) => {
                 self.state = MotionState::Stopping(StopReason::Stream);
@@ -336,12 +336,6 @@ impl<'a, B: Board> MotionController<'a, B> {
             max_jerk: self.limits.max_jerk_mm_s3,
         };
         self.stream.request_move(goal, limits)
-    }
-
-    /// Bring streaming motion to a controlled stop.
-    fn stop_stream(&mut self) {
-        self.stream.request_stop();
-        self.transition(MotionState::Stopping(StopReason::Stream));
     }
 
     /// Advance a streaming trajectory, recovering from calculation failures.
