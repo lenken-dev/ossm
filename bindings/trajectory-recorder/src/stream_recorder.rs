@@ -1,12 +1,14 @@
-use core::convert::Infallible;
 use core::pin::pin;
 use core::task::{Context, Poll, Waker};
 
 use alloc::vec::Vec;
 
 use ossm::{
-    Board, MotionCommand, MotionController, MotionLimits, MotionPhase, MotionReceiver, MotionSender,
+    MechanicalConfig, MotionCommand, MotionController, MotionLimits, MotionPhase, MotionReceiver,
+    MotionSender,
 };
+use sim_board::SimBoard;
+use sim_motor::SimMotor;
 use stream_engine::{StreamInput, StreamSequencer};
 
 use crate::recorder::Sample;
@@ -15,49 +17,17 @@ use crate::recorder::Sample;
 /// move before giving up.
 const MAX_SETUP_TICKS: usize = 100_000;
 
-/// A board that follows every command at once.
-struct RecorderBoard {
-    position_mm: f64,
-}
-
-impl Board for RecorderBoard {
-    type Error = Infallible;
-
-    async fn enable(&mut self) -> Result<(), Infallible> {
-        Ok(())
-    }
-
-    async fn disable(&mut self) -> Result<(), Infallible> {
-        Ok(())
-    }
-
-    async fn home(&mut self) -> Result<(), Infallible> {
-        Ok(())
-    }
-
-    async fn set_position(&mut self, position_mm: f64) -> Result<(), Infallible> {
-        self.position_mm = position_mm;
-        Ok(())
-    }
-
-    async fn set_torque(&mut self, _fraction: f64) -> Result<(), Infallible> {
-        Ok(())
-    }
-
-    async fn position_mm(&mut self) -> Result<f64, Infallible> {
-        Ok(self.position_mm)
-    }
-
-    async fn tick(&mut self) -> Result<(), Infallible> {
-        Ok(())
-    }
-}
+static MECHANICAL: MechanicalConfig = MechanicalConfig {
+    pulley_teeth: 20,
+    belt_pitch_mm: 2.0,
+    reverse_direction: false,
+};
 
 /// Records streamed motion by running points through a [`StreamSequencer`]
 /// and the real [`MotionController`], polled synchronously once per
 /// controller tick.
 pub struct StreamRecorder {
-    controller: MotionController<'static, RecorderBoard>,
+    controller: MotionController<'static, SimBoard>,
     motion: MotionSender,
     limits: MotionLimits,
 }
@@ -65,9 +35,7 @@ pub struct StreamRecorder {
 impl StreamRecorder {
     pub fn new(receiver: MotionReceiver, motion: MotionSender, limits: MotionLimits) -> Self {
         let tick_secs = f64::from(StreamSequencer::TICK_MS) / 1000.0;
-        let board = RecorderBoard {
-            position_mm: limits.min_position_mm,
-        };
+        let board = SimBoard::new(SimMotor::new(), &MECHANICAL);
         Self {
             controller: receiver.into_controller(board, limits.clone(), tick_secs),
             motion,
@@ -180,7 +148,7 @@ impl StreamRecorder {
 
 /// Poll `future` to completion, updating the controller between polls.
 fn drive<F: Future>(
-    controller: &mut MotionController<'static, RecorderBoard>,
+    controller: &mut MotionController<'static, SimBoard>,
     future: F,
 ) -> F::Output {
     let mut future = pin!(future);
@@ -194,7 +162,7 @@ fn drive<F: Future>(
     panic!("motion controller did not settle");
 }
 
-fn update(controller: &mut MotionController<'static, RecorderBoard>) {
+fn update(controller: &mut MotionController<'static, SimBoard>) {
     let mut future = pin!(controller.update());
     let mut cx = Context::from_waker(Waker::noop());
     // The recorder board completes every call at once, so an update never

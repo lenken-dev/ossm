@@ -520,6 +520,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "sim-board"
+version = "0.1.0"
+dependencies = [
+ "ossm",
+ "sim-motor",
+]
+
+[[package]]
+name = "sim-motor"
+version = "0.1.0"
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -598,6 +610,8 @@ dependencies = [
  "embedded-hal-async",
  "ossm",
  "pattern-engine",
+ "sim-board",
+ "sim-motor",
  "static_cell",
  "stream-engine",
  "wasm-bindgen",
