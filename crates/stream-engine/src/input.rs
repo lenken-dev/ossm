@@ -1,4 +1,5 @@
 use crate::StrokeRange;
+use crate::range::unit;
 
 /// User settings applied to streamed motion.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,18 +29,11 @@ impl StreamInput {
 
     /// All settings clamped to 0.0–1.0; non-finite values become 0.0.
     pub fn clamped(self) -> Self {
-        let clean = |value: f64| {
-            if value.is_finite() {
-                value.clamp(0.0, 1.0)
-            } else {
-                0.0
-            }
-        };
         Self {
-            depth: clean(self.depth),
-            stroke: clean(self.stroke),
-            velocity: clean(self.velocity),
-            jerk: clean(self.jerk),
+            depth: unit(self.depth),
+            stroke: unit(self.stroke),
+            velocity: unit(self.velocity),
+            jerk: unit(self.jerk),
         }
     }
 
