@@ -1,6 +1,3 @@
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::watch::Watch;
-
 use crate::StrokeRange;
 
 /// User settings applied to streamed motion.
@@ -60,5 +57,3 @@ impl Default for StreamInput {
         Self::DEFAULT
     }
 }
-
-pub(crate) type SharedStreamInput = Watch<CriticalSectionRawMutex, StreamInput, 1>;
