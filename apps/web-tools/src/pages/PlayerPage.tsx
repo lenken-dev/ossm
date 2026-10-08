@@ -55,27 +55,22 @@ const DEFAULT_OVERLAY: OverlayStyle = { x: 0, y: 0.7, width: 1, height: 0.18, li
 const OVERLAY_MIN_WIDTH = 120;
 const OVERLAY_MIN_HEIGHT = 60;
 
-/** Resize handles of the graph over the video, by the edges they move: corners and edges. */
-const RESIZE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+/** Resize handles of the graph over the video, by the corner they move. */
+const RESIZE_HANDLES = ["nw", "ne", "se", "sw"];
 const CORNER_HANDLE = 24;
-const EDGE_HANDLE = 40;
-/** Side length in px from which an edge handle fits between the corner handles. */
-const EDGE_HANDLE_ROOM = 2 * CORNER_HANDLE + EDGE_HANDLE + 16;
 
-/** Where a resize handle sits and how it looks: an L in a corner, a bar along an edge. */
+/** Where a resize handle sits and how it looks: an L in its corner. */
 function handleStyle(handle: string): CSSProperties {
   const border = "4px solid white";
-  const corner = handle.length === 2;
-  const across = 12;
   return {
     position: "absolute",
-    width: corner ? CORNER_HANDLE : "ns".includes(handle) ? EDGE_HANDLE : across,
-    height: corner ? CORNER_HANDLE : "ns".includes(handle) ? across : EDGE_HANDLE,
-    borderRadius: corner ? 6 : undefined,
+    width: CORNER_HANDLE,
+    height: CORNER_HANDLE,
+    borderRadius: 6,
     cursor: `${handle}-resize`,
     filter: "drop-shadow(0 0 1px black) drop-shadow(0 0 2px black)",
-    ...(handle.includes("n") ? { top: 0, borderTop: border } : handle.includes("s") ? { bottom: 0, borderBottom: border } : { top: `calc(50% - ${EDGE_HANDLE / 2}px)` }),
-    ...(handle.includes("w") ? { left: 0, borderLeft: border } : handle.includes("e") ? { right: 0, borderRight: border } : { left: `calc(50% - ${EDGE_HANDLE / 2}px)` }),
+    ...(handle.includes("n") ? { top: 0, borderTop: border } : { bottom: 0, borderBottom: border }),
+    ...(handle.includes("w") ? { left: 0, borderLeft: border } : { right: 0, borderRight: border }),
   };
 }
 
@@ -170,14 +165,6 @@ export default function PlayerPage() {
   const [arranging, setArranging] = useState(false);
   /** The video area, which the graph's position and size are fractions of. */
   const stageRef = useRef<HTMLDivElement>(null);
-
-  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    if (!arranging || !stageRef.current) return;
-    const observer = new ResizeObserver(([entry]) => setStageSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
-    observer.observe(stageRef.current);
-    return () => observer.disconnect();
-  }, [arranging, videoUrl]);
 
   /**
    * Drag `edges` (some of "nsew") of the graph over the video with the pointer;
@@ -681,11 +668,7 @@ export default function PlayerPage() {
               >
                 <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
                 {arranging &&
-                  RESIZE_HANDLES.filter(
-                    (h) => h.length === 2 || ("ns".includes(h) ? overlay.width * stageSize.width : overlay.height * stageSize.height) >= EDGE_HANDLE_ROOM,
-                  ).map((h) => (
-                    <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />
-                  ))}
+                  RESIZE_HANDLES.map((h) => <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />)}
                 {/* Stops the pointer here, so pressing Done does not start a drag. */}
                 {arranging && (
                   <Box
