@@ -25,34 +25,15 @@ pub struct Point {
     pub duration_ms: u32,
 }
 
-/// Why a write could not be parsed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParseError {
-    /// Not UTF-8 text.
-    NotText,
-    /// No `:` between position and duration.
-    MissingSeparator,
-    /// The position is missing, not a number, or not finite.
-    Position,
-    /// The duration is missing or not a whole number of milliseconds.
-    Duration,
-    /// The setting is missing, not a number, or not finite.
-    Setting,
-}
-
 /// Parse a streamed point, `<position>:<duration ms>`.
 ///
 /// The position is a decimal number clamped to `0.0..=100.0`; the duration
 /// is an unsigned whole number.
-pub fn parse_point(bytes: &[u8]) -> Result<Point, ParseError> {
-    let text = text(bytes)?;
-    let (position, duration) = text.split_once(':').ok_or(ParseError::MissingSeparator)?;
-    let position = number(position).ok_or(ParseError::Position)?;
-    let duration_ms = duration
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| ParseError::Duration)?;
-    Ok(Point {
+pub fn parse_point(bytes: &[u8]) -> Option<Point> {
+    let (position, duration) = text(bytes)?.split_once(':')?;
+    let position = number(position)?;
+    let duration_ms = duration.trim().parse::<u32>().ok()?;
+    Some(Point {
         position: position.clamp(0.0, 100.0),
         duration_ms,
     })
@@ -60,9 +41,9 @@ pub fn parse_point(bytes: &[u8]) -> Result<Point, ParseError> {
 
 /// Parse a setting written as decimal percent text, returned as a fraction
 /// clamped to `0.0..=1.0`.
-pub fn parse_setting(bytes: &[u8]) -> Result<f64, ParseError> {
-    let value = number(text(bytes)?).ok_or(ParseError::Setting)?;
-    Ok((value / 100.0).clamp(0.0, 1.0))
+pub fn parse_setting(bytes: &[u8]) -> Option<f64> {
+    let value = number(text(bytes)?)?;
+    Some((value / 100.0).clamp(0.0, 1.0))
 }
 
 /// A fraction as a whole percent for reading back, rounded to nearest.
@@ -129,10 +110,10 @@ fn stroke_between(min: f64, max: f64, current: f64) -> f64 {
     }
 }
 
-fn text(bytes: &[u8]) -> Result<&str, ParseError> {
+fn text(bytes: &[u8]) -> Option<&str> {
     core::str::from_utf8(bytes)
+        .ok()
         .map(|text| text.trim_matches(|c: char| c.is_whitespace() || c == '\0'))
-        .map_err(|_| ParseError::NotText)
 }
 
 fn number(text: &str) -> Option<f64> {
@@ -158,14 +139,14 @@ mod tests {
     fn parses_points_as_the_player_sends_them() {
         assert_eq!(
             parse_point(b"50:1000"),
-            Ok(Point {
+            Some(Point {
                 position: 50.0,
                 duration_ms: 1000
             })
         );
         assert_eq!(
             parse_point(b"33.5:250"),
-            Ok(Point {
+            Some(Point {
                 position: 33.5,
                 duration_ms: 250
             })
@@ -174,7 +155,7 @@ mod tests {
 
     #[test]
     fn point_parsing_tolerates_whitespace_and_trailing_nul() {
-        let expected = Ok(Point {
+        let expected = Some(Point {
             position: 100.0,
             duration_ms: 2000,
         });
@@ -185,41 +166,41 @@ mod tests {
 
     #[test]
     fn point_positions_are_clamped() {
-        assert_eq!(parse_point(b"150:10").map(|p| p.position), Ok(100.0));
-        assert_eq!(parse_point(b"-5:10").map(|p| p.position), Ok(0.0));
+        assert_eq!(parse_point(b"150:10").map(|p| p.position), Some(100.0));
+        assert_eq!(parse_point(b"-5:10").map(|p| p.position), Some(0.0));
     }
 
     #[test]
     fn rejects_malformed_points() {
-        assert_eq!(parse_point(b""), Err(ParseError::MissingSeparator));
-        assert_eq!(parse_point(b"50"), Err(ParseError::MissingSeparator));
-        assert_eq!(parse_point(b":100"), Err(ParseError::Position));
-        assert_eq!(parse_point(b"abc:100"), Err(ParseError::Position));
-        assert_eq!(parse_point(b"NaN:100"), Err(ParseError::Position));
-        assert_eq!(parse_point(b"inf:100"), Err(ParseError::Position));
-        assert_eq!(parse_point(b"50:"), Err(ParseError::Duration));
-        assert_eq!(parse_point(b"50:-1"), Err(ParseError::Duration));
-        assert_eq!(parse_point(b"50:1.5"), Err(ParseError::Duration));
-        assert_eq!(parse_point(b"50:100:3"), Err(ParseError::Duration));
-        assert_eq!(parse_point(b"50:99999999999"), Err(ParseError::Duration));
-        assert_eq!(parse_point(&[0xff, b':', b'1']), Err(ParseError::NotText));
+        assert!(parse_point(b"").is_none());
+        assert!(parse_point(b"50").is_none());
+        assert!(parse_point(b":100").is_none());
+        assert!(parse_point(b"abc:100").is_none());
+        assert!(parse_point(b"NaN:100").is_none());
+        assert!(parse_point(b"inf:100").is_none());
+        assert!(parse_point(b"50:").is_none());
+        assert!(parse_point(b"50:-1").is_none());
+        assert!(parse_point(b"50:1.5").is_none());
+        assert!(parse_point(b"50:100:3").is_none());
+        assert!(parse_point(b"50:99999999999").is_none());
+        assert!(parse_point(&[0xff, b':', b'1']).is_none());
     }
 
     #[test]
     fn parses_settings_as_fractions() {
-        assert_eq!(parse_setting(b"42"), Ok(0.42));
-        assert_eq!(parse_setting(b" 100\n\0"), Ok(1.0));
-        assert_eq!(parse_setting(b"12.5"), Ok(0.125));
-        assert_eq!(parse_setting(b"150"), Ok(1.0));
-        assert_eq!(parse_setting(b"-3"), Ok(0.0));
+        assert_eq!(parse_setting(b"42"), Some(0.42));
+        assert_eq!(parse_setting(b" 100\n\0"), Some(1.0));
+        assert_eq!(parse_setting(b"12.5"), Some(0.125));
+        assert_eq!(parse_setting(b"150"), Some(1.0));
+        assert_eq!(parse_setting(b"-3"), Some(0.0));
     }
 
     #[test]
     fn rejects_malformed_settings() {
-        assert_eq!(parse_setting(b""), Err(ParseError::Setting));
-        assert_eq!(parse_setting(b"fast"), Err(ParseError::Setting));
-        assert_eq!(parse_setting(b"NaN"), Err(ParseError::Setting));
-        assert_eq!(parse_setting(&[0xc3]), Err(ParseError::NotText));
+        assert!(parse_setting(b"").is_none());
+        assert!(parse_setting(b"fast").is_none());
+        assert!(parse_setting(b"NaN").is_none());
+        assert!(parse_setting(&[0xc3]).is_none());
     }
 
     #[test]
