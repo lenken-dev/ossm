@@ -9,6 +9,7 @@ import {
   Separator,
   Text,
 } from "@radix-ui/themes";
+import { utcTicks } from "d3";
 import { ExclamationTriangleIcon, ReloadIcon, UploadIcon } from "@radix-ui/react-icons";
 import { type ChartOverlay, type ChartSeries } from "./Chart";
 import { LabeledSlider, UNIT_LABELS, getRecorder } from "./TrajectoryPanel";
@@ -330,18 +331,9 @@ export function useStreamCharts(
   }, [windowed, isAbsolute, units, rangeMm, minPosMm]);
 }
 
-const TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
-
-/** Time axis ticks on whole seconds or minutes, at most about eight. */
+/** Time axis ticks on d3's time steps, about eight of them. */
 export function timeTicks(min: number, max: number): number[] {
-  const span = max - min;
-  const step = TICK_STEPS.find((s) => span / s <= 8) ?? TICK_STEPS[TICK_STEPS.length - 1];
-  const ticks: number[] = [];
-  for (let k = Math.ceil(min / step); k * step <= max; k++) {
-    // Rounded so sub-second steps do not accumulate float noise.
-    ticks.push(Math.round(k * step * 10) / 10);
-  }
-  return ticks;
+  return utcTicks(new Date(min * 1000), new Date(max * 1000), 8).map((d) => d.getTime() / 1000);
 }
 
 /** Format script time as `12.5s` or `3:07.5`. */
