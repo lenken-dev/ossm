@@ -183,16 +183,20 @@ impl Modes<'_> {
         }
     }
 
-    /// Apply the pattern input to the stream. Jerk keeps its default.
+    /// Apply the pattern input to the stream. Sensation (-1.0..1.0) sets
+    /// the jerk setting (0.0..1.0), as OSSM-Lite reuses sensation for
+    /// streaming.
     fn sync_input(&self) {
         let pattern = self.patterns.input();
+        let jerk = (pattern.sensation + 1.0) / 2.0;
         let stream = self.stream.input();
-        if (pattern.depth, pattern.stroke, pattern.velocity)
-            != (stream.depth, stream.stroke, stream.velocity)
+        if (pattern.depth, pattern.stroke, pattern.velocity, jerk)
+            != (stream.depth, stream.stroke, stream.velocity, stream.jerk)
         {
             self.stream.set_depth(pattern.depth);
             self.stream.set_stroke(pattern.stroke);
             self.stream.set_speed(pattern.velocity);
+            self.stream.set_jerk(jerk);
         }
     }
 }

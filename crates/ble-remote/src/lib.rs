@@ -136,7 +136,7 @@ fn get_pattern_description(index: usize) -> String<MAX_PATTERN_LENGTH> {
 /// service, and the official OSSM one through `go:streaming` and
 /// `stream:<position>:<duration ms>` commands. Without a `stream`, the
 /// OSSM-Lite service is not advertised, streamed points are ignored,
-/// `go:streaming` and `set:jerk` fail, and the stream look-ahead reads `0`.
+/// `go:streaming` fails, and the stream look-ahead reads `0`.
 pub fn start(
     spawner: &Spawner,
     connector: BleConnector<'static>,
@@ -417,12 +417,7 @@ async fn state_notifications<P: PacketPool>(
         .subscribe()
         .expect("No state subscriber slots available");
     let mut heartbeat = Ticker::every(Duration::from_secs(1));
-    let mut old_state = (
-        EngineState::Idle,
-        PatternInput::DEFAULT,
-        false,
-        f64::NAN,
-    );
+    let mut old_state = (EngineState::Idle, PatternInput::DEFAULT, false);
     loop {
         let engine_state = match select(sub.next_message_pure(), heartbeat.next()).await {
             Either::First(state) => state,
@@ -431,8 +426,7 @@ async fn state_notifications<P: PacketPool>(
 
         let input = patterns.input();
         let streaming = is_streaming(stream);
-        let jerk = stream.map_or(0.0, |stream| stream.input().jerk);
-        let current = (engine_state, input, streaming, jerk);
+        let current = (engine_state, input, streaming);
         if old_state != current {
             let state_json = state_to_json(engine_state, &input, stream);
             debug!("Notify State: {}", state_json);
@@ -491,10 +485,9 @@ fn state_to_json(
     let depth = input.depth * 100.0;
     // Map internal -1.0..1.0 back to BLE protocol 0–100.
     let sensation = (input.sensation + 1.0) * 50.0;
-    let jerk = stream.map_or(0.0, |stream| stream.input().jerk * 100.0);
     let _ = write!(
         out,
-        r#"{{"state":"{state_str}","speed":{speed:.1},"stroke":{stroke:.1},"sensation":{sensation:.1},"depth":{depth:.1},"jerk":{jerk:.1},"buffer":0,"pattern":{idx},"patternName":"{pattern_name}"}}"#,
+        r#"{{"state":"{state_str}","speed":{speed:.1},"stroke":{stroke:.1},"sensation":{sensation:.1},"depth":{depth:.1},"buffer":0,"pattern":{idx},"patternName":"{pattern_name}"}}"#,
     );
     out
 }
@@ -558,13 +551,6 @@ fn process_command(
                                 "depth" => patterns.set_depth(normalized),
                                 // BLE sends 0–100; internal range is -1.0..1.0.
                                 "sensation" => patterns.set_sensation(normalized * 2.0 - 1.0),
-                                "jerk" => match stream {
-                                    Some(stream) => stream.set_jerk(normalized),
-                                    None => {
-                                        error!("Streaming unavailable");
-                                        fail = true;
-                                    }
-                                },
                                 _ => {
                                     error!("Invalid set command {}", action);
                                     fail = true;

@@ -235,7 +235,7 @@ export default function PlayerPage() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [speedLimit, setSpeedLimit] = usePersistedState("ossm:playerSpeedLimit", DEFAULT_SPEED_LIMIT, localStorage);
   const blocked = blockReason(ossm, state, configured, setupOpen);
-  /** Set up to play; only speed and jerk may change on the fly. */
+  /** Set up to play; only speed and sensation may change on the fly. */
   const ready = !!ossm && ossm.lookahead > 0 && isHomed(state) && configured;
 
   /** Send `stream:end` if a stream is open. */
@@ -532,7 +532,7 @@ export default function PlayerPage() {
                 <Button onClick={openSetup}>Set depth and stroke</Button>
               ) : <>
                 <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
-                <SettingSlider ossm={ossm} setting="jerk" label="Feel" value={state.jerk} ends={["Smooth", "Hard"]} />
+                <SettingSlider ossm={ossm} setting="sensation" label="Sensation" value={state.sensation} ends={["Smooth", "Hard"]} />
                 <Button variant="soft" onClick={openSetup}>
                   Depth {state.depth.toFixed(0)}% · Stroke {state.stroke.toFixed(0)}%
                 </Button>

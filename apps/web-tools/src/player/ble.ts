@@ -23,7 +23,6 @@ export interface OssmState {
   stroke: number;
   sensation: number;
   depth: number;
-  jerk: number;
   pattern: number;
   patternName: string;
 }
