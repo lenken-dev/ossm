@@ -79,10 +79,6 @@ impl StreamSequencer {
         }
     }
 
-    pub fn input(&self) -> StreamInput {
-        self.input
-    }
-
     /// Apply new settings (clamped, see [`StreamInput::clamped`]).
     ///
     /// A stroke range change re-requests the current or last target. A

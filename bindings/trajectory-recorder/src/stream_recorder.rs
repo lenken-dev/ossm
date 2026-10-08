@@ -100,7 +100,7 @@ impl StreamRecorder {
             if let Some(step) = sequencer.tick(now, position) {
                 step.apply(&self.motion);
             }
-            self.update();
+            update(&mut self.controller);
             samples.push(self.sample());
             now += tick_ms;
 
@@ -139,10 +139,6 @@ impl StreamRecorder {
         });
         // Nothing cancels it: the controller is ready and not streaming.
         let _ = drive(&mut self.controller, self.motion.await_motion());
-    }
-
-    fn update(&mut self) {
-        update(&mut self.controller);
     }
 }
 
