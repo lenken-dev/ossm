@@ -26,7 +26,7 @@ export interface Funscript {
 const MAX_AT_MS = 0xffff_ffff;
 
 /** Parse a .funscript file. Throws an `Error` with a readable message. */
-export function parseFunscript(name: string, text: string): Funscript {
+function parseFunscript(name: string, text: string): Funscript {
   let json: unknown;
   try {
     json = JSON.parse(text);
@@ -57,6 +57,15 @@ export function parseFunscript(name: string, text: string): Funscript {
     at: Uint32Array.from(unique, (a) => a.at),
     pos: Float64Array.from(unique, (a) => a.pos),
   };
+}
+
+/** Read and parse a .funscript file. Rejects with an `Error` naming the file. */
+export async function readFunscript(file: File): Promise<Funscript> {
+  try {
+    return parseFunscript(file.name, await file.text());
+  } catch (e) {
+    throw new Error(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 export function funscriptDuration(script: Funscript): number {
@@ -393,27 +402,16 @@ export function StreamSidebar({
   ...boxProps
 }: StreamSidebarProps) {
   const fileRef = useRef<HTMLInputElement>(null);
-  // Only the latest selected file may update the script or the error.
-  const loadGeneration = useRef(0);
-  // Reads still pending on unmount must not replace a later selection.
-  useEffect(() => () => void loadGeneration.current++, []);
   const [error, setError] = useState<string | null>(null);
   const isAbsolute = unitMode === "absolute";
 
   const loadFile = async (file: File) => {
-    const generation = ++loadGeneration.current;
-    let script: Funscript;
     try {
-      script = parseFunscript(file.name, await file.text());
+      onScriptChange(await readFunscript(file));
+      setError(null);
     } catch (e) {
-      if (generation === loadGeneration.current) {
-        setError(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      return;
+      setError((e as Error).message);
     }
-    if (generation !== loadGeneration.current) return;
-    onScriptChange(script);
-    setError(null);
   };
 
   return (
