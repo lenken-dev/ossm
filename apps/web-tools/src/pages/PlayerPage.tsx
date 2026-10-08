@@ -19,7 +19,7 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm, type Ossm, type OssmState, type PatternInfo } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
-import { parseFunscript, type Funscript } from "../StreamPanel";
+import { readFunscript, type Funscript } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 
@@ -221,8 +221,6 @@ export default function PlayerPage() {
   const syncPaused = (e: { currentTarget: HTMLMediaElement }) => setPaused(e.currentTarget.paused);
   const [script, setScript] = useState<Funscript | null>(null);
   const [scriptError, setScriptError] = useState<string | null>(null);
-  // Only the latest picked script may replace the script or the error.
-  const scriptGeneration = useRef(0);
   const [reverse, setReverse] = useState(false);
   const [simplified, setSimplified] = usePersistedState("ossm:playerSimplify", true, localStorage);
   /** The script as streamed and previewed. */
@@ -344,16 +342,13 @@ export default function PlayerPage() {
   };
 
   const loadScript = async (file: File) => {
-    const generation = ++scriptGeneration.current;
     try {
-      const parsed = parseFunscript(file.name, await file.text());
-      if (generation !== scriptGeneration.current) return;
+      const parsed = await readFunscript(file);
       endStream("script");
       setScript(parsed);
       setScriptError(null);
     } catch (e) {
-      if (generation !== scriptGeneration.current) return;
-      setScriptError(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+      setScriptError((e as Error).message);
     }
   };
 
