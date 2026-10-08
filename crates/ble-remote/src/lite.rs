@@ -100,11 +100,11 @@ impl LiteSession {
             return;
         }
         match lite::parse_setting(data) {
-            Ok(value) => {
+            Some(value) => {
                 info!("[lite] set {} {}", name, lite::setting_percent(value));
                 apply(self.patterns, value);
             }
-            Err(_) => session.invalid_write(data),
+            None => session.invalid_write(data),
         }
     }
 }

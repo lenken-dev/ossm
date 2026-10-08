@@ -94,7 +94,7 @@ impl StreamSession {
             self.invalid_write(data);
             return false;
         }
-        let Ok(point) = lite::parse_point(data) else {
+        let Some(point) = lite::parse_point(data) else {
             self.invalid_write(data);
             return false;
         };
