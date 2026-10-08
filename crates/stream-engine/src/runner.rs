@@ -175,8 +175,8 @@ impl StreamRunner {
         self.engine.input.try_get().unwrap_or(StreamInput::DEFAULT)
     }
 
-    /// Queue a point. Drops for a full queue are counted in the engine and
-    /// logged at 1, 2, 4, 8, ... per stream.
+    /// Queue a point. Drops for a full queue are logged at 1, 2, 4, 8, ...
+    /// per stream.
     fn push(&self, sequencer: &mut StreamSequencer, point: Point) {
         let pushed = if point.latest {
             sequencer.push_latest(point.received_ms, point.position, point.duration_ms)
@@ -186,7 +186,6 @@ impl StreamRunner {
         match pushed {
             Ok(()) => {}
             Err(PushError::QueueFull) => {
-                self.engine.dropped.fetch_add(1, Ordering::Relaxed);
                 let dropped = sequencer.stats().dropped;
                 if dropped.is_power_of_two() {
                     warn!("Stream queue full, point dropped ({dropped} so far)");
@@ -238,7 +237,6 @@ mod tests {
             sender.push(50.0, 100).unwrap();
         }
         assert_eq!(sender.push(50.0, 100), Err(PushError::QueueFull));
-        assert_eq!(sender.dropped(), 1);
 
         let mut sequencer = StreamSequencer::new(&MotionLimits::DEFAULT, StreamInput::DEFAULT);
         let point = Point {
@@ -251,7 +249,6 @@ mod tests {
             runner.push(&mut sequencer, point);
         }
         assert_eq!(sequencer.stats().dropped, 1);
-        assert_eq!(sender.dropped(), 2);
     }
 
     #[test]
