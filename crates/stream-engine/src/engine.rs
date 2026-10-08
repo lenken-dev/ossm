@@ -8,17 +8,20 @@ use crate::input::{SharedStreamInput, StreamInput};
 use crate::runner::StreamRunner;
 use crate::sender::StreamSender;
 
+/// A streamed point, stamped with its reception time.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Point {
+    pub(crate) received_ms: u64,
+    pub(crate) position: f64,
+    pub(crate) duration_ms: u32,
+    /// Replaces queued points (see
+    /// [`StreamPlanner::push_latest`](crate::StreamPlanner::push_latest)).
+    pub(crate) latest: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum EngineCommand {
-    /// A streamed point, stamped with its reception time.
-    Point {
-        received_ms: u64,
-        position: f64,
-        duration_ms: u32,
-        /// Replaces queued points (see
-        /// [`StreamPlanner::push_latest`](crate::StreamPlanner::push_latest)).
-        latest: bool,
-    },
+    Point(Point),
     Stop,
 }
 

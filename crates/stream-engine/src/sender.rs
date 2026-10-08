@@ -3,7 +3,7 @@ use core::sync::atomic::Ordering;
 use embassy_time::Instant;
 
 use crate::PushError;
-use crate::engine::{EngineCommand, StreamEngine};
+use crate::engine::{EngineCommand, Point, StreamEngine};
 use crate::input::StreamInput;
 
 /// Sender half of the stream engine.
@@ -49,12 +49,12 @@ impl StreamSender {
         }
         self.engine
             .commands
-            .try_send(EngineCommand::Point {
+            .try_send(EngineCommand::Point(Point {
                 received_ms: Instant::now().as_millis(),
                 position,
                 duration_ms,
                 latest,
-            })
+            }))
             .map_err(|_| PushError::QueueFull)
     }
 
