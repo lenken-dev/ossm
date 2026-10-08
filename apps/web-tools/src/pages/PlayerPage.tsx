@@ -259,14 +259,15 @@ export default function PlayerPage() {
   }, [setupOpen, ossm, state, speedLimit]);
 
   // A disconnect closes the stream (nothing to send it to) and pauses the video.
-  useEffect(
-    () =>
-      ossm?.onDisconnect(() => {
-        stream.current.end();
-        videoRef.current?.pause();
-      }),
-    [ossm],
-  );
+  useEffect(() => {
+    if (!ossm) return;
+    const onDisconnect = () => {
+      stream.current.end();
+      videoRef.current?.pause();
+    };
+    ossm.addEventListener("disconnect", onDisconnect);
+    return () => ossm.removeEventListener("disconnect", onDisconnect);
+  }, [ossm]);
 
   // The video plays on without the machine; the machine stops once it is blocked.
   useEffect(() => {
