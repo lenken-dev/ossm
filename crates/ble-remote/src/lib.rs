@@ -624,20 +624,13 @@ fn go_streaming(patterns: &PatternSender, stream: Option<&StreamSender>) -> bool
 /// followed by the command.
 fn respond(server: &Server<'_>, command: &str, fail: bool) {
     let mut response_str: String<MAX_COMMAND_LENGTH> = String::new();
-    if fail {
-        response_str.write_str("fail:").expect("Should always fit");
-        if response_str.write_str(command).is_err() {
-            response_str
-                .write_str("overflow")
-                .expect("Should always fit");
-        }
-    } else {
-        response_str.write_str("ok:").expect("Should always fit");
-        if response_str.write_str(command).is_err() {
-            response_str
-                .write_str("overflow")
-                .expect("Should always fit");
-        }
+    response_str
+        .write_str(if fail { "fail:" } else { "ok:" })
+        .expect("Should always fit");
+    if response_str.write_str(command).is_err() {
+        response_str
+            .write_str("overflow")
+            .expect("Should always fit");
     }
     if let Err(err) = server.set(&server.ossm_service.primary_command, &response_str) {
         error!("Failed to write the response to a set command {:?}", err);
