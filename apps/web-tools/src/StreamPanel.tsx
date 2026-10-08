@@ -419,7 +419,7 @@ export function StreamSidebar({
   return (
     <Box {...boxProps}>
       <Flex direction="column" gap="4">
-        <Heading size="4">Streaming Trajectory</Heading>
+        <Heading size="4">Funscript Trajectory</Heading>
         <Separator size="4" />
 
         <Flex direction="column" gap="2">

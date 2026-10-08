@@ -21,7 +21,7 @@ import {
 } from "../StreamPanel";
 import styles from "./GraphPage.module.css";
 
-type GraphMode = "pattern" | "stream";
+type GraphMode = "pattern" | "funscript";
 
 export default function GraphPage() {
   const [mode, setMode] = usePersistedState<GraphMode>("ossm:graphMode", "pattern");
@@ -36,12 +36,12 @@ export default function GraphPage() {
         style={{ width: "100%" }}
       >
         <SegmentedControl.Item value="pattern">Pattern</SegmentedControl.Item>
-        <SegmentedControl.Item value="stream">Streaming</SegmentedControl.Item>
+        <SegmentedControl.Item value="funscript">Funscript</SegmentedControl.Item>
       </SegmentedControl.Root>
     </Box>
   );
 
-  return mode === "stream" ? (
+  return mode === "funscript" ? (
     <StreamGraph modeSwitch={modeSwitch} script={script} onScriptChange={setScript} />
   ) : (
     <PatternGraph modeSwitch={modeSwitch} />
