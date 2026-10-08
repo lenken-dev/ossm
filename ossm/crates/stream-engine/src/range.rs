@@ -51,9 +51,3 @@ impl StrokeRange {
         self.machine_position(1.0 - stream_position / 100.0)
     }
 }
-
-impl Default for StrokeRange {
-    fn default() -> Self {
-        Self::FULL
-    }
-}
