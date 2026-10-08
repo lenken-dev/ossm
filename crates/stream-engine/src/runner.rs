@@ -5,7 +5,7 @@ use log::{info, warn};
 use ossm::{MotionLimits, MotionSender};
 
 use crate::PushError;
-use crate::engine::{EngineCommand, StreamEngine};
+use crate::engine::{EngineCommand, Point, StreamEngine};
 use crate::input::StreamInput;
 use crate::sequencer::StreamSequencer;
 
@@ -13,35 +13,6 @@ use crate::sequencer::StreamSequencer;
 /// [`StreamRunner::wait_for_stream`] and consumed by [`StreamRunner::run`].
 #[derive(Debug, Clone, Copy)]
 pub struct StreamStart(Point);
-
-/// A streamed point, stamped with its reception time.
-#[derive(Debug, Clone, Copy)]
-struct Point {
-    received_ms: u64,
-    position: f64,
-    duration_ms: u32,
-    latest: bool,
-}
-
-impl Point {
-    /// The point a command carries; `None` for a stop.
-    fn from_command(cmd: EngineCommand) -> Option<Self> {
-        match cmd {
-            EngineCommand::Point {
-                received_ms,
-                position,
-                duration_ms,
-                latest,
-            } => Some(Self {
-                received_ms,
-                position,
-                duration_ms,
-                latest,
-            }),
-            EngineCommand::Stop => None,
-        }
-    }
-}
 
 /// Marks streaming as active while it lives.
 ///
@@ -98,7 +69,7 @@ impl StreamRunner {
     pub async fn wait_for_stream(&self) -> StreamStart {
         self.engine.commands.clear();
         loop {
-            if let Some(point) = Point::from_command(self.engine.commands.receive().await) {
+            if let EngineCommand::Point(point) = self.engine.commands.receive().await {
                 return StreamStart(point);
             }
         }
@@ -136,9 +107,9 @@ impl StreamRunner {
 
         'stream: loop {
             while let Ok(cmd) = engine.commands.try_receive() {
-                match Point::from_command(cmd) {
-                    Some(point) => self.push(&mut sequencer, point),
-                    None => break 'stream,
+                match cmd {
+                    EngineCommand::Point(point) => self.push(&mut sequencer, point),
+                    EngineCommand::Stop => break 'stream,
                 }
             }
 
@@ -164,9 +135,9 @@ impl StreamRunner {
     /// sure no earlier stream keeps going.
     async fn next_stream(&self, motion: &MotionSender) -> StreamStart {
         loop {
-            match Point::from_command(self.engine.commands.receive().await) {
-                Some(point) => return StreamStart(point),
-                None => motion.end_stream().await,
+            match self.engine.commands.receive().await {
+                EngineCommand::Point(point) => return StreamStart(point),
+                EngineCommand::Stop => motion.end_stream().await,
             }
         }
     }
