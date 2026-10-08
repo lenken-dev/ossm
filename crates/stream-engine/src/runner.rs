@@ -86,22 +86,36 @@ impl StreamRunner {
     ///
     /// `limits` must be the motion controller's limits. The controller must
     /// be homed; streamed moves are ignored while it is disabled or paused.
-    pub async fn run(&self, start: StreamStart, motion: &MotionSender, limits: &MotionLimits) -> ! {
+    /// `input` supplies the settings, read when a stream starts and on every
+    /// tick.
+    pub async fn run(
+        &self,
+        start: StreamStart,
+        motion: &MotionSender,
+        limits: &MotionLimits,
+        input: impl Fn() -> StreamInput,
+    ) -> ! {
         let _active = self.activate();
         let mut start = start;
         loop {
-            self.stream(start, motion, limits).await;
+            self.stream(start, motion, limits, &input).await;
             start = self.next_stream(motion).await;
         }
     }
 
     /// Stream from `start` until a stop, then end the stream.
-    async fn stream(&self, start: StreamStart, motion: &MotionSender, limits: &MotionLimits) {
+    async fn stream(
+        &self,
+        start: StreamStart,
+        motion: &MotionSender,
+        limits: &MotionLimits,
+        input: impl Fn() -> StreamInput,
+    ) {
         let engine = self.engine;
         let tick = Duration::from_millis(u64::from(StreamSequencer::TICK_MS));
 
         info!("Stream started");
-        let mut sequencer = StreamSequencer::new(limits, self.input());
+        let mut sequencer = StreamSequencer::new(limits, input());
         self.push(&mut sequencer, start.0);
         let mut ticker = Ticker::every(tick);
 
@@ -113,7 +127,7 @@ impl StreamRunner {
                 }
             }
 
-            sequencer.set_input(self.input());
+            sequencer.set_input(input());
             let now = Instant::now().as_millis();
             let position = f64::from(motion.state().position);
             if let Some(step) = sequencer.tick(now, position) {
@@ -140,10 +154,6 @@ impl StreamRunner {
                 EngineCommand::Stop => motion.end_stream().await,
             }
         }
-    }
-
-    fn input(&self) -> StreamInput {
-        self.engine.input.try_get().unwrap_or(StreamInput::DEFAULT)
     }
 
     /// Queue a point. Drops for a full queue are logged at 1, 2, 4, 8, ...

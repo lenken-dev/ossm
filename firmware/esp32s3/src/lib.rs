@@ -152,7 +152,6 @@ pub async fn run(spawner: Spawner, config: Config) {
         limits: &limits,
         patterns,
         pattern_runner: runner,
-        stream,
         stream_runner,
     }
     .run()

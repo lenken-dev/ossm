@@ -28,21 +28,17 @@ use core::cell::Cell;
 use core::future::Future;
 
 use embassy_futures::select::{Either, select};
-use embassy_time::{Delay, Duration, Ticker, Timer};
+use embassy_time::{Delay, Timer};
 use log::{error, info, warn};
 use ossm::{MotionLimits, MotionPhase, MotionSender, StateResponse};
 use pattern_engine::{AnyPattern, EngineState, PatternRunner, PatternSender, PendingCommand};
-use stream_engine::{StreamRunner, StreamSender, StreamStart};
-
-/// How often the stream input follows the pattern input.
-const INPUT_SYNC_INTERVAL: Duration = Duration::from_millis(10);
+use stream_engine::{StreamInput, StreamRunner, StreamStart};
 
 pub struct Modes<'a> {
     pub motion: &'a MotionSender,
     pub limits: &'a MotionLimits,
     pub patterns: &'a PatternSender,
     pub pattern_runner: PatternRunner,
-    pub stream: &'a StreamSender,
     pub stream_runner: StreamRunner,
 }
 
@@ -169,35 +165,20 @@ impl Modes<'_> {
         } else {
             start
         };
-        self.sync_input();
-        let sync = async {
-            let mut ticker = Ticker::every(INPUT_SYNC_INTERVAL);
-            loop {
-                ticker.next().await;
-                self.sync_input();
+        // Sensation (-1.0..1.0) sets the jerk setting (0.0..1.0), as
+        // OSSM-Lite reuses sensation for streaming.
+        let input = || {
+            let pattern = self.patterns.input();
+            StreamInput {
+                depth: pattern.depth,
+                stroke: pattern.stroke,
+                velocity: pattern.velocity,
+                jerk: (pattern.sensation + 1.0) / 2.0,
             }
         };
-        let run = self.stream_runner.run(start, self.motion, self.limits);
-        match select(run, sync).await {
-            Either::First(never) | Either::Second(never) => never,
-        }
-    }
-
-    /// Apply the pattern input to the stream. Sensation (-1.0..1.0) sets
-    /// the jerk setting (0.0..1.0), as OSSM-Lite reuses sensation for
-    /// streaming.
-    fn sync_input(&self) {
-        let pattern = self.patterns.input();
-        let jerk = (pattern.sensation + 1.0) / 2.0;
-        let stream = self.stream.input();
-        if (pattern.depth, pattern.stroke, pattern.velocity, jerk)
-            != (stream.depth, stream.stroke, stream.velocity, stream.jerk)
-        {
-            self.stream.set_depth(pattern.depth);
-            self.stream.set_stroke(pattern.stroke);
-            self.stream.set_speed(pattern.velocity);
-            self.stream.set_jerk(jerk);
-        }
+        self.stream_runner
+            .run(start, self.motion, self.limits, input)
+            .await
     }
 }
 
