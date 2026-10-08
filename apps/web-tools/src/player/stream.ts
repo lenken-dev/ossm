@@ -1,24 +1,12 @@
 import { bisectRight } from "d3";
 import type { Funscript } from "../StreamPanel";
 
-/** A stream point to send, with what its log line needs. */
+/** A stream point to send. */
 export interface OutgoingPoint {
-  /** Action index. */
-  index: number;
   /** 0 (deep) to 100 (shallow), after Reverse. */
   position: number;
   /** ms */
   duration: number;
-  /** The action's script time, ms. */
-  at: number;
-  /** Media time (including the sync offset) at sending, ms. */
-  media: number;
-  /** Sent points beyond the current target, including this one. */
-  ahead: number;
-  /** The first point of a stream, timed from the media time. */
-  first: boolean;
-  /** How long its predecessor was already due, ms; 0 when on time. */
-  lateBy: number;
 }
 
 /**
@@ -51,27 +39,21 @@ export class FunscriptStream {
     const { at, pos } = script;
     const last = at.length - 1;
     const target = bisectRight(at, media);
-    const point = (i: number, duration: number, first: boolean, lateBy: number): OutgoingPoint => ({
-      index: i,
+    const point = (i: number, duration: number): OutgoingPoint => ({
       position: reverse ? 100 - pos[i] : pos[i],
       duration: Math.round(duration / rate),
-      at: at[i],
-      media,
-      ahead: i - target,
-      first,
-      lateBy,
     });
 
     const points: OutgoingPoint[] = [];
     if (this.next === null) {
       // After the last action nothing is sent; the machine rests at its last point.
       if (target > last) return points;
-      points.push(point(target, at[target] - media, true, 0));
+      points.push(point(target, at[target] - media));
       this.next = target + 1;
     }
     for (const until = Math.min(target + lookahead, last); this.next <= until; this.next++) {
       const i = this.next;
-      points.push(point(i, at[i] - at[i - 1], false, Math.max(0, media - at[i - 1])));
+      points.push(point(i, at[i] - at[i - 1]));
     }
     return points;
   }

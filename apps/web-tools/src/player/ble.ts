@@ -43,7 +43,6 @@ interface Job {
   text: string;
   /** Appended to the write's log line. */
   note?: string;
-  level?: "log" | "warn";
   queued: number;
   run: (job: Job) => Promise<unknown>;
   promise: Promise<unknown>;
@@ -174,11 +173,11 @@ export class Ossm {
   /**
    * Stream a point (`stream:<position>:<duration ms>`) without response.
    * Position is 0 (deep) to 100 (shallow). Resolves to whether it was written.
-   * `note` is appended to the write's log line, logged at `level`.
+   * `note` is appended to the write's log line.
    */
-  streamPoint(position: number, durationMs: number, note?: string, level?: "log" | "warn"): Promise<boolean> {
+  streamPoint(position: number, durationMs: number, note?: string): Promise<boolean> {
     const text = `stream:${Math.round(position * 10) / 10}:${Math.round(durationMs)}`;
-    return this.enqueue({ text, note, level }, (job) => this.write(job, false)).catch(() => false);
+    return this.enqueue({ text, note }, (job) => this.write(job, false)).catch(() => false);
   }
 
   readPatterns(): Promise<PatternInfo[]> {
@@ -195,7 +194,7 @@ export class Ossm {
   }
 
   private enqueue<T>(
-    job: Pick<Job, "text" | "key" | "note" | "level">,
+    job: Pick<Job, "text" | "key" | "note">,
     run: (job: Job) => Promise<T>,
   ): Promise<T> {
     let resolve!: Job["resolve"];
@@ -237,10 +236,7 @@ export class Ossm {
     }
     const end = performance.now();
     const note = job.note ? ` ${job.note}` : "";
-    log(
-      `→ ${job.text}${note} (queued ${(start - job.queued).toFixed(1)} ms, write ${(end - start).toFixed(1)} ms)`,
-      job.level,
-    );
+    log(`→ ${job.text}${note} (queued ${(start - job.queued).toFixed(1)} ms, write ${(end - start).toFixed(1)} ms)`);
     return true;
   }
 

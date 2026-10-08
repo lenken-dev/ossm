@@ -307,9 +307,7 @@ export default function PlayerPage() {
       if (!video || video.seeking || video.readyState < video.HAVE_FUTURE_DATA || video.playbackRate <= 0) return;
       const media = video.currentTime * 1000 + offset;
       for (const p of stream.current.tick(played, media, video.playbackRate, reverse, ossm.lookahead)) {
-        const late = p.lateBy > 0 ? ` late by ${Math.round(p.lateBy)} ms` : "";
-        const note = `#${p.index} at=${p.at} media=${Math.round(p.media)} ahead=${p.ahead} ${p.first ? "first" : "chained"}${late}`;
-        void ossm.streamPoint(p.position, p.duration, note, late ? "warn" : "log");
+        void ossm.streamPoint(p.position, p.duration);
       }
     }, TICK_MS);
     return () => clearInterval(id);
