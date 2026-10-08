@@ -393,7 +393,7 @@ export default function PlayerPage() {
     </>
   );
 
-  /** Show and hide the controls pane and the graph in theater mode; in the pane while it is shown. */
+  /** Show and hide the controls pane, and the graph and its settings, in theater mode; in the pane while it is shown. */
   const theaterToggles = (style?: CSSProperties) => (
     <Flex gap="2" style={style}>
       <IconButton
@@ -403,26 +403,24 @@ export default function PlayerPage() {
       >
         <HamburgerMenuIcon />
       </IconButton>
-      {/* The graph toggle and its settings, joined into one split button. */}
       {mode === "funscript" && played && (
-        <Flex>
-          <IconButton
-            variant="surface"
-            aria-label={showGraph ? "Hide graph" : "Show graph"}
-            onClick={() => setShowGraph(!showGraph)}
-            style={showGraph ? { borderTopRightRadius: 0, borderBottomRightRadius: 0 } : undefined}
-          >
-            <GraphIcon />
-          </IconButton>
-          {showGraph && (
-            <Popover.Root>
-              <Popover.Trigger>
-                <IconButton variant="surface" aria-label="Graph settings" style={{ marginLeft: -1, borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}>
-                  <GearIcon />
-                </IconButton>
-              </Popover.Trigger>
-              <Popover.Content width="260px">
-                <Flex direction="column" gap="3">
+        <Popover.Root>
+          <Popover.Trigger>
+            <IconButton variant="surface" aria-label="Settings">
+              <GearIcon />
+            </IconButton>
+          </Popover.Trigger>
+          <Popover.Content width="260px">
+            <Flex direction="column" gap="3">
+              <Text as="label" size="2" weight="medium">
+                <Flex align="center" justify="between" gap="2">
+                  Show graph
+                  <Switch checked={showGraph} onCheckedChange={setShowGraph} />
+                </Flex>
+              </Text>
+              {showGraph && (
+                <>
+                  <Separator size="4" />
                   {lineWidthSlider}
                   {windowSliders}
                   <LabeledSlider
@@ -449,11 +447,11 @@ export default function PlayerPage() {
                   >
                     Reset
                   </Button>
-                </Flex>
-              </Popover.Content>
-            </Popover.Root>
-          )}
-        </Flex>
+                </>
+              )}
+            </Flex>
+          </Popover.Content>
+        </Popover.Root>
       )}
     </Flex>
   );
@@ -1069,17 +1067,6 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }
         </Flex>
       </Dialog.Content>
     </Dialog.Root>
-  );
-}
-
-/** A line through points, like the script graph. */
-function GraphIcon() {
-  const points = [[1.5, 11], [5, 4], [9.5, 10], [13.5, 3]];
-  return (
-    <svg width="15" height="15" viewBox="0 0 15 15" fill="currentColor">
-      <polyline points={points.join(" ")} fill="none" stroke="currentColor" strokeLinejoin="round" />
-      {points.map(([cx, cy]) => <circle key={cx} cx={cx} cy={cy} r="1.5" />)}
-    </svg>
   );
 }
 
