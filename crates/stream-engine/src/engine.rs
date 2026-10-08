@@ -4,7 +4,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 
 use crate::StreamPlanner;
-use crate::input::{SharedStreamInput, StreamInput};
 use crate::runner::StreamRunner;
 use crate::sender::StreamSender;
 
@@ -32,12 +31,11 @@ pub(crate) type EngineCommandChannel =
 
 /// Root container for a stream engine.
 ///
-/// Carries the command channel, shared stream input, and activity count
+/// Carries the command channel and activity count
 /// that the capability handles project from. `StreamEngine` is instantiated
 /// once in static storage and immediately consumed by [`split`](Self::split).
 pub struct StreamEngine {
     pub(crate) commands: EngineCommandChannel,
-    pub(crate) input: SharedStreamInput,
     /// Live [`ActiveGuard`](crate::ActiveGuard)s; streaming is active while
     /// any exist.
     pub(crate) active: AtomicU8,
@@ -47,7 +45,6 @@ impl StreamEngine {
     pub const fn new() -> Self {
         Self {
             commands: EngineCommandChannel::new(),
-            input: SharedStreamInput::new_with(StreamInput::DEFAULT),
             active: AtomicU8::new(0),
         }
     }
@@ -60,8 +57,7 @@ impl StreamEngine {
     ///
     /// - [`StreamRunner`] is the driver capability, consumed by
     ///   [`run`](StreamRunner::run) to start the engine loop.
-    /// - [`StreamSender`] pushes points, changes settings, and stops the
-    ///   stream.
+    /// - [`StreamSender`] pushes points and stops the stream.
     pub fn split(&'static mut self) -> (StreamRunner, StreamSender) {
         (StreamRunner::new(self), StreamSender::new(self))
     }

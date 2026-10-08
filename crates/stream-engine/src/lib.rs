@@ -12,8 +12,9 @@
 //! [`StreamSequencer`] is the synchronous glue between the two: it applies
 //! the user's [`StreamInput`] to the planner and turns its requests into
 //! [`StreamStep`]s (streaming moves and stops), once per controller tick. [`StreamEngine`] wraps
-//! it for firmware: [`StreamSender`] feeds points and settings, and
-//! [`StreamRunner`] steps the sequencer and drives the motion controller.
+//! it for firmware: [`StreamSender`] feeds points, and [`StreamRunner`]
+//! steps the sequencer with the host's settings and drives the motion
+//! controller.
 //! The runner waits for a stream's first point separately
 //! ([`StreamRunner::wait_for_stream`]), so a host can switch into streaming
 //! and prepare the machine before running it.
