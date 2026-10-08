@@ -335,27 +335,18 @@ impl StreamPlanner {
     }
 
     fn request(&mut self, now_ms: u64, from: f64, target: Point) -> MoveRequest {
-        let request = self.build_request(now_ms, from, target);
-        self.issue(now_ms, target, request)
-    }
-
-    fn issue(&mut self, now_ms: u64, target: Point, request: MoveRequest) -> MoveRequest {
+        let position = self.range.stream_to_machine(target.position);
+        let velocity = self.queue.front().map_or(0.0, |next| {
+            self.arrival_velocity(now_ms, from, target, position, next)
+        });
         self.active = Some(target);
         self.last_target = Some(target);
         self.range_pending = false;
         self.last_request = Some(LastRequest {
             issued_ms: now_ms,
-            velocity: request.velocity,
+            velocity,
         });
         self.stats.moves += 1;
-        request
-    }
-
-    fn build_request(&self, now_ms: u64, from: f64, target: Point) -> MoveRequest {
-        let position = self.range.stream_to_machine(target.position);
-        let velocity = self.queue.front().map_or(0.0, |next| {
-            self.arrival_velocity(now_ms, from, target, position, next)
-        });
         MoveRequest {
             position,
             arrival_ms: target.at_ms.max(now_ms),
