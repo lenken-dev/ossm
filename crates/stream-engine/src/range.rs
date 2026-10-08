@@ -1,3 +1,12 @@
+/// `value` clamped to 0.0–1.0; non-finite values become 0.0.
+pub(crate) fn unit(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 /// The stroke range streamed points are mapped into.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StrokeRange {
@@ -17,16 +26,9 @@ impl StrokeRange {
     /// Clamp both settings to 0.0–1.0. Non-finite values fall back to 0.0,
     /// which collapses travel instead of extending it.
     pub fn sanitized(self) -> Self {
-        let clean = |value: f64| {
-            if value.is_finite() {
-                value.clamp(0.0, 1.0)
-            } else {
-                0.0
-            }
-        };
         Self {
-            depth: clean(self.depth),
-            stroke: clean(self.stroke),
+            depth: unit(self.depth),
+            stroke: unit(self.stroke),
         }
     }
 
