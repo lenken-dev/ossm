@@ -32,19 +32,19 @@ jobs:
           - firmware: ossm-alt
             chip: esp32s3
             target: xtensa-esp32s3-none-elf
-            path: firmware/esp32s3
+            path: ossm/firmware/esp32s3
           - firmware: waveshare
             chip: esp32s3
             target: xtensa-esp32s3-none-elf
-            path: firmware/esp32s3
+            path: ossm/firmware/esp32s3
           - firmware: seeed-xiao
             chip: esp32s3
             target: xtensa-esp32s3-none-elf
-            path: firmware/esp32s3
+            path: ossm/firmware/esp32s3
           - firmware: ossm-reference
             chip: esp32
             target: xtensa-esp32-none-elf
-            path: firmware/esp32
+            path: ossm/firmware/esp32
     steps:
       - uses: actions/checkout@v5
         with:

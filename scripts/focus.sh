@@ -23,14 +23,14 @@ esac
 motor="${motor:-$default_motor}"
 feature="motor-${motor}"
 
-jq --arg proj "firmware/${crate}/Cargo.toml" --arg feat "$feature" \
+jq --arg proj "ossm/firmware/${crate}/Cargo.toml" --arg feat "$feature" \
    --arg indicator "$indicator_feature" \
    '. + {
      "rust-analyzer.linkedProjects": [$proj],
      "rust-analyzer.cargo.features": [$feat, $indicator] | map(select(length > 0))
    }' .vscode/settings.template.json > .vscode/settings.json
 
-jq --arg proj "firmware/${crate}/Cargo.toml" --arg feat "$feature" \
+jq --arg proj "ossm/firmware/${crate}/Cargo.toml" --arg feat "$feature" \
    --arg indicator "$indicator_feature" \
    '.lsp["rust-analyzer"].initialization_options.linkedProjects = [$proj]
     | .lsp["rust-analyzer"].initialization_options.cargo.features =

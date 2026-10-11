@@ -23,8 +23,8 @@ path = "src/bin/ossm-reference.rs"
 
 [dependencies]
 status-indicator = { path = "../../crates/status-indicator", optional = true }
-ossm = { path = "../../ossm" }
-ossm-esp = { path = "../../ossm-esp", features = ["esp32"] }
+ossm = { path = "../../core" }
+ossm-esp = { path = "../../esp", features = ["esp32"] }
 pattern-engine = { path = "../../crates/pattern-engine" }
 ble-remote = { path = "../../crates/ble-remote", features = ["esp32"] }
 
@@ -68,7 +68,7 @@ portable-atomic = { version = "1", default-features = false }
 static_cell = "2.1.1"
 
 [build-dependencies]
-ossm-esp-build-support = { path = "../../ossm-esp/build-support" }
+ossm-esp-build-support = { path = "../../esp/build-support" }
 
 [profile.dev]
 opt-level = "s"
