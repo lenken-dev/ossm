@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type RefObject, type SyntheticEvent } from "react";
-import { Box, Button, Callout, Dialog, Flex, IconButton, Popover, SegmentedControl, Select, Separator, Switch, Text } from "@radix-ui/themes";
+import { Box, Button, Callout, Dialog, Flex, IconButton, Popover, SegmentedControl, Select, Separator, Switch, Text, Tooltip } from "@radix-ui/themes";
 import {
   CheckIcon,
   Cross2Icon,
@@ -220,6 +220,10 @@ export default function PlayerPage() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [speedLimit, setSpeedLimit] = usePersistedState("ossm:playerSpeedLimit", DEFAULT_SPEED_LIMIT, localStorage);
   const blocked = blockReason(ossm, state, configured, setupOpen);
+  /** Why the mode cannot change while it plays, or `null` when it can; the device refuses the switch too. */
+  const switchLock = mode === "pattern"
+    ? (state?.state === "playing" || state?.state === "paused") && "Stop the pattern to switch modes"
+    : !paused && "Pause playback to switch modes";
   /** Set up to play; only speed and sensation may change on the fly. */
   const ready = !!ossm && ossm.lookahead > 0 && isHomed(state) && configured;
 
@@ -440,20 +444,24 @@ export default function PlayerPage() {
   const sidebar = (
     <>
       {inTheater && theaterToggles({ padding: "var(--space-3)", paddingBottom: 0 })}
-      <Box p="3" pb="0">
-        <SegmentedControl.Root
-          value={mode}
-          onValueChange={(v) => {
-            log(`mode ${v}`);
-            dropSilence("mode");
-            setMode(v as PlayerMode);
-          }}
-          style={{ width: "100%" }}
-        >
-          <SegmentedControl.Item value="pattern">Pattern</SegmentedControl.Item>
-          <SegmentedControl.Item value="funscript">Funscript</SegmentedControl.Item>
-        </SegmentedControl.Root>
-      </Box>
+      <Tooltip content={switchLock} open={switchLock ? undefined : false}>
+        <Box p="3" pb="0">
+          <SegmentedControl.Root
+            value={mode}
+            disabled={!!switchLock}
+            onValueChange={(v) => {
+              log(`mode ${v}`);
+              dropSilence("mode");
+              setMode(v as PlayerMode);
+            }}
+            // Disabled buttons swallow hover, so the tooltip listens on the box.
+            style={{ width: "100%", pointerEvents: switchLock ? "none" : undefined }}
+          >
+            <SegmentedControl.Item value="pattern">Pattern</SegmentedControl.Item>
+            <SegmentedControl.Item value="funscript">Funscript</SegmentedControl.Item>
+          </SegmentedControl.Root>
+        </Box>
+      </Tooltip>
       <Flex direction="column" gap="3" p="3">
         {!navigator.bluetooth ? (
           <Text size="2" color="gray">
