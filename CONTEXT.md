@@ -120,7 +120,7 @@ _Avoid_: Measured torque, contact force
 ### Streaming
 
 **Streaming**:
-The mode in which a remote client drives motion with timed stream points instead of a pattern. It uses the depth, stroke, and speed settings, and lasts until the next pattern command.
+The mode in which a remote client drives motion with timed stream points instead of a pattern. It uses the depth, stroke, and speed settings, and lasts until the next pattern command other than play. Neither streaming nor a pattern can be started while the other plays.
 _Avoid_: Pattern playback
 
 **Stream point**:
