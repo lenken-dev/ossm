@@ -2,7 +2,7 @@ use core::sync::atomic::Ordering;
 
 use embassy_time::{Duration, Instant, Ticker};
 use log::{info, warn};
-use ossm::{MotionLimits, MotionSender};
+use ossm::MotionSender;
 
 use crate::PushError;
 use crate::engine::{EngineCommand, Point, StreamEngine};
@@ -84,21 +84,19 @@ impl StreamRunner {
     /// and awaits [`end_stream`](ossm::MotionSender::end_stream); the next
     /// point starts a new stream.
     ///
-    /// `limits` must be the motion controller's limits. The controller must
-    /// be homed; streamed moves are ignored while it is disabled or paused.
+    /// The controller must be homed; streamed moves are ignored while it is disabled or paused.
     /// `input` supplies the settings, read when a stream starts and on every
     /// tick.
     pub async fn run(
         &self,
         start: StreamStart,
         motion: &MotionSender,
-        limits: &MotionLimits,
         input: impl Fn() -> StreamInput,
     ) -> ! {
         let _active = self.activate();
         let mut start = start;
         loop {
-            self.stream(start, motion, limits, &input).await;
+            self.stream(start, motion, &input).await;
             start = self.next_stream(motion).await;
         }
     }
@@ -108,14 +106,13 @@ impl StreamRunner {
         &self,
         start: StreamStart,
         motion: &MotionSender,
-        limits: &MotionLimits,
         input: impl Fn() -> StreamInput,
     ) {
         let engine = self.engine;
         let tick = Duration::from_millis(u64::from(StreamSequencer::TICK_MS));
 
         info!("Stream started");
-        let mut sequencer = StreamSequencer::new(limits, input());
+        let mut sequencer = StreamSequencer::new(input());
         self.push(&mut sequencer, start.0);
         let mut ticker = Ticker::every(tick);
 
@@ -140,8 +137,8 @@ impl StreamRunner {
         motion.end_stream().await;
         let stats = sequencer.stats();
         info!(
-            "Stream stopped ({} moves, {} skipped, {} collapsed, {} dropped)",
-            stats.moves, stats.skipped, stats.collapsed, stats.dropped
+            "Stream stopped ({} moves, {} skipped, {} dropped)",
+            stats.moves, stats.skipped, stats.dropped
         );
     }
 
@@ -219,7 +216,7 @@ mod tests {
         }
         assert_eq!(sender.push(50.0, 100), Err(PushError::QueueFull));
 
-        let mut sequencer = StreamSequencer::new(&MotionLimits::DEFAULT, StreamInput::DEFAULT);
+        let mut sequencer = StreamSequencer::new(StreamInput::DEFAULT);
         let point = Point {
             received_ms: 0,
             position: 50.0,

@@ -36,7 +36,7 @@ mod sequencer;
 
 pub use engine::StreamEngine;
 pub use input::StreamInput;
-pub use planner::{MoveRequest, PlannerConfig, PlannerStats, PushError, StreamPlanner};
+pub use planner::{MoveRequest, PlannerStats, PushError, StreamPlanner};
 pub use range::StrokeRange;
 pub use runner::{ActiveGuard, StreamRunner, StreamStart};
 pub use sender::StreamSender;

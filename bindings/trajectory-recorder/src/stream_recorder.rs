@@ -29,7 +29,6 @@ static MECHANICAL: MechanicalConfig = MechanicalConfig {
 pub struct StreamRecorder {
     controller: MotionController<'static, SimBoard>,
     motion: MotionSender,
-    limits: MotionLimits,
 }
 
 impl StreamRecorder {
@@ -37,9 +36,8 @@ impl StreamRecorder {
         let tick_secs = f64::from(StreamSequencer::TICK_MS) / 1000.0;
         let board = SimBoard::new(SimMotor::new(), &MECHANICAL);
         Self {
-            controller: receiver.into_controller(board, limits.clone(), tick_secs),
+            controller: receiver.into_controller(board, limits, tick_secs),
             motion,
-            limits,
         }
     }
 
@@ -71,7 +69,7 @@ impl StreamRecorder {
         let start = input.stroke_range().stream_to_machine(positions[0]);
         self.move_to(start);
 
-        let mut sequencer = StreamSequencer::new(&self.limits, input);
+        let mut sequencer = StreamSequencer::new(input);
         let tick_ms = u64::from(StreamSequencer::TICK_MS);
         let first_ms = u64::from(at_ms[0]);
         let last_ms = at_ms[..count].iter().copied().max().map_or(0, u64::from);

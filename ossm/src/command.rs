@@ -44,8 +44,9 @@ pub struct StreamMove {
     /// Target position as a fraction of the machine range (0.0–1.0).
     pub position: f64,
     /// Velocity at arrival in machine range fractions per second; positive
-    /// toward the maximum position. Limited to the velocity set by `speed`
-    /// and to a velocity that can still stop inside the machine range.
+    /// toward the maximum position. Limited to the velocity set by `speed`,
+    /// to a velocity the move can build up over its travel, and to one that
+    /// can still stop inside the machine range.
     pub velocity: f64,
     /// Minimum duration in seconds. The controller applies the move before
     /// its next sample, planning from the state it sampled last, so the
