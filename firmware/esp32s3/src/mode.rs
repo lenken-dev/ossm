@@ -1,16 +1,17 @@
 //! Switching between pattern and streamed motion.
 //!
 //! The pattern engine drives the machine until a streamed point starts
-//! streaming. Streaming then lasts until the next pattern command (play,
-//! stop, pause, ...) from any remote, which the pattern engine processes once
-//! it runs again. Streaming uses the pattern input (depth, stroke, speed), so
+//! streaming. Streaming then lasts until the next pattern command other
+//! than play (stop, pause, ...) from any remote, which the pattern engine
+//! processes once it runs again. Streaming uses the pattern input (depth, stroke, speed), so
 //! every remote controls both modes.
 //!
 //! Rules:
 //! 1. Ownership: a point starts streaming only while no pattern session
 //!    exists (the pattern engine is idle or ready, with no motion state
 //!    operation in flight) and the speed setting is above zero. Other points
-//!    are dropped. A playing or paused pattern must be stopped first.
+//!    are dropped. A playing or paused pattern must be stopped first. Likewise,
+//!    play commands are dropped while streaming: the stream must end first.
 //! 2. Armed or abort: before each step of preparing the machine (enabling,
 //!    homing), streaming must still be armed: speed above zero and no pattern
 //!    command. Otherwise preparing aborts to pattern mode without further
@@ -62,7 +63,16 @@ impl Modes<'_> {
             command = match self.prepare(&mut command).await {
                 Ok(homed) => {
                     let streaming = self.stream(start, homed, &ignored);
-                    match select(self.pattern_runner.take_command(), streaming).await {
+                    let take = async {
+                        loop {
+                            let command = self.pattern_runner.take_command().await;
+                            if !command.is_play() {
+                                return command;
+                            }
+                            warn!("Pattern play dropped: streaming");
+                        }
+                    };
+                    match select(take, streaming).await {
                         Either::First(command) => Some(command),
                         Either::Second(never) => never,
                     }
