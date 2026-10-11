@@ -134,7 +134,9 @@ fn get_pattern_description(index: usize) -> String<MAX_PATTERN_LENGTH> {
 ///
 /// Two funscript players can stream: the OSSM-Lite one through its own
 /// service, and the official OSSM one through `go:streaming` and
-/// `stream:<position>:<duration ms>` commands. Without a `stream`, the
+/// `stream:<position>:<duration ms>` commands. Neither mode can be entered
+/// while the other plays: `go:streaming` fails while a pattern is playing or
+/// paused, and playing a pattern fails while streaming. Without a `stream`, the
 /// OSSM-Lite service is not advertised, streamed points are ignored,
 /// `go:streaming` fails, and the stream look-ahead reads `0`.
 pub fn start(
@@ -536,7 +538,7 @@ fn process_command(
                     // latency compensation.
                     ("buffer", Some(_)) => {}
                     ("pattern", Some(value)) => match value.parse::<usize>() {
-                        Ok(index) => patterns.play(index),
+                        Ok(index) => fail = !play(patterns, stream, index),
                         Err(_) => {
                             error!("Could not parse pattern index");
                             fail = true;
@@ -564,7 +566,7 @@ fn process_command(
                     },
                 },
                 "go" => match action {
-                    "simplePenetration" | "strokeEngine" => patterns.play(0),
+                    "simplePenetration" | "strokeEngine" => fail = !play(patterns, stream, 0),
                     "streaming" => fail = !go_streaming(patterns, stream),
                     "menu" => stop(patterns, stream),
                     // Homing only starts from idle, so stop first.
@@ -600,22 +602,34 @@ fn parse_setting(value: &str) -> Option<f64> {
     value.is_finite().then(|| value.clamp(0.0, 100.0))
 }
 
-/// Prepare for streaming by the official funscript player: stop a pattern
-/// session, which also zeroes the speed, so that streamed points can take
-/// over once the speed is raised. An active stream is left alone. Fails
-/// without streaming.
+/// Play a pattern. Fails while streaming: the stream must end first.
+fn play(patterns: &PatternSender, stream: Option<&StreamSender>, index: usize) -> bool {
+    if is_streaming(stream) {
+        error!("Cannot play a pattern while streaming");
+        return false;
+    }
+    patterns.play(index);
+    true
+}
+
+/// Prepare for streaming by the official funscript player: zero the speed,
+/// so that streamed points take over only once it is raised. An active
+/// stream is left alone. Fails without streaming, and while a pattern is
+/// playing or paused: it must be stopped first.
 fn go_streaming(patterns: &PatternSender, stream: Option<&StreamSender>) -> bool {
     let Some(stream) = stream else {
         error!("Streaming unavailable");
         return false;
     };
-    if !stream.is_active()
-        && matches!(
-            patterns.state(),
-            EngineState::Playing(_) | EngineState::Paused(_)
-        )
-    {
-        patterns.stop();
+    if matches!(
+        patterns.state(),
+        EngineState::Playing(_) | EngineState::Paused(_)
+    ) {
+        error!("Cannot stream while a pattern is playing");
+        return false;
+    }
+    if !stream.is_active() {
+        patterns.set_speed(0.0);
     }
     true
 }
