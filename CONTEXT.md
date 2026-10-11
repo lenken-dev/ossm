@@ -140,7 +140,7 @@ The stream points queued beyond the target of a stream move. A stream move arriv
 _Avoid_: Buffering
 
 **Skipped point**:
-A stream point passed over for a later one: a late point (one that can no longer be reached on time) whenever another point follows, or a point that cannot be reached in time on the way to a later point in the same direction. Direction reversals are only protected from the second kind.
+A late stream point (one that can no longer be reached on time) passed over because another point follows it.
 _Avoid_: Dropped point
 
 **Dropped point**:
