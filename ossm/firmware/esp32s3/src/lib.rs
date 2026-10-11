@@ -155,7 +155,6 @@ pub async fn run(spawner: Spawner, config: Config) {
 
     mode::Modes {
         motion: &motion,
-        limits: &limits,
         patterns,
         pattern_runner: runner,
         stream_runner,

@@ -30,13 +30,12 @@ use core::future::Future;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Delay, Timer};
 use log::{error, info, warn};
-use ossm::{MotionLimits, MotionPhase, MotionSender, StateResponse};
+use ossm::{MotionPhase, MotionSender, StateResponse};
 use pattern_engine::{AnyPattern, EngineState, PatternRunner, PatternSender, PendingCommand};
 use stream_engine::{StreamInput, StreamRunner, StreamStart};
 
 pub struct Modes<'a> {
     pub motion: &'a MotionSender,
-    pub limits: &'a MotionLimits,
     pub patterns: &'a PatternSender,
     pub pattern_runner: PatternRunner,
     pub stream_runner: StreamRunner,
@@ -177,7 +176,7 @@ impl Modes<'_> {
             }
         };
         self.stream_runner
-            .run(start, self.motion, self.limits, input)
+            .run(start, self.motion, input)
             .await
     }
 }

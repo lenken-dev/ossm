@@ -1,6 +1,5 @@
 mod linear;
 mod ruckig;
-pub mod stream;
 
 pub use linear::LinearPlanner;
 pub use ruckig::RuckigPlanner;

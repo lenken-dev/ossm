@@ -1,8 +1,8 @@
 use embassy_futures::poll_once;
-use ossm::{MotionLimits, MotionSender, StreamMove};
+use ossm::{MotionSender, StreamMove};
 
 use crate::input::StreamInput;
-use crate::{PlannerConfig, PlannerStats, PushError, StreamPlanner};
+use crate::{PlannerStats, PushError, StreamPlanner};
 
 /// What a [`StreamSequencer`] asks of the motion controller in a tick.
 #[derive(Debug, Clone, Copy)]
@@ -45,8 +45,6 @@ impl StreamStep {
 pub struct StreamSequencer {
     planner: StreamPlanner,
     input: StreamInput,
-    /// Speed at velocity setting 1.0, in machine fraction per second.
-    full_speed: f64,
     /// A move was sent since the last stop, so the controller may be
     /// streaming.
     streaming: bool,
@@ -56,25 +54,11 @@ impl StreamSequencer {
     /// Controller tick the sequencer expects to be called at.
     pub const TICK_MS: u32 = 10;
 
-    /// `limits` must be the motion controller's limits, so that the planner
-    /// judges reachability with the speed the controller will allow.
-    pub fn new(limits: &MotionLimits, input: StreamInput) -> Self {
-        let range = limits.max_position_mm - limits.min_position_mm;
-        let full_speed = if range > 0.0 {
-            limits.max_velocity_mm_s / range
-        } else {
-            0.0
-        };
+    pub fn new(input: StreamInput) -> Self {
         let input = input.clamped();
-        let config = PlannerConfig {
-            tick_ms: Self::TICK_MS,
-            max_velocity: input.velocity * full_speed,
-            ..PlannerConfig::default()
-        };
         Self {
-            planner: StreamPlanner::new(config, input.stroke_range()),
+            planner: StreamPlanner::new(input.stroke_range()),
             input,
-            full_speed,
             streaming: false,
         }
     }
@@ -88,8 +72,6 @@ impl StreamSequencer {
         if input == self.input {
             return;
         }
-        self.planner
-            .set_max_velocity(input.velocity * self.full_speed);
         self.planner.set_stroke_range(input.stroke_range());
         self.input = input;
     }
@@ -139,7 +121,6 @@ impl StreamSequencer {
     pub fn tick(&mut self, now_ms: u64, machine_position: f64) -> Option<StreamStep> {
         let request = self.planner.poll(now_ms, machine_position);
         if self.input.velocity <= 0.0 {
-            self.planner.discard_current();
             return core::mem::take(&mut self.streaming).then_some(StreamStep::Stop);
         }
         let request = request?;
@@ -180,13 +161,7 @@ mod tests {
 
     #[test]
     fn maps_settings_to_planner_and_moves() {
-        let limits = MotionLimits::DEFAULT; // 600 mm/s over 180 mm
-        let mut seq = StreamSequencer::new(&limits, full(0.5, 0.25));
-        assert!(close(
-            seq.planner.config().max_velocity,
-            0.5 * 600.0 / 180.0
-        ));
-
+        let mut seq = StreamSequencer::new(full(0.5, 0.25));
         seq.push(0, 50.0, 500).unwrap();
         seq.push(0, 0.0, 1000).unwrap(); // continues toward the deep end
         let first = step_move(seq.tick(0, 0.0));
@@ -203,7 +178,6 @@ mod tests {
             velocity: 2.0,
             jerk: f64::NAN,
         });
-        assert!(close(seq.planner.config().max_velocity, 600.0 / 180.0));
         let second = step_move(seq.tick(500, 0.5));
         assert!(close(second.position, 0.8)); // stream 0 = depth
         assert!(close(second.speed, 1.0));
@@ -212,8 +186,7 @@ mod tests {
 
     #[test]
     fn emits_moves_only_when_the_planner_requests() {
-        let limits = MotionLimits::DEFAULT;
-        let mut seq = StreamSequencer::new(&limits, full(1.0, 0.5));
+        let mut seq = StreamSequencer::new(full(1.0, 0.5));
         assert!(seq.tick(0, 0.0).is_none());
 
         seq.push(0, 0.0, 1000).unwrap();
@@ -226,8 +199,7 @@ mod tests {
 
     #[test]
     fn zero_velocity_holds_but_keeps_the_schedule() {
-        let limits = MotionLimits::DEFAULT;
-        let mut seq = StreamSequencer::new(&limits, full(0.0, 0.5));
+        let mut seq = StreamSequencer::new(full(0.0, 0.5));
         seq.push(0, 0.0, 500).unwrap();
         seq.push(0, 100.0, 500).unwrap();
         assert!(seq.tick(0, 0.0).is_none());
@@ -241,8 +213,7 @@ mod tests {
 
     #[test]
     fn zero_velocity_stops_once_and_resumes_with_the_next_point() {
-        let limits = MotionLimits::DEFAULT;
-        let mut seq = StreamSequencer::new(&limits, full(1.0, 0.5));
+        let mut seq = StreamSequencer::new(full(1.0, 0.5));
         seq.push(0, 50.0, 1000).unwrap();
         step_move(seq.tick(0, 0.0));
 

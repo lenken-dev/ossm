@@ -4,7 +4,6 @@ use num_traits::float::Float;
 use crate::command::{
     Cancelled, MotionCommand, StateCommand, StateResponse, StreamCommand, StreamMove,
 };
-use crate::planner::stream::{Event, StepStatus, StreamExecutor, StreamGoal, StreamLimits};
 use crate::state::MotionPhase;
 use crate::{Board, MotionLimits, Ossm};
 
@@ -71,8 +70,6 @@ pub struct MotionController<'a, B: Board> {
     /// The trajectory was planned from streaming moves. Cleared, with
     /// `stream_ended` signalled, when streaming motion ends.
     streaming: bool,
-    /// Plans and samples streaming trajectories on the shared ruckig state.
-    stream: StreamExecutor,
     ruckig: Ruckig<1, ThrowErrorHandler>,
     input: InputParameter<1>,
     output: OutputParameter<1>,
@@ -105,7 +102,6 @@ impl<'a, B: Board> MotionController<'a, B> {
             limits,
             target: None,
             streaming: false,
-            stream: StreamExecutor::new(),
             ruckig: Ruckig::<1, ThrowErrorHandler>::new(None, update_interval_secs),
             input,
             output: OutputParameter::new(None),
@@ -302,13 +298,25 @@ impl<'a, B: Board> MotionController<'a, B> {
             jerk: self.fraction_to_jerk(cmd.jerk, speed),
             torque: None,
         };
-        let range = self.limits.max_position_mm - self.limits.min_position_mm;
-        if starting {
-            self.stream.start(&self.input, &self.output);
-        }
-        // Deferred by the executor while a required stop is still planned.
-        self.request_stream_move(target, cmd.velocity * range, cmd.duration);
         self.target = Some(target);
+        let range = self.limits.max_position_mm - self.limits.min_position_mm;
+        // Arrive no faster than the move can build up over its travel (or
+        // Ruckig backs up for a run-up) and than a stop can absorb before
+        // the end of the range, in case no follow-up comes.
+        let velocity = (cmd.velocity * range).clamp(-speed, speed);
+        let room = if velocity > 0.0 {
+            self.limits.max_position_mm - target.position
+        } else {
+            target.position - self.limits.min_position_mm
+        };
+        let travel = (target.position - self.input.current_position[0]).abs();
+        let max = reachable_velocity(
+            travel.min(room),
+            self.limits.max_acceleration_mm_s2,
+            target.jerk,
+        );
+        let velocity = velocity.clamp(-max, max);
+        self.sync_ruckig(velocity, Some(cmd.duration));
         self.streaming = true;
 
         if starting {
@@ -319,92 +327,25 @@ impl<'a, B: Board> MotionController<'a, B> {
         }
     }
 
-    /// Request a streaming move toward `target` (mm), arriving with
-    /// `velocity` (mm/s) after at least `duration` seconds.
-    fn request_stream_move(&mut self, target: MotionTarget, velocity: f64, duration: f64) {
-        let goal = StreamGoal {
-            position: target.position,
-            velocity,
-            min_duration: duration,
-        };
-        let limits = StreamLimits {
-            min_position: self.limits.min_position_mm,
-            max_position: self.limits.max_position_mm,
-            max_velocity: target.velocity,
-            max_acceleration: self.limits.max_acceleration_mm_s2,
-            jerk: target.jerk,
-            max_jerk: self.limits.max_jerk_mm_s3,
-        };
-        self.stream.request_move(goal, limits)
-    }
-
-    /// Advance a streaming trajectory, recovering from calculation failures.
-    fn step_stream(&mut self) -> StepStatus {
-        let step = self
-            .stream
-            .step(&mut self.ruckig, &mut self.input, &mut self.output);
-
-        if let Some(calc) = step.calculation {
-            let kind = if calc.stop { "stop" } else { "move" };
-            let attempt = calc.attempt;
-            if calc.out_of_range {
-                log::warn!("Stream {kind} leaves the machine range (attempt {attempt})");
-            } else if calc.too_fast {
-                log::warn!("Stream {kind} exceeds the velocity limit (attempt {attempt})");
-            } else if !calc.succeeded {
-                log::warn!("Stream {kind} calculation failed (attempt {attempt})");
-            } else if attempt > 0 {
-                log::warn!("Stream {kind} calculated with reduced jerk (attempt {attempt})");
-            } else if calc.timed {
-                log::trace!("Stream {kind} calculated (timed)");
-            } else {
-                log::trace!("Stream {kind} calculated");
-            }
-        }
-        if step.coasting {
-            log::trace!("Stream coasting");
-        }
-        match step.event {
-            Event::None => {}
-            Event::NoFollowUp => {
-                log::warn!("Stream move completed in motion without a follow-up, stopping");
-            }
-            Event::MoveFailed => log::error!("Stream move could not be calculated, stopping"),
-            Event::Held => log::error!("Stream stop could not be calculated, holding"),
-        }
-        if step.event != Event::None && self.state == MotionState::Moving {
-            self.transition(MotionState::Stopping(StopReason::Stream));
-        }
-        step.status
-    }
-
     /// Sample the ruckig trajectory and send the position to the board.
     async fn tick(&mut self) -> Result<(), B::Error> {
         if !matches!(self.state, MotionState::Moving | MotionState::Stopping(_)) {
             return Ok(());
         }
 
-        let status = if self.streaming {
-            self.step_stream()
-        } else {
-            let result = match self.ruckig.update(&self.input, &mut self.output) {
-                Ok(result) => result,
-                Err(_error) => {
-                    // Testing placeholder. Uncomment to see error, but spams the log.
-                    // log::info!("Ruckig Error {:?}", _error);
-                    return Ok(());
-                }
-            };
-
-            if !matches!(result, RuckigResult::Working | RuckigResult::Finished) {
+        let result = match self.ruckig.update(&self.input, &mut self.output) {
+            Ok(result) => result,
+            Err(_error) => {
+                // rsruckig 2.1.3 fails on some states; retry on the next tick
+                // with less jerk, which also forces a recalculation.
+                self.input.max_jerk[0] *= 0.5;
                 return Ok(());
             }
-            if result == RuckigResult::Finished {
-                StepStatus::Arrived
-            } else {
-                StepStatus::Working
-            }
         };
+
+        if !matches!(result, RuckigResult::Working | RuckigResult::Finished) {
+            return Ok(());
+        }
 
         let mm = self.output.new_position[0]
             .clamp(self.limits.min_position_mm, self.limits.max_position_mm);
@@ -416,11 +357,21 @@ impl<'a, B: Board> MotionController<'a, B> {
         self.output.pass_to_input(&mut self.input);
         self.publish_state();
 
-        // `StepStatus::ArrivedInMotion` is not a move completion: the
-        // follow-up move usually arrives before the next tick, and the
-        // executor stops on the next tick otherwise.
-        if status == StepStatus::Arrived {
+        if result == RuckigResult::Finished {
             match self.state {
+                // A streaming move ending in motion is followed up on the
+                // tick after its end sample; stop if that tick passed.
+                MotionState::Moving
+                    if self.streaming
+                        && self.output.new_velocity[0].abs()
+                            > 1e-6 * self.input.max_velocity[0] =>
+                {
+                    let past = self.output.time - self.output.trajectory.get_duration();
+                    if past > 0.5 * self.ruckig.delta_time {
+                        log::warn!("Stream move completed in motion without a follow-up, stopping");
+                        self.stop(StopReason::Stream);
+                    }
+                }
                 MotionState::Stopping(StopReason::Pause) => {
                     self.transition(MotionState::Paused);
                 }
@@ -497,32 +448,19 @@ impl<'a, B: Board> MotionController<'a, B> {
     }
 
     fn stop(&mut self, reason: StopReason) {
-        if self.streaming {
-            self.stream.request_stop();
-            self.transition(MotionState::Stopping(reason));
-            return;
-        }
         // Switch to velocity control and target zero velocity. Ruckig handles
         // the jerk-limited deceleration trajectory — no manual math needed.
         self.input.control_interface = ControlInterface::Velocity;
         self.input.target_velocity[0] = 0.0;
+        self.input.minimum_duration = None;
         self.output.time = 0.0;
         self.transition(MotionState::Stopping(reason));
     }
 
     async fn resume(&mut self) {
-        if self.streaming
-            && let Some(target) = self.target
-        {
-            // Continue to the last streamed target, ending at rest.
-            self.request_stream_move(target, 0.0, 0.0);
-            self.apply_torque().await;
-            self.transition(MotionState::Moving);
-            return;
-        }
         // Switch back to position control and restore the instructed target.
         self.input.control_interface = ControlInterface::Position;
-        self.sync_ruckig();
+        self.sync_ruckig(0.0, None);
         self.apply_torque().await;
         self.transition(MotionState::Moving);
     }
@@ -596,33 +534,37 @@ impl<'a, B: Board> MotionController<'a, B> {
             jerk: self.fraction_to_jerk(cmd.jerk, speed),
             torque: cmd.torque,
         });
-        self.sync_ruckig();
+        self.sync_ruckig(0.0, None);
+        if let Err(error) = self.ruckig.validate_input(&self.input, true, true) {
+            log::error!("{:?}", error);
+        }
     }
 
     /// Write the instructed target into ruckig's input parameters and reset
     /// the trajectory timer so ruckig replans.
     /// If slowing, set current velocity to maximum so that recalculation doesn't overshoot position
     /// This may cause some jerk, but is acceptable compared to the alternative over greatly overshooting the target.
-    fn sync_ruckig(&mut self) {
+    fn sync_ruckig(&mut self, velocity: f64, minimum_duration: Option<f64>) {
         if let Some(target) = &self.target {
-            // Pattern moves end at rest, in position control; a streaming
-            // move may have left these set.
             self.input.control_interface = ControlInterface::Position;
-            self.input.target_velocity[0] = 0.0;
-            self.input.minimum_duration = None;
+            self.input.target_velocity[0] = velocity;
+            self.input.minimum_duration = minimum_duration;
             self.input.target_position[0] = target.position;
             self.input.max_jerk[0] = target.jerk;
             self.input.max_velocity[0] = target.velocity;
+            // Ruckig 2.1.3 fails on the residuals a completed trajectory
+            // leaves behind.
+            if self.input.current_velocity[0].abs() < 1e-9 * target.velocity {
+                self.input.current_velocity[0] = 0.0;
+            }
+            if self.input.current_acceleration[0].abs() < 1e-7 * self.limits.max_acceleration_mm_s2
+            {
+                self.input.current_acceleration[0] = 0.0;
+            }
             if self.input.current_velocity[0].abs() > target.velocity {
                 self.input.current_velocity[0] = target.velocity * (self.input.current_velocity[0]/self.input.current_velocity[0].abs());
                 self.input.current_acceleration[0] = 0.0;
             }
-            let _result = match self.ruckig.validate_input(&self.input, true, true){
-                Ok(result) => result,
-                Err(error) => {
-                    log::error!("{:?}", error);
-                },
-            };
             self.output.time = 0.0;
             self.ruckig.reset();
         }
@@ -722,5 +664,23 @@ impl<B: Board> MotionController<'_, B> {
             self.output.new_velocity[0] / range,
             self.output.new_acceleration[0] / range,
         )
+    }
+}
+
+/// Highest velocity a jerk-limited move from rest reaches within `distance`.
+///
+/// The profile is symmetric, so it covers `v / 2 * duration`, with a duration
+/// of `v / a + a / j` when the acceleration limit is reached and
+/// `2 * sqrt(v / j)` otherwise.
+fn reachable_velocity(distance: f64, acceleration: f64, jerk: f64) -> f64 {
+    if !(distance > 0.0 && acceleration > 0.0 && jerk > 0.0) {
+        return 0.0;
+    }
+    // Distance at which the acceleration limit is just reached.
+    if distance >= acceleration.powi(3) / (jerk * jerk) {
+        let b = acceleration * acceleration / jerk;
+        (-b + (b * b + 8.0 * acceleration * distance).sqrt()) / 2.0
+    } else {
+        (distance * distance * jerk).cbrt()
     }
 }
