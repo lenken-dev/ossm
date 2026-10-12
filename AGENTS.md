@@ -2,6 +2,8 @@
 
 Follow upstream conventions. Use Conventional Commits (`type(scope): description`) and do not add tests unless instructed to.
 
+Commit without being asked only when implementing an agreed spec. Leave standalone requests uncommitted while iterating, then commit the final solution once per feature.
+
 Keep `CONTEXT.md` and agent environment changes in separate commits marked with the `(fork)` scope (e.g. `docs(fork): ...`) so they can be omitted from upstream PRs.
 
 ## Agent skills
