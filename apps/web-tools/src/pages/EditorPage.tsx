@@ -48,8 +48,8 @@ export default function EditorPage() {
   const [script, setScript] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
   const [error, setError] = useState<string | null>(null);
-  /** The point being dragged. */
-  const [active, setActive] = useState<number | null>(null);
+  /** The point last clicked or added, deleted with the Delete key. */
+  const [selected, setSelected] = useState<number | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
@@ -149,7 +149,7 @@ export default function EditorPage() {
     e.preventDefault();
     e.stopPropagation();
     const svg = e.currentTarget.closest("svg")!;
-    setActive(i);
+    setSelected(i);
     const move = (m: globalThis.PointerEvent) => {
       const { at, pos } = pointerAt(m);
       setScript((s) => {
@@ -162,7 +162,6 @@ export default function EditorPage() {
     svg.addEventListener("pointermove", move as EventListener);
     svg.addEventListener("lostpointercapture", () => {
       svg.removeEventListener("pointermove", move as EventListener);
-      setActive(null);
     }, { once: true });
   };
 
@@ -206,11 +205,23 @@ export default function EditorPage() {
     }, { once: true });
   };
 
-  const remove = (i: number) => setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => j !== i) }));
+  // Delete (or Backspace, the Mac's delete key) removes the selected point, unless typing in a field.
+  useEffect(() => {
+    if (selected === null) return;
+    const keydown = (e: KeyboardEvent) => {
+      if ((e.key !== "Delete" && e.key !== "Backspace") || e.target instanceof HTMLInputElement) return;
+      e.preventDefault();
+      setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => j !== selected) }));
+      setSelected(null);
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [selected, setScript]);
 
   const open = async (file: File) => {
     try {
       const parsed = await readFunscript(file);
+      setSelected(null);
       setScript({ name: file.name.replace(/\.funscript$/, ""), actions: Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] })) });
       setView((v) => ({ ...v, from: 0 }));
       setError(null);
@@ -255,6 +266,7 @@ export default function EditorPage() {
           style={{ flex: 1 }}
           onClick={() => {
             if (actions.length && !confirm("Discard the current script?")) return;
+            setSelected(null);
             setScript(EMPTY);
             setView((v) => ({ ...v, from: 0 }));
           }}
@@ -325,7 +337,7 @@ export default function EditorPage() {
         onChange={(s) => setView({ ...view, span: s * 1000 })}
       />
       <Text size="1" color="gray">
-        Click to add a point, drag a point to move it, right-click it to delete it. Scroll to move through time,
+        Click to add a point, click a point to select it, drag it to move it. Delete removes the selected point. Scroll to move through time,
         Ctrl+scroll to zoom.{videoUrl && !isAudio && " Drag the bottom edge of the video to change its height."}
       </Text>
     </Flex>
@@ -450,25 +462,22 @@ export default function EditorPage() {
               key={first + j}
               cx={x(a.at)}
               cy={y(a.pos)}
-              r={first + j === active ? 7 : 5}
+              r={first + j === selected ? 7 : 5}
               fill={LINE_COLOR}
-              style={{ cursor: "grab" }}
+              strokeWidth={2}
+              style={{ cursor: "grab", stroke: first + j === selected ? "var(--gray-12)" : "none" }}
               onPointerDown={(e) => e.button === 0 && drag(e, first + j)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                remove(first + j);
-              }}
             />
           ))}
-          {active !== null && actions[active] && (
+          {selected !== null && actions[selected] && (
             <text
-              x={x(actions[active].at)}
-              y={y(actions[active].pos) + (actions[active].pos > 80 ? 22 : -12)}
+              x={x(actions[selected].at)}
+              y={y(actions[selected].pos) + (actions[selected].pos > 80 ? 22 : -12)}
               textAnchor="middle"
               fontSize={12}
               style={{ fill: "var(--gray-12)" }}
             >
-              {formatScriptTime(actions[active].at / 1000, 2)} · {Math.round(actions[active].pos)}
+              {formatScriptTime(actions[selected].at / 1000, 2)} · {Math.round(actions[selected].pos)}
             </text>
           )}
         </svg>
