@@ -4,6 +4,15 @@ use ossm::{MotionSender, StreamMove};
 use crate::input::StreamInput;
 use crate::{PlannerStats, PushError, StreamPlanner};
 
+/// Speed limit for the moves of a stream's entry, so that its first target
+/// (after a seek, play or resume) is approached gently whatever the speed
+/// setting.
+const ENTRY_SPEED: f64 = 0.2;
+/// How long after a stream starts its moves are capped at [`ENTRY_SPEED`].
+const ENTRY_HOLD_MS: u64 = 1000;
+/// How long after the hold the cap rises linearly to the speed setting.
+const ENTRY_RAMP_MS: u64 = 1000;
+
 /// What a [`StreamSequencer`] asks of the motion controller in a tick.
 #[derive(Debug, Clone, Copy)]
 pub enum StreamStep {
@@ -45,9 +54,9 @@ impl StreamStep {
 pub struct StreamSequencer {
     planner: StreamPlanner,
     input: StreamInput,
-    /// A move was sent since the last stop, so the controller may be
-    /// streaming.
-    streaming: bool,
+    /// When the first move since the last stop was sent; set while the
+    /// controller may be streaming.
+    started_ms: Option<u64>,
 }
 
 impl StreamSequencer {
@@ -59,7 +68,7 @@ impl StreamSequencer {
         Self {
             planner: StreamPlanner::new(input.stroke_range()),
             input,
-            streaming: false,
+            started_ms: None,
         }
     }
 
@@ -95,7 +104,7 @@ impl StreamSequencer {
     /// the stream on the controller, since the last move may end in motion.
     pub fn clear(&mut self) {
         self.planner.clear();
-        self.streaming = false;
+        self.started_ms = None;
     }
 
     /// Whether nothing is left to send: no point is queued and no stroke
@@ -118,20 +127,35 @@ impl StreamSequencer {
     /// stream keeps its schedule. Once the velocity rises again, streaming
     /// resumes with the next request, never with a target consumed while
     /// holding.
+    ///
+    /// Moves sent in the first [`ENTRY_HOLD_MS`] after the stream starts (or
+    /// resumes) are limited to [`ENTRY_SPEED`]; over the following
+    /// [`ENTRY_RAMP_MS`] the limit rises to the speed setting.
     pub fn tick(&mut self, now_ms: u64, machine_position: f64) -> Option<StreamStep> {
         let request = self.planner.poll(now_ms, machine_position);
         if self.input.velocity <= 0.0 {
-            return core::mem::take(&mut self.streaming).then_some(StreamStep::Stop);
+            return self.started_ms.take().map(|_| StreamStep::Stop);
         }
         let request = request?;
-        self.streaming = true;
+        let started_ms = *self.started_ms.get_or_insert(now_ms);
         Some(StreamStep::Move(StreamMove {
             position: request.position,
             velocity: request.velocity,
             duration: request.duration_secs(now_ms),
-            speed: self.input.velocity,
+            speed: self.entry_speed(now_ms - started_ms),
             jerk: self.input.jerk,
         }))
+    }
+
+    /// The speed limit for a move sent `elapsed_ms` after the stream started.
+    ///
+    /// ponytail: a move keeps the limit it was sent with, so a long move sent
+    /// early stays slow; re-send moves during the ramp if that shows.
+    fn entry_speed(&self, elapsed_ms: u64) -> f64 {
+        let ramp = elapsed_ms.saturating_sub(ENTRY_HOLD_MS).min(ENTRY_RAMP_MS) as f64
+            / ENTRY_RAMP_MS as f64;
+        let limit = ENTRY_SPEED + (self.input.velocity - ENTRY_SPEED) * ramp;
+        self.input.velocity.min(limit)
     }
 }
 
@@ -168,7 +192,7 @@ mod tests {
         assert!(close(first.position, 0.5));
         assert!(close(first.duration, 0.5));
         assert!(close(first.velocity, 0.75)); // mean adjacent average speed
-        assert!(close(first.speed, 0.5));
+        assert!(close(first.speed, ENTRY_SPEED));
         assert!(close(first.jerk, 0.25));
 
         // Settings are clamped and reach the next move.
@@ -180,7 +204,7 @@ mod tests {
         });
         let second = step_move(seq.tick(500, 0.5));
         assert!(close(second.position, 0.8)); // stream 0 = depth
-        assert!(close(second.speed, 1.0));
+        assert!(close(second.speed, ENTRY_SPEED));
         assert_eq!(second.jerk, 0.0);
     }
 
