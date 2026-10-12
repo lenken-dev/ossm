@@ -224,10 +224,14 @@ export default function PlayerPage() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [speedLimit, setSpeedLimit] = usePersistedState("ossm:playerSpeedLimit", DEFAULT_SPEED_LIMIT, localStorage);
   const blocked = blockReason(ossm, state, configured, setupOpen);
-  /** Why the mode cannot change while it plays, or `null` when it can; the device refuses the switch too. */
+  /**
+   * Why the mode cannot change while it plays, or `null` when it can; the
+   * device refuses the switch too. A video the machine does not follow does
+   * not lock it.
+   */
   const switchLock = mode === "pattern"
     ? (state?.state === "playing" || state?.state === "paused") && "Stop the pattern to switch modes"
-    : !paused && "Pause playback to switch modes";
+    : !paused && !blocked && "Pause playback to switch modes";
   /** Set up to play; only speed and sensation may change on the fly. */
   const ready = !!ossm && ossm.lookahead > 0 && isHomed(state) && configured;
 
@@ -238,14 +242,10 @@ export default function PlayerPage() {
     void ossm?.command("stream:end", `(${reason}, media=${Math.round(media)})`);
   };
 
-  // Entering funscript mode (or connecting in it) sends `go:streaming`. A
-  // stream left open in pattern mode is ended first, so the next one starts
-  // fresh.
+  // Entering funscript mode (or connecting in it) sends `go:streaming`.
   useEffect(() => {
     if (mode !== "funscript" || !ossm || ossm.lookahead === 0) return;
-    endStream("mode");
     void ossm.command("go:streaming");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, ossm]);
 
   // Depth and stroke may have changed elsewhere (pattern mode, another remote).
@@ -462,6 +462,9 @@ export default function PlayerPage() {
             onValueChange={(v) => {
               log(`mode ${v}`);
               dropSilence("mode");
+              // Leaving funscript mode leaves streaming (any remote's), so patterns can play;
+              // the switch is locked while the stream runs, so none of ours is open.
+              if (v === "pattern" && state?.state === "streaming") void ossm?.command("go:menu");
               setMode(v as PlayerMode);
             }}
             // Disabled buttons swallow hover, so the tooltip listens on the box.
@@ -516,7 +519,7 @@ export default function PlayerPage() {
         {mode === "pattern" && ossm && state && (
           <>
             <Separator size="4" />
-            <PatternControls ossm={ossm} state={state} endStream={endStream} />
+            <PatternControls ossm={ossm} state={state} />
           </>
         )}
         {mode === "funscript" && (
@@ -831,11 +834,9 @@ export default function PlayerPage() {
 }
 
 /** Pattern mode: play, adjust and stop the device's patterns. */
-function PatternControls({ ossm, state, endStream }: {
+function PatternControls({ ossm, state }: {
   ossm: Ossm;
   state: OssmState;
-  /** Ends a stream left open by funscript mode before a pattern command. */
-  endStream: (reason: string) => void;
 }) {
   const [patterns, setPatterns] = useState<PatternInfo[]>([]);
   const [description, setDescription] = useState("");
@@ -868,10 +869,7 @@ function PatternControls({ ossm, state, endStream }: {
         <Text size="2" weight="medium" mb="1" as="div">Pattern</Text>
         <Select.Root
           value={selected == null ? "" : String(selected)}
-          onValueChange={(v) => {
-            endStream("pattern");
-            void ossm.command(`set:pattern:${v}`);
-          }}
+          onValueChange={(v) => void ossm.command(`set:pattern:${v}`)}
         >
           <Select.Trigger placeholder="Choose a pattern" style={{ width: "100%" }} />
           <Select.Content>
@@ -891,10 +889,7 @@ function PatternControls({ ossm, state, endStream }: {
         color="red"
         size="3"
         style={{ height: 64 }}
-        onClick={() => {
-          endStream("stop");
-          void ossm.command("go:menu");
-        }}
+        onClick={() => void ossm.command("go:menu")}
       >
         <StopIcon /> Stop
       </Button>
