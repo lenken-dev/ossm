@@ -210,6 +210,8 @@ export default function PlayerPage() {
   const [scriptError, setScriptError] = useState<string | null>(null);
   const [reverse, setReverse] = useState(false);
   const [simplified, setSimplified] = usePersistedState("ossm:playerSimplify", true, localStorage);
+  /** Trace the machine's position on the graph as a second line. */
+  const [machineLine, setMachineLine] = usePersistedState("ossm:playerMachineLine", false, localStorage);
   /** The script as streamed and previewed. */
   const played = useMemo(() => script && simplified ? simplify(script) : script, [script, simplified]);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
@@ -357,6 +359,12 @@ export default function PlayerPage() {
   );
   const windowSliders = (
     <>
+      <Text as="label" size="2" weight="medium">
+        <Flex align="center" justify="between" gap="2">
+          Show machine line
+          <Switch checked={machineLine} onCheckedChange={setMachineLine} />
+        </Flex>
+      </Text>
       <LabeledSlider
         label="Before playhead"
         value={graphWindow.before}
@@ -675,7 +683,7 @@ export default function PlayerPage() {
                 }}
                 onPointerDown={(e) => dragOverlay(e, "nsew")}
               >
-                <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
+                <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
                 {arranging &&
                   RESIZE_HANDLES.map((h) => <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />)}
                 {/* Stops the pointer here, so pressing Done does not start a drag. */}
@@ -773,7 +781,7 @@ export default function PlayerPage() {
               </Flex>
             </Flex>
             <Box position="relative" flexShrink="0">
-              <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
+              <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
               <Box
                 title="Drag to resize"
                 style={{
@@ -1057,17 +1065,21 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }
 
 /** Time constant, in ms, of the machine dot easing toward the notified position; higher is smoother but lags more. */
 const MACHINE_SMOOTHING_MS = 60;
+/** How often the firmware samples the machine position; it notifies only changes, so a longer gap means it held. */
+const POSITION_INTERVAL_MS = 100;
 
 /**
  * The script's raw points around the video time, redrawn every animation
  * frame. Works without a video (time 0). `notice` says why the machine does
- * not follow. The machine's planned position is a dot on the playhead.
+ * not follow. The machine's planned position is a dot on the playhead, and
+ * with `machineLine` also a line trailing it.
  */
-function ScriptPreview({ script, reverse, videoRef, ossm, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
+function ScriptPreview({ script, reverse, videoRef, ossm, machineLine, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
   script: Funscript;
   reverse: boolean;
   videoRef: RefObject<HTMLMediaElement | null>;
   ossm: Ossm | null;
+  machineLine: boolean;
   notice: string | null;
   lineWidth: number;
   /** Time shown before and after the video time, in ms. */
@@ -1101,6 +1113,7 @@ function ScriptPreview({ script, reverse, videoRef, ossm, notice, lineWidth, spa
     const gridColor = isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.15)";
     const playheadColor = isDark ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.7)";
     const lineColor = "#ec4899";
+    const machineColor = "#22d3ee";
     const pad = 6;
     const y = (pos: number) => pad + (1 - (reverse ? 100 - pos : pos) / 100) * (height - 2 * pad);
 
@@ -1108,6 +1121,23 @@ function ScriptPreview({ script, reverse, videoRef, ossm, notice, lineWidth, spa
     // The machine position eases toward each 100 ms sample instead of jumping.
     let machine: number | null = null;
     let drawnAt = performance.now();
+    // The notified machine positions, at the video times in ms they arrived, for the machine line.
+    const trail: { at: number[]; pos: number[] } = { at: [], pos: [] };
+    const record = () => {
+      const now = (videoRef.current?.currentTime ?? 0) * 1000;
+      const pos = ossm?.streamPosition() ?? null;
+      // Seeking back starts the trail over.
+      if (now < trail.at[trail.at.length - 1]) trail.at.length = trail.pos.length = 0;
+      const last = trail.at.length - 1;
+      if (pos === null || now === trail.at[last]) return;
+      if (now - POSITION_INTERVAL_MS > trail.at[last]) {
+        trail.at.push(now - POSITION_INTERVAL_MS);
+        trail.pos.push(trail.pos[last]);
+      }
+      trail.at.push(now);
+      trail.pos.push(pos);
+    };
+    if (machineLine) ossm?.addEventListener("position", record);
     const draw = () => {
       frame = requestAnimationFrame(draw);
       const elapsed = performance.now() - drawnAt;
@@ -1161,6 +1191,22 @@ function ScriptPreview({ script, reverse, videoRef, ossm, notice, lineWidth, spa
 
       const target = ossm?.streamPosition() ?? null;
       machine = target === null || machine === null ? target : machine + (target - machine) * (1 - Math.exp(-elapsed / MACHINE_SMOOTHING_MS));
+      if (now < trail.at[trail.at.length - 1]) trail.at.length = trail.pos.length = 0;
+      // Dropping all but one point before the window bounds the trail.
+      while (trail.at.length > 1 && trail.at[1] < from) {
+        trail.at.shift();
+        trail.pos.shift();
+      }
+      // Through the samples and on to the dot.
+      if (machineLine && machine !== null && trail.at.length) {
+        ctx.strokeStyle = machineColor;
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+        for (let i = 0; i < trail.at.length; i++) ctx.lineTo(x(trail.at[i]), y(trail.pos[i]));
+        ctx.lineTo(px, y(machine));
+        ctx.stroke();
+      }
+
       if (machine !== null) {
         ctx.fillStyle = playheadColor;
         ctx.strokeStyle = lineColor;
@@ -1171,8 +1217,11 @@ function ScriptPreview({ script, reverse, videoRef, ossm, notice, lineWidth, spa
       }
     };
     draw();
-    return () => cancelAnimationFrame(frame);
-  }, [script, reverse, appearance, width, videoRef, ossm, overlaid, height, lineWidth, before, after]);
+    return () => {
+      cancelAnimationFrame(frame);
+      ossm?.removeEventListener("position", record);
+    };
+  }, [script, reverse, appearance, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
 
   return (
     <Box position="relative" flexShrink="0" height={cssHeight === undefined ? "100%" : undefined}>
