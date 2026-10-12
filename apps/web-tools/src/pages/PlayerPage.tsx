@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type RefObject, type SyntheticEvent } from "react";
-import { Box, Button, Callout, Dialog, Flex, IconButton, Popover, SegmentedControl, Select, Separator, Switch, Text, Tooltip } from "@radix-ui/themes";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type RefObject, type SyntheticEvent } from "react";
+import { createPortal } from "react-dom";
+import { Box, Button, Callout, Dialog, Flex, IconButton, Popover, SegmentedControl, Select, Separator, Switch, Text, Theme, Tooltip } from "@radix-ui/themes";
 import {
   CheckIcon,
   Cross2Icon,
@@ -10,6 +11,9 @@ import {
   HamburgerMenuIcon,
   HomeIcon,
   MoveIcon,
+  OpenInNewWindowIcon,
+  PauseIcon,
+  PlayIcon,
   StopIcon,
   UploadIcon,
 } from "@radix-ui/react-icons";
@@ -24,6 +28,12 @@ import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 
 type PlayerMode = "pattern" | "funscript";
+
+/** Where dialogs, menus and tooltips open: the popout window's body while the controls are in it. */
+const PortalContainer = createContext<HTMLElement | undefined>(undefined);
+
+/** Size the popout window opens at, in px. */
+const POPOUT_SIZE = { width: 320, height: 640 };
 
 /** How long a slider shows the user's value before following the device again; the device reports settings at least once a second. */
 const PENDING_MS = 1500;
@@ -156,6 +166,9 @@ export default function PlayerPage() {
   const [showGraph, setShowGraph] = useState(true);
   const [showControls, setShowControls] = useState(true);
   const isMobile = useIsMobile();
+  const [appearance] = useAppearance();
+  /** The always-on-top window the controls float in, over other tabs and applications. */
+  const [popout, setPopout] = useState<Window | null>(null);
   const [overlay, setOverlay] = usePersistedState("ossm:playerOverlay", DEFAULT_OVERLAY, localStorage);
   /** Height of the graph below the video, in px. */
   const [graphHeight, setGraphHeight] = usePersistedState("ossm:playerGraphHeight", PREVIEW_HEIGHT, localStorage);
@@ -453,31 +466,58 @@ export default function PlayerPage() {
     </Flex>
   );
 
-  const sidebar = (
+  const openPopout = async () => {
+    const win = await window.documentPictureInPicture!.requestWindow(POPOUT_SIZE);
+    // The page's styles: <style>s in dev, <link>s in builds.
+    for (const sheet of document.styleSheets) {
+      win.document.head.append(sheet.href
+        ? Object.assign(win.document.createElement("link"), { rel: "stylesheet", href: sheet.href })
+        : Object.assign(win.document.createElement("style"), { textContent: sheet.ownerNode?.textContent ?? "" }));
+    }
+    win.document.body.style.margin = "0";
+    win.addEventListener("pagehide", () => setPopout(null), { once: true });
+    setPopout(win);
+  };
+  // Leaving the page takes the controls with it.
+  useEffect(() => () => popout?.close(), [popout]);
+
+  const media = videoUrl || silentUrl;
+  const controls = (inPopout: boolean) => (
     <>
-      {inTheater && theaterToggles({ padding: "var(--space-3)", paddingBottom: 0 })}
-      <Tooltip content={switchLock} open={switchLock ? undefined : false}>
-        <Box p="3" pb="0">
-          <SegmentedControl.Root
-            value={mode}
-            disabled={!!switchLock}
-            onValueChange={(v) => {
-              log(`mode ${v}`);
-              dropSilence("mode");
-              // Leaving funscript mode leaves streaming (any remote's), so patterns can play;
-              // the switch is locked while the stream runs, so none of ours is open.
-              if (v === "pattern" && state?.state === "streaming") void ossm?.command("go:menu");
-              setMode(v as PlayerMode);
-            }}
-            // Disabled buttons swallow hover, so the tooltip listens on the box.
-            style={{ width: "100%", pointerEvents: switchLock ? "none" : undefined }}
-          >
-            <SegmentedControl.Item value="pattern">Pattern</SegmentedControl.Item>
-            <SegmentedControl.Item value="funscript">Funscript</SegmentedControl.Item>
-          </SegmentedControl.Root>
-        </Box>
-      </Tooltip>
+      <Flex p="3" pb="0" gap="2">
+        <Tooltip content={switchLock} open={switchLock ? undefined : false} container={inPopout ? popout?.document.body : undefined}>
+          <Box flexGrow="1">
+            <SegmentedControl.Root
+              value={mode}
+              disabled={!!switchLock}
+              onValueChange={(v) => {
+                log(`mode ${v}`);
+                dropSilence("mode");
+                // Leaving funscript mode leaves streaming (any remote's), so patterns can play;
+                // the switch is locked while the stream runs, so none of ours is open.
+                if (v === "pattern" && state?.state === "streaming") void ossm?.command("go:menu");
+                setMode(v as PlayerMode);
+              }}
+              // Disabled buttons swallow hover, so the tooltip listens on the box.
+              style={{ width: "100%", pointerEvents: switchLock ? "none" : undefined }}
+            >
+              <SegmentedControl.Item value="pattern">Pattern</SegmentedControl.Item>
+              <SegmentedControl.Item value="funscript">Funscript</SegmentedControl.Item>
+            </SegmentedControl.Root>
+          </Box>
+        </Tooltip>
+        {!inPopout && window.documentPictureInPicture && !isMobile && (
+          <IconButton variant="soft" color="gray" aria-label="Pop out controls" title="Pop out controls" onClick={() => void openPopout()}>
+            <OpenInNewWindowIcon />
+          </IconButton>
+        )}
+      </Flex>
       <Flex direction="column" gap="3" p="3">
+        {inPopout && media && (
+          <Button variant="soft" onClick={() => (paused ? void videoRef.current?.play() : videoRef.current?.pause())}>
+            {paused ? <><PlayIcon /> Play</> : <><PauseIcon /> Pause</>}
+          </Button>
+        )}
         {!navigator.bluetooth ? (
           <Text size="2" color="gray">
             Web Bluetooth is not supported in this browser (use Chrome or Edge).
@@ -593,6 +633,25 @@ export default function PlayerPage() {
           </>
         )}
       </Flex>
+    </>
+  );
+
+  // The controls live in one place at a time, so dialogs and pending slider values are not doubled.
+  const sidebar = (
+    <>
+      {inTheater && theaterToggles({ padding: "var(--space-3)", paddingBottom: 0 })}
+      {popout ? (
+        <Flex direction="column" gap="3" p="3">
+          <Text size="2" color="gray">The controls are in the popout window.</Text>
+          <Button variant="soft" onClick={() => popout.close()}>Bring back</Button>
+          {createPortal(
+            <Theme accentColor="purple" radius="large" appearance={appearance} hasBackground style={{ minHeight: "100vh" }}>
+              <PortalContainer.Provider value={popout.document.body}>{controls(true)}</PortalContainer.Provider>
+            </Theme>,
+            popout.document.body,
+          )}
+        </Flex>
+      ) : controls(false)}
     </>
   );
 
@@ -863,6 +922,7 @@ function PatternControls({ ossm, state }: {
     return () => void (current = false);
   }, [ossm, selected]);
 
+  const container = useContext(PortalContainer);
   return (
     <>
       <Box>
@@ -872,7 +932,7 @@ function PatternControls({ ossm, state }: {
           onValueChange={(v) => void ossm.command(`set:pattern:${v}`)}
         >
           <Select.Trigger placeholder="Choose a pattern" style={{ width: "100%" }} />
-          <Select.Content>
+          <Select.Content container={container}>
             {patterns.map((p) => (
               <Select.Item key={p.idx} value={String(p.idx)}>{p.name}</Select.Item>
             ))}
@@ -948,6 +1008,7 @@ function SpeedSlider({ ossm, value, limit, setLimit }: {
   limit: number;
   setLimit: (limit: number) => void;
 }) {
+  const container = useContext(PortalContainer);
   return (
     <Flex align="end" gap="2">
       <Box flexGrow="1">
@@ -959,7 +1020,7 @@ function SpeedSlider({ ossm, value, limit, setLimit }: {
             <GearIcon />
           </IconButton>
         </Dialog.Trigger>
-        <Dialog.Content maxWidth="360px">
+        <Dialog.Content maxWidth="360px" container={container}>
           <Dialog.Title>Speed limit</Dialog.Title>
           <Dialog.Description size="2" mb="4">
             The highest speed the speed slider allows. Raise it once the machine moves as expected.
@@ -1015,9 +1076,10 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }
   };
 
   const still = state.speed <= 0;
+  const container = useContext(PortalContainer);
   return (
     <Dialog.Root open onOpenChange={(open) => !open && close()}>
-      <Dialog.Content maxWidth="420px">
+      <Dialog.Content maxWidth="420px" container={container}>
         <Dialog.Title>Set depth and stroke</Dialog.Title>
         <Dialog.Description size="2" mb="4">
           The machine follows the slider you move. Depth is the deepest point while playing; 100% extends the
