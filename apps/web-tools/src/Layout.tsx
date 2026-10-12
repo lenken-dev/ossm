@@ -187,6 +187,13 @@ export default function Layout() {
                     </TabNav.Link>
                   )}
                 </NavLink>
+                <NavLink to="/editor">
+                  {({ isActive }) => (
+                    <TabNav.Link asChild active={isActive}>
+                      <span>Editor</span>
+                    </TabNav.Link>
+                  )}
+                </NavLink>
                 <NavLink to="/diagram">
                   {({ isActive }) => (
                     <TabNav.Link asChild active={isActive}>
