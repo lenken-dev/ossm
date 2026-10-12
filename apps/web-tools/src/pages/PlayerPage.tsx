@@ -200,8 +200,10 @@ export default function PlayerPage() {
     target.addEventListener("pointermove", move);
     target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
   };
+  /** An audio file plays in a bar instead of the video area. */
+  const isAudio = !!videoFile?.type.startsWith("audio/");
   /** Theater mode needs a video and a wide screen; closing the video leaves theater mode. */
-  const inTheater = theater && !!videoUrl && !isMobile;
+  const inTheater = theater && !!videoUrl && !isAudio && !isMobile;
   /** The video, or the silent clock without one. */
   const videoRef = useRef<HTMLMediaElement>(null);
   const [paused, setPaused] = useState(true);
@@ -615,12 +617,15 @@ export default function PlayerPage() {
       <input
         ref={videoInput}
         type="file"
-        accept="video/*"
+        accept="video/*,audio/*"
         hidden
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file) {
             dropSilence("video");
+            // Switching between video and audio swaps the element, whose events then never reach React.
+            endStream("video");
+            setPaused(true);
             setVideoFile(file);
           }
           e.target.value = "";
@@ -642,7 +647,7 @@ export default function PlayerPage() {
           {!inTheater && <Flex align="center" justify="between" gap="2">
             <Text size="2" weight="medium" truncate title={videoFile?.name}>{videoFile?.name}</Text>
             <Flex gap="2">
-              {!isMobile && (
+              {!isMobile && !isAudio && (
                 <Button variant="soft" onClick={() => setTheater(true)}>
                   <EnterFullScreenIcon /> Theater
                 </Button>
@@ -664,62 +669,66 @@ export default function PlayerPage() {
               </Button>
             </Flex>
           </Flex>}
-          {/* The video stays at this place in the tree, so toggling theater mode does not reload it. */}
-          <Box ref={stageRef} position="relative" flexGrow="1" minHeight="0">
-            <video {...mediaProps} src={videoUrl} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", background: "black" }} />
-            {inTheater && mode === "funscript" && played && showGraph && (
-              // While arranging, drag the graph to move it and its handles to resize it; otherwise
-              // clicks go through to the video. Done sits in its middle, clear of the handles.
-              <Box
-                position="absolute"
-                style={{
-                  left: `${overlay.x * 100}%`,
-                  top: `${overlay.y * 100}%`,
-                  width: `${overlay.width * 100}%`,
-                  height: `${overlay.height * 100}%`,
-                  ...(arranging
-                    ? { cursor: "move", borderRadius: 6, outline: "2px dashed white", boxShadow: "0 0 0 3px rgba(0,0,0,0.5)" }
-                    : { pointerEvents: "none" }),
-                }}
-                onPointerDown={(e) => dragOverlay(e, "nsew")}
-              >
-                <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
-                {arranging &&
-                  RESIZE_HANDLES.map((h) => <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />)}
-                {/* Stops the pointer here, so pressing Done does not start a drag. */}
-                {arranging && (
-                  <Box
-                    position="absolute"
-                    style={{ left: "50%", top: "50%", translate: "-50% -50%", cursor: "auto" }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                  >
-                    <Button onClick={() => setArranging(false)}>
-                      <CheckIcon /> Done
-                    </Button>
-                  </Box>
-                )}
-              </Box>
-            )}
-            {/* Where the hidden pane would appear, at the pane's padding so they do not jump. */}
-            {inTheater && !showControls && theaterToggles({ position: "absolute", left: "var(--space-3)", top: "var(--space-3)" })}
-            {inTheater && (
-              <Button
-                variant="surface"
-                onClick={() => setTheater(false)}
-                style={{ position: "absolute", top: "var(--space-3)", right: "var(--space-3)" }}
-              >
-                <ExitFullScreenIcon /> Exit
-              </Button>
-            )}
-          </Box>
+          {isAudio ? (
+            <audio {...mediaProps} src={videoUrl} style={{ width: "100%", flexShrink: 0 }} />
+          ) : (
+            /* The video stays at this place in the tree, so toggling theater mode does not reload it. */
+            <Box ref={stageRef} position="relative" flexGrow="1" minHeight="0">
+              <video {...mediaProps} src={videoUrl} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", background: "black" }} />
+              {inTheater && mode === "funscript" && played && showGraph && (
+                // While arranging, drag the graph to move it and its handles to resize it; otherwise
+                // clicks go through to the video. Done sits in its middle, clear of the handles.
+                <Box
+                  position="absolute"
+                  style={{
+                    left: `${overlay.x * 100}%`,
+                    top: `${overlay.y * 100}%`,
+                    width: `${overlay.width * 100}%`,
+                    height: `${overlay.height * 100}%`,
+                    ...(arranging
+                      ? { cursor: "move", borderRadius: 6, outline: "2px dashed white", boxShadow: "0 0 0 3px rgba(0,0,0,0.5)" }
+                      : { pointerEvents: "none" }),
+                  }}
+                  onPointerDown={(e) => dragOverlay(e, "nsew")}
+                >
+                  <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
+                  {arranging &&
+                    RESIZE_HANDLES.map((h) => <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />)}
+                  {/* Stops the pointer here, so pressing Done does not start a drag. */}
+                  {arranging && (
+                    <Box
+                      position="absolute"
+                      style={{ left: "50%", top: "50%", translate: "-50% -50%", cursor: "auto" }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                    >
+                      <Button onClick={() => setArranging(false)}>
+                        <CheckIcon /> Done
+                      </Button>
+                    </Box>
+                  )}
+                </Box>
+              )}
+              {/* Where the hidden pane would appear, at the pane's padding so they do not jump. */}
+              {inTheater && !showControls && theaterToggles({ position: "absolute", left: "var(--space-3)", top: "var(--space-3)" })}
+              {inTheater && (
+                <Button
+                  variant="surface"
+                  onClick={() => setTheater(false)}
+                  style={{ position: "absolute", top: "var(--space-3)", right: "var(--space-3)" }}
+                >
+                  <ExitFullScreenIcon /> Exit
+                </Button>
+              )}
+            </Box>
+          )}
         </>
       ) : (
         <Flex direction="column" align="center" justify="center" gap="3" flexGrow="1">
           <Text size="2" color="gray">
-            {mode === "funscript" ? "Open a video to play it with the funscript." : "Open a video to play it here."}
+            {mode === "funscript" ? "Open a video or audio file to play it with the funscript." : "Open a video or audio file to play it here."}
           </Text>
           <Button variant="soft" onClick={() => videoInput.current?.click()}>
-            <UploadIcon /> Open video
+            <UploadIcon /> Open media
           </Button>
         </Flex>
       )}
