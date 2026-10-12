@@ -269,7 +269,9 @@ export class Ossm extends EventTarget {
 
   private handlePosition(text: string) {
     const position = Number(text);
-    if (Number.isFinite(position)) this.position = position;
+    if (!Number.isFinite(position)) return;
+    this.position = position;
+    this.dispatchEvent(new Event("position"));
   }
 
   private handleDisconnected = () => {
