@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { Box, Button, Callout, Flex, Slider, Text, TextField } from "@radix-ui/themes";
-import { Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { Box, Button, Callout, Flex, IconButton, Popover, Slider, Text, TextField } from "@radix-ui/themes";
+import { Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -37,6 +37,8 @@ const VIDEO_HEIGHT = 300;
 const VIDEO_MIN_HEIGHT = 80;
 /** Where the playhead stays in view while the video plays, as a fraction of the visible time. */
 const FOLLOW_AT = 0.2;
+/** Time steps of the seek buttons, in s, as typed; the first is always shown, empty ones are hidden. */
+const DEFAULT_STEPS = ["1", "", ""];
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 const byTime = bisector((a: Action) => a.at).left;
@@ -60,6 +62,9 @@ export default function EditorPage() {
   /** Separate from the player's sizes. */
   const [videoHeight, setVideoHeight] = usePersistedState("ossm:editorVideoHeight", VIDEO_HEIGHT, localStorage);
   const [paused, setPaused] = useState(true);
+  const [steps, setSteps] = usePersistedState("ossm:editorSteps", DEFAULT_STEPS, localStorage);
+  /** The steps in use; a first step that is not a positive number falls back to the default. */
+  const shownSteps = steps.map(Number).map((v, i) => (v > 0 ? v : i === 0 ? Number(DEFAULT_STEPS[0]) : null)).filter((v) => v !== null);
   /** Video time, in ms. */
   const [time, setTime] = useState(0);
 
@@ -172,6 +177,17 @@ export default function EditorPage() {
     drag(e, i);
   };
 
+  /** Move the playhead to `t` ms, within the media. */
+  const seek = (t: number) => {
+    const media = videoRef.current;
+    if (!media) return;
+    t = clamp(t, 0, (media.duration || 0) * 1000);
+    media.currentTime = t / 1000;
+    setTime(t);
+  };
+  /** The point after (`dir` 1) or before (-1) the playhead; half a ms of slack for the media's rounding. */
+  const neighbour = (dir: 1 | -1) => actions[dir > 0 ? byTime(actions, time + 0.5) : byTime(actions, time - 0.5) - 1];
+
   /** Drag the playhead to seek; playback pauses while dragging, as in the player. */
   const dragPlayhead = (e: PointerEvent<SVGGElement>) => {
     const media = videoRef.current;
@@ -181,11 +197,7 @@ export default function EditorPage() {
     const target = e.currentTarget;
     const wasPlaying = !media.paused;
     media.pause();
-    const move = (m: globalThis.PointerEvent) => {
-      const t = clamp(pointerAt(m).at, 0, (media.duration || 0) * 1000);
-      media.currentTime = t / 1000;
-      setTime(t);
-    };
+    const move = (m: globalThis.PointerEvent) => seek(pointerAt(m).at);
     target.setPointerCapture(e.pointerId);
     target.addEventListener("pointermove", move as EventListener);
     target.addEventListener("lostpointercapture", () => {
@@ -350,6 +362,60 @@ export default function EditorPage() {
             onPointerDown={dragVideoHeight}
           />
         </Box>
+      )}
+      {videoUrl && (
+        <Flex align="center" justify="center" gap="2" flexShrink="0">
+          {/* The first step nearest the middle. */}
+          {[...shownSteps].reverse().map((step, i) => (
+            <Button key={`back${i}`} variant="soft" onClick={() => seek(time - step * 1000)}>
+              −{step}s
+            </Button>
+          ))}
+          <IconButton variant="soft" aria-label="Previous point" title="Previous point" disabled={!neighbour(-1)} onClick={() => seek(neighbour(-1).at)}>
+            <TrackPreviousIcon />
+          </IconButton>
+          <IconButton
+            aria-label={paused ? "Play" : "Pause"}
+            onClick={() => (paused ? void videoRef.current?.play() : videoRef.current?.pause())}
+          >
+            {paused ? <PlayIcon /> : <PauseIcon />}
+          </IconButton>
+          <IconButton variant="soft" aria-label="Next point" title="Next point" disabled={!neighbour(1)} onClick={() => seek(neighbour(1).at)}>
+            <TrackNextIcon />
+          </IconButton>
+          {shownSteps.map((step, i) => (
+            <Button key={`fwd${i}`} variant="soft" onClick={() => seek(time + step * 1000)}>
+              +{step}s
+            </Button>
+          ))}
+          <Popover.Root>
+            <Popover.Trigger>
+              <IconButton variant="soft" color="gray" aria-label="Step settings">
+                <GearIcon />
+              </IconButton>
+            </Popover.Trigger>
+            <Popover.Content width="220px">
+              <Flex direction="column" gap="2">
+                <Text size="2" weight="medium">Seek steps</Text>
+                {steps.map((step, i) => (
+                  <TextField.Root
+                    key={i}
+                    type="number"
+                    min={0}
+                    step="any"
+                    placeholder={i === 0 ? DEFAULT_STEPS[0] : "Off"}
+                    aria-label={`Step ${i + 1}`}
+                    value={step}
+                    onChange={(e) => setSteps(steps.map((s, j) => (j === i ? e.target.value : s)))}
+                  >
+                    <TextField.Slot side="right">s</TextField.Slot>
+                  </TextField.Root>
+                ))}
+                <Text size="1" color="gray">The first step is always shown; leave the others empty to hide them.</Text>
+              </Flex>
+            </Popover.Content>
+          </Popover.Root>
+        </Flex>
       )}
       <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
         <svg width={width} height={height} onPointerDown={add} style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}>
