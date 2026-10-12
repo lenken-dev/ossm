@@ -6,6 +6,7 @@ import { AppearanceProvider } from "./AppearanceProvider";
 import { SimulatorProvider } from "./SimulatorProvider";
 import Layout from "./Layout";
 import DiagramPage from "./pages/DiagramPage";
+import EditorPage from "./pages/EditorPage";
 import FlasherPage from "./pages/FlasherPage";
 import GraphPage from "./pages/GraphPage";
 import PlayerPage from "./pages/PlayerPage";
@@ -35,6 +36,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="simulator" element={<SimulatorPage />} />
             <Route path="graph" element={<GraphPage />} />
             <Route path="player" element={<PlayerPage />} />
+            <Route path="editor" element={<EditorPage />} />
             <Route path="diagram" element={<DiagramPage />} />
             <Route path="firmware" element={<FlasherPage />}>
               <Route path="release/:release/:board" element={null} />
