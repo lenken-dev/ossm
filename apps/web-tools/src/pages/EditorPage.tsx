@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, Slider, Text, TextField } from "@radix-ui/themes";
-import { DownloadIcon, ExclamationTriangleIcon, FileIcon, UploadIcon } from "@radix-ui/react-icons";
+import { Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -32,6 +32,12 @@ const PAD = 10;
 
 const LINE_COLOR = "#ec4899";
 
+/** Default and smallest height of the reference video, in px. */
+const VIDEO_HEIGHT = 300;
+const VIDEO_MIN_HEIGHT = 80;
+/** Where the playhead stays in view while the video plays, as a fraction of the visible time. */
+const FOLLOW_AT = 0.2;
+
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 const byTime = bisector((a: Action) => a.at).left;
 
@@ -45,6 +51,57 @@ export default function EditorPage() {
   const input = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
+  const videoInput = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLMediaElement>(null);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  /** An audio file plays in a bar instead of the video area. */
+  const isAudio = !!videoFile?.type.startsWith("audio/");
+  /** Separate from the player's sizes. */
+  const [videoHeight, setVideoHeight] = usePersistedState("ossm:editorVideoHeight", VIDEO_HEIGHT, localStorage);
+  const [paused, setPaused] = useState(true);
+  /** Video time, in ms. */
+  const [time, setTime] = useState(0);
+
+  useEffect(() => {
+    setVideoUrl(null);
+    if (!videoFile) return;
+    const url = URL.createObjectURL(videoFile);
+    setVideoUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [videoFile]);
+
+  // While the video plays, the playhead moves every frame and the graph follows it.
+  useEffect(() => {
+    if (paused) return;
+    let frame = requestAnimationFrame(function tick() {
+      const t = (videoRef.current?.currentTime ?? 0) * 1000;
+      setTime(t);
+      setView((v) => ({ ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) }));
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [paused, setView]);
+
+  /** Seeking while paused brings the playhead into view. */
+  const seeked = () => {
+    const t = (videoRef.current?.currentTime ?? 0) * 1000;
+    setTime(t);
+    setView((v) => (t < v.from || t > v.from + v.span ? { ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) } : v));
+  };
+
+  /** Drag the bottom edge of the video to set its height; at most most of the window. */
+  const dragVideoHeight = (e: PointerEvent<HTMLElement>) => {
+    e.preventDefault();
+    const start = videoHeight;
+    const target = e.currentTarget;
+    const startY = e.clientY;
+    const move = (m: globalThis.PointerEvent) =>
+      setVideoHeight(Math.round(Math.min(Math.max(start + (m.clientY - startY), VIDEO_MIN_HEIGHT), window.innerHeight * 0.7)));
+    target.setPointerCapture(e.pointerId);
+    target.addEventListener("pointermove", move);
+    target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
+  };
 
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
@@ -115,6 +172,28 @@ export default function EditorPage() {
     drag(e, i);
   };
 
+  /** Drag the playhead to seek; playback pauses while dragging, as in the player. */
+  const dragPlayhead = (e: PointerEvent<SVGGElement>) => {
+    const media = videoRef.current;
+    if (!media || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget;
+    const wasPlaying = !media.paused;
+    media.pause();
+    const move = (m: globalThis.PointerEvent) => {
+      const t = clamp(pointerAt(m).at, 0, (media.duration || 0) * 1000);
+      media.currentTime = t / 1000;
+      setTime(t);
+    };
+    target.setPointerCapture(e.pointerId);
+    target.addEventListener("pointermove", move as EventListener);
+    target.addEventListener("lostpointercapture", () => {
+      target.removeEventListener("pointermove", move as EventListener);
+      if (wasPlaying) void media.play();
+    }, { once: true });
+  };
+
   const remove = (i: number) => setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => j !== i) }));
 
   const open = async (file: File) => {
@@ -174,6 +253,38 @@ export default function EditorPage() {
           <UploadIcon /> Open
         </Button>
       </Flex>
+      <input
+        ref={videoInput}
+        type="file"
+        accept="video/*,audio/*"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            setPaused(true);
+            setTime(0);
+            setVideoFile(file);
+          }
+          e.target.value = "";
+        }}
+      />
+      <Flex gap="2">
+        <Button variant="soft" style={{ flex: 1 }} onClick={() => videoInput.current?.click()}>
+          <VideoIcon /> {videoFile ? "Change media" : "Open video or audio"}
+        </Button>
+        {videoFile && (
+          <Button
+            variant="soft"
+            color="gray"
+            onClick={() => {
+              setPaused(true);
+              setVideoFile(null);
+            }}
+          >
+            <Cross2Icon /> Close
+          </Button>
+        )}
+      </Flex>
       <Box>
         <Text as="label" size="2" weight="medium" mb="1" style={{ display: "block" }} htmlFor="editor-name">Name</Text>
         <TextField.Root id="editor-name" value={script.name} onChange={(e) => setScript({ ...script, name: e.target.value })} />
@@ -203,13 +314,43 @@ export default function EditorPage() {
       />
       <Text size="1" color="gray">
         Click to add a point, drag a point to move it, right-click it to delete it. Scroll to move through time,
-        Ctrl+scroll to zoom.
+        Ctrl+scroll to zoom.{videoUrl && !isAudio && " Drag the bottom edge of the video to change its height."}
       </Text>
     </Flex>
   );
 
+  const mediaProps = {
+    ref: (el: HTMLMediaElement | null) => void (videoRef.current = el),
+    src: videoUrl ?? undefined,
+    controls: true,
+    onPlay: () => setPaused(false),
+    onPause: () => setPaused(true),
+    onEmptied: () => setPaused(true),
+    onSeeked: seeked,
+  };
+
   const content = (
     <Flex direction="column" gap="3" p="3" height="100%">
+      {videoUrl && isAudio && <audio {...mediaProps} style={{ width: "100%", flexShrink: 0 }} />}
+      {videoUrl && !isAudio && (
+        <Box position="relative" flexShrink="0">
+          <video {...mediaProps} style={{ display: "block", width: "100%", height: videoHeight, background: "black", borderRadius: 6 }} />
+          <Box
+            title="Drag to resize"
+            style={{
+              position: "absolute",
+              bottom: -10,
+              left: "calc(50% - 20px)",
+              width: 40,
+              height: 12,
+              borderBottom: "4px solid var(--gray-a8)",
+              cursor: "ns-resize",
+              touchAction: "none",
+            }}
+            onPointerDown={dragVideoHeight}
+          />
+        </Box>
+      )}
       <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
         <svg width={width} height={height} onPointerDown={add} style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}>
           {[0, 50, 100].map((pos) => (
@@ -223,6 +364,14 @@ export default function EditorPage() {
               </text>
             </g>
           ))}
+          {videoUrl && (
+            <g onPointerDown={dragPlayhead} style={{ cursor: "ew-resize" }}>
+              {/* A wider, invisible line to grab. */}
+              <line x1={x(time)} x2={x(time)} y1={0} y2={plotHeight} strokeWidth={12} stroke="transparent" />
+              <line x1={x(time)} x2={x(time)} y1={0} y2={plotHeight} strokeWidth={2} style={{ stroke: "var(--gray-12)" }} />
+              <path d={`M${x(time) - 6},0 h12 l-6,8 z`} style={{ fill: "var(--gray-12)" }} />
+            </g>
+          )}
           <polyline
             points={visible.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")}
             fill="none"
