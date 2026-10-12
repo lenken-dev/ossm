@@ -232,6 +232,8 @@ export default function PlayerPage() {
   const switchLock = mode === "pattern"
     ? (state?.state === "playing" || state?.state === "paused") && "Stop the pattern to switch modes"
     : !paused && !blocked && "Pause playback to switch modes";
+  /** A pattern plays or is paused; the machine homed for it. */
+  const patternActive = state?.state === "playing" || state?.state === "paused";
   /** Set up to play; only speed and sensation may change on the fly. */
   const ready = !!ossm && ossm.lookahead > 0 && isHomed(state) && configured;
 
@@ -489,11 +491,9 @@ export default function PlayerPage() {
               </Flex>
               <Button variant="soft" onClick={disconnect}>Disconnect</Button>
             </Flex>
-            {(mode === "pattern" || !isHomed(state)) && (
+            {!isHomed(state) && !(mode === "pattern" && patternActive) && (
               <Button
-                variant={mode === "pattern" ? "soft" : "solid"}
                 loading={state?.state === "homing"}
-                disabled={mode === "pattern" && !paused}
                 onClick={() => {
                   endStream("home");
                   void ossm.command("go:home");
@@ -516,7 +516,7 @@ export default function PlayerPage() {
             <Callout.Text>{error}</Callout.Text>
           </Callout.Root>
         )}
-        {mode === "pattern" && ossm && state && (
+        {mode === "pattern" && ossm && state && (isHomed(state) || patternActive) && (
           <>
             <Separator size="4" />
             <PatternControls ossm={ossm} state={state} />
