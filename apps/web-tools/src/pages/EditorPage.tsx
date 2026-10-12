@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { Box, Button, Callout, Flex, IconButton, Popover, Slider, Text, TextField } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, IconButton, Popover, Slider, Switch, Text, TextField } from "@radix-ui/themes";
 import { Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -48,8 +48,14 @@ export default function EditorPage() {
   const [script, setScript] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
   const [error, setError] = useState<string | null>(null);
-  /** The point last clicked or added, deleted with the Delete key. */
-  const [selected, setSelected] = useState<number | null>(null);
+  /** Indices of the selected points, moved together and deleted with the Delete key. */
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  /** Dragging on empty space draws a box that selects points instead of adding one; Shift does the same once. */
+  const [boxMode, setBoxMode] = useState(false);
+  /** The selection box being drawn, in px. */
+  const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  /** The point last clicked without Shift, where a Shift+click range starts. */
+  const anchor = useRef<number | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
@@ -144,18 +150,34 @@ export default function EditorPage() {
     };
   };
 
-  /** Drag point `i`; it stays between its neighbours, so the actions stay sorted. */
-  const drag = (e: PointerEvent<Element>, i: number) => {
+  /**
+   * Drag the points `indices` together. They keep their spacing, stay within
+   * 0–100 and between their unselected neighbours, so the actions stay sorted.
+   */
+  const drag = (e: PointerEvent<Element>, indices: number[]) => {
     e.preventDefault();
     e.stopPropagation();
     const svg = e.currentTarget.closest("svg")!;
-    setSelected(i);
+    const origin = pointerAt(e);
+    const moving = new Set(indices);
+    // Taken on the first move, so it includes a point added just before the drag.
+    let start: Action[] | null = null;
     const move = (m: globalThis.PointerEvent) => {
-      const { at, pos } = pointerAt(m);
+      const p = pointerAt(m);
       setScript((s) => {
-        const a = s.actions.slice();
-        a[i] = { at: clamp(at, i > 0 ? a[i - 1].at + 1 : 0, i < a.length - 1 ? a[i + 1].at - 1 : Infinity), pos };
-        return { ...s, actions: a };
+        const a = (start ??= s.actions);
+        let [dtMin, dtMax, dpMin, dpMax] = [-Infinity, Infinity, -100, 100];
+        for (const i of indices) {
+          dtMin = Math.max(dtMin, -a[i].at, i > 0 && !moving.has(i - 1) ? a[i - 1].at + 1 - a[i].at : -Infinity);
+          dtMax = Math.min(dtMax, i < a.length - 1 && !moving.has(i + 1) ? a[i + 1].at - 1 - a[i].at : Infinity);
+          dpMin = Math.max(dpMin, -a[i].pos);
+          dpMax = Math.min(dpMax, 100 - a[i].pos);
+        }
+        const dt = clamp(p.at - origin.at, dtMin, dtMax);
+        const dp = clamp(p.pos - origin.pos, dpMin, dpMax);
+        const next = a.slice();
+        for (const i of indices) next[i] = { at: a[i].at + dt, pos: a[i].pos + dp };
+        return { ...s, actions: next };
       });
     };
     svg.setPointerCapture(e.pointerId);
@@ -165,15 +187,89 @@ export default function EditorPage() {
     }, { once: true });
   };
 
-  /** Add a point under the pointer and keep dragging it. */
+  /**
+   * Draw a box from the pointer and add the points in it to the selection; a
+   * click without dragging clears the selection.
+   */
+  const boxSelect = (e: PointerEvent<SVGSVGElement>) => {
+    e.preventDefault();
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const base = selected;
+    const [x0, y0] = [e.clientX - rect.left, e.clientY - rect.top];
+    let moved = false;
+    const move = (m: globalThis.PointerEvent) => {
+      const [x1, y1] = [m.clientX - rect.left, m.clientY - rect.top];
+      moved ||= Math.hypot(x1 - x0, y1 - y0) > 3;
+      if (!moved) return;
+      const [left, right, top, bottom] = [Math.min(x0, x1), Math.max(x0, x1), Math.min(y0, y1), Math.max(y0, y1)];
+      setBox({ x: left, y: top, width: right - left, height: bottom - top });
+      const next = new Set(base);
+      // Only points in view can be in the box.
+      for (let i = first; i < last; i++) {
+        const [px, py] = [x(actions[i].at), y(actions[i].pos)];
+        if (px >= left && px <= right && py >= top && py <= bottom) next.add(i);
+      }
+      setSelected(next);
+    };
+    svg.setPointerCapture(e.pointerId);
+    svg.addEventListener("pointermove", move);
+    svg.addEventListener("lostpointercapture", () => {
+      svg.removeEventListener("pointermove", move);
+      setBox(null);
+      if (!moved) setSelected(new Set());
+    }, { once: true });
+  };
+
+  /** Add a point under the pointer and keep dragging it; with several points selected, only clear the selection. */
   const add = (e: PointerEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
+    if (boxMode || e.shiftKey) {
+      boxSelect(e);
+      return;
+    }
+    if (selected.size > 1) {
+      setSelected(new Set());
+      return;
+    }
     const point = pointerAt(e);
     if (point.at < 0) return;
     const i = byTime(actions, point.at);
     if (actions[i]?.at === point.at) return;
     setScript((s) => ({ ...s, actions: [...s.actions.slice(0, i), point, ...s.actions.slice(i)] }));
-    drag(e, i);
+    setSelected(new Set([i]));
+    anchor.current = i;
+    drag(e, [i]);
+  };
+
+  /**
+   * Ctrl/Cmd+click toggles a point in the selection, Shift+click selects the
+   * range from the last clicked point. A plain click selects the point, or
+   * keeps the selection it is in, and drags.
+   */
+  const pointDown = (e: PointerEvent<SVGCircleElement>, i: number) => {
+    if (e.button !== 0) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.shiftKey) {
+        // The anchor may be past the end after deleting points.
+        const from = Math.min(anchor.current ?? i, actions.length - 1);
+        setSelected(new Set(Array.from({ length: Math.abs(i - from) + 1 }, (_, k) => Math.min(i, from) + k)));
+        return;
+      }
+      anchor.current = i;
+      setSelected((sel) => {
+        const next = new Set(sel);
+        if (!next.delete(i)) next.add(i);
+        return next;
+      });
+      return;
+    }
+    anchor.current = i;
+    const group = selected.has(i) ? [...selected] : [i];
+    setSelected(new Set(group));
+    drag(e, group);
   };
 
   /** Move the playhead to `t` ms, within the media. */
@@ -205,23 +301,30 @@ export default function EditorPage() {
     }, { once: true });
   };
 
-  // Delete (or Backspace, the Mac's delete key) removes the selected point, unless typing in a field.
+  // Ctrl/Cmd+A selects all points, Escape none, Delete (or Backspace, the Mac's
+  // delete key) removes the selected ones; not while typing in a field.
   useEffect(() => {
-    if (selected === null) return;
     const keydown = (e: KeyboardEvent) => {
-      if ((e.key !== "Delete" && e.key !== "Backspace") || e.target instanceof HTMLInputElement) return;
-      e.preventDefault();
-      setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => j !== selected) }));
-      setSelected(null);
+      if (e.target instanceof HTMLInputElement) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+        e.preventDefault();
+        setSelected(new Set(actions.keys()));
+      } else if (e.key === "Escape") {
+        setSelected(new Set());
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selected.size) {
+        e.preventDefault();
+        setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => !selected.has(j)) }));
+        setSelected(new Set());
+      }
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [selected, setScript]);
+  }, [actions, selected, setScript]);
 
   const open = async (file: File) => {
     try {
       const parsed = await readFunscript(file);
-      setSelected(null);
+      setSelected(new Set());
       setScript({ name: file.name.replace(/\.funscript$/, ""), actions: Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] })) });
       setView((v) => ({ ...v, from: 0 }));
       setError(null);
@@ -266,7 +369,7 @@ export default function EditorPage() {
           style={{ flex: 1 }}
           onClick={() => {
             if (actions.length && !confirm("Discard the current script?")) return;
-            setSelected(null);
+            setSelected(new Set());
             setScript(EMPTY);
             setView((v) => ({ ...v, from: 0 }));
           }}
@@ -325,7 +428,13 @@ export default function EditorPage() {
         </Callout.Root>
       )}
       <Text size="2" color="gray">
-        {actions.length} points · {formatScriptTime(end / 1000)}
+        {actions.length} points{selected.size > 1 && ` · ${selected.size} selected`} · {formatScriptTime(end / 1000)}
+      </Text>
+      <Text as="label" size="2" weight="medium">
+        <Flex align="center" justify="between" gap="2">
+          Box select
+          <Switch checked={boxMode} onCheckedChange={setBoxMode} />
+        </Flex>
       </Text>
       <LabeledSlider
         label="Visible time"
@@ -337,8 +446,9 @@ export default function EditorPage() {
         onChange={(s) => setView({ ...view, span: s * 1000 })}
       />
       <Text size="1" color="gray">
-        Click to add a point, click a point to select it, drag it to move it. Delete removes the selected point. Scroll to move through time,
-        Ctrl+scroll to zoom.{videoUrl && !isAudio && " Drag the bottom edge of the video to change its height."}
+        Click to add a point, click a point to select it, drag it to move it. Ctrl+click adds to the selection,
+        Shift+click selects a range, Ctrl+A selects all, Escape none. Shift+drag (or drag with Box select on) selects the points in a box. Delete removes the selected points. Scroll to
+        move through time, Ctrl+scroll to zoom.{videoUrl && !isAudio && " Drag the bottom edge of the video to change its height."}
       </Text>
     </Flex>
   );
@@ -352,6 +462,9 @@ export default function EditorPage() {
     onEmptied: () => setPaused(true),
     onSeeked: seeked,
   };
+
+  /** The selected point when there is just one, labelled with its time and position. */
+  const only = selected.size === 1 ? [...selected][0] : null;
 
   const content = (
     <Flex direction="column" gap="3" p="3" height="100%">
@@ -462,22 +575,23 @@ export default function EditorPage() {
               key={first + j}
               cx={x(a.at)}
               cy={y(a.pos)}
-              r={first + j === selected ? 7 : 5}
+              r={selected.has(first + j) ? 7 : 5}
               fill={LINE_COLOR}
               strokeWidth={2}
-              style={{ cursor: "grab", stroke: first + j === selected ? "var(--gray-12)" : "none" }}
-              onPointerDown={(e) => e.button === 0 && drag(e, first + j)}
+              style={{ cursor: "grab", stroke: selected.has(first + j) ? "var(--gray-12)" : "none" }}
+              onPointerDown={(e) => pointDown(e, first + j)}
             />
           ))}
-          {selected !== null && actions[selected] && (
+          {box && <rect {...box} strokeDasharray="4 2" style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", pointerEvents: "none" }} />}
+          {only !== null && actions[only] && (
             <text
-              x={x(actions[selected].at)}
-              y={y(actions[selected].pos) + (actions[selected].pos > 80 ? 22 : -12)}
+              x={x(actions[only].at)}
+              y={y(actions[only].pos) + (actions[only].pos > 80 ? 22 : -12)}
               textAnchor="middle"
               fontSize={12}
               style={{ fill: "var(--gray-12)" }}
             >
-              {formatScriptTime(actions[selected].at / 1000, 2)} · {Math.round(actions[selected].pos)}
+              {formatScriptTime(actions[only].at / 1000, 2)} · {Math.round(actions[only].pos)}
             </text>
           )}
         </svg>
