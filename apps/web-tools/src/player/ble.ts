@@ -5,6 +5,7 @@ const uuid = (id: string) => `522b443a-4f53-534d-${id}-420badbabe69`;
 const SERVICE = uuid("0001");
 const COMMAND = uuid("1000");
 const STATE = uuid("2000");
+const POSITION = uuid("2010");
 const PATTERN_LIST = uuid("3000");
 const PATTERN_DESCRIPTION = uuid("3010");
 const STREAM_LOOKAHEAD = uuid("5000");
@@ -62,6 +63,8 @@ const decode = (value: DataView) => decoder.decode(value);
 export class Ossm extends EventTarget {
   /** Last state read or notified. */
   state: OssmState | null = null;
+  /** Last planned machine position notified, 0 (home) to 100 (deepest); `null` until known or on firmware without it. */
+  position: number | null = null;
   private stateText = "";
   private queue: Job[] = [];
   private busy = false;
@@ -75,11 +78,15 @@ export class Ossm extends EventTarget {
     private stateChar: BluetoothRemoteGATTCharacteristic,
     private patternListChar: BluetoothRemoteGATTCharacteristic,
     private patternDescriptionChar: BluetoothRemoteGATTCharacteristic,
+    private positionChar: BluetoothRemoteGATTCharacteristic | null,
   ) {
     super();
     device.addEventListener("gattserverdisconnected", this.handleDisconnected);
     stateChar.addEventListener("characteristicvaluechanged", () => {
       if (stateChar.value) this.handleState(decode(stateChar.value));
+    });
+    positionChar?.addEventListener("characteristicvaluechanged", () => {
+      if (positionChar.value) this.handlePosition(decode(positionChar.value));
     });
   }
 
@@ -114,11 +121,17 @@ export class Ossm extends EventTarget {
         await service.getCharacteristic(STATE),
         await service.getCharacteristic(PATTERN_LIST),
         await service.getCharacteristic(PATTERN_DESCRIPTION),
+        // Older firmware does not notify the position.
+        await service.getCharacteristic(POSITION).catch(() => null),
       );
       log(`connected to ${device.name ?? device.id}`);
       log(`look-ahead ${lookahead}`);
       ossm.handleState(decode(await ossm.stateChar.readValue()));
       await ossm.stateChar.startNotifications();
+      if (ossm.positionChar) {
+        ossm.handlePosition(decode(await ossm.positionChar.readValue()));
+        await ossm.positionChar.startNotifications();
+      }
       return ossm;
     } catch (e) {
       server.disconnect();
@@ -238,6 +251,25 @@ export class Ossm extends EventTarget {
     }
     log(`← state ${text}`);
     this.dispatchEvent(new Event("state"));
+  }
+
+  /**
+   * The planned machine position as a stream position (0 deep end, 100
+   * shallow end) within the current depth and stroke, clamped to 0–100.
+   * `null` when unknown or the stroke is empty. Inverts `stream_to_machine`
+   * in `ossm/crates/stream-engine/src/range.rs`.
+   */
+  streamPosition(): number | null {
+    if (this.position === null || !this.state) return null;
+    const length = (this.state.depth * this.state.stroke) / 100;
+    if (length <= 0) return null;
+    const shallow = this.state.depth - length;
+    return Math.min(Math.max(100 - ((this.position - shallow) / length) * 100, 0), 100);
+  }
+
+  private handlePosition(text: string) {
+    const position = Number(text);
+    if (Number.isFinite(position)) this.position = position;
   }
 
   private handleDisconnected = () => {

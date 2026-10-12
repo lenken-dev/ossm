@@ -675,7 +675,7 @@ export default function PlayerPage() {
                 }}
                 onPointerDown={(e) => dragOverlay(e, "nsew")}
               >
-                <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
+                <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
                 {arranging &&
                   RESIZE_HANDLES.map((h) => <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />)}
                 {/* Stops the pointer here, so pressing Done does not start a drag. */}
@@ -773,7 +773,7 @@ export default function PlayerPage() {
               </Flex>
             </Flex>
             <Box position="relative" flexShrink="0">
-              <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
+              <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
               <Box
                 title="Drag to resize"
                 style={{
@@ -1055,15 +1055,19 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }
   );
 }
 
+/** Time constant, in ms, of the machine dot easing toward the notified position; higher is smoother but lags more. */
+const MACHINE_SMOOTHING_MS = 60;
+
 /**
  * The script's raw points around the video time, redrawn every animation
  * frame. Works without a video (time 0). `notice` says why the machine does
- * not follow.
+ * not follow. The machine's planned position is a dot on the playhead.
  */
-function ScriptPreview({ script, reverse, videoRef, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
+function ScriptPreview({ script, reverse, videoRef, ossm, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
   script: Funscript;
   reverse: boolean;
   videoRef: RefObject<HTMLMediaElement | null>;
+  ossm: Ossm | null;
   notice: string | null;
   lineWidth: number;
   /** Time shown before and after the video time, in ms. */
@@ -1101,8 +1105,13 @@ function ScriptPreview({ script, reverse, videoRef, notice, lineWidth, span: { b
     const y = (pos: number) => pad + (1 - (reverse ? 100 - pos : pos) / 100) * (height - 2 * pad);
 
     let frame = 0;
+    // The machine position eases toward each 100 ms sample instead of jumping.
+    let machine: number | null = null;
+    let drawnAt = performance.now();
     const draw = () => {
       frame = requestAnimationFrame(draw);
+      const elapsed = performance.now() - drawnAt;
+      drawnAt += elapsed;
       const now = (videoRef.current?.currentTime ?? 0) * 1000;
       const from = now - before;
       const to = now + after;
@@ -1149,10 +1158,21 @@ function ScriptPreview({ script, reverse, videoRef, notice, lineWidth, span: { b
       ctx.lineTo(px, height);
       ctx.stroke();
       ctx.shadowBlur = 0;
+
+      const target = ossm?.streamPosition() ?? null;
+      machine = target === null || machine === null ? target : machine + (target - machine) * (1 - Math.exp(-elapsed / MACHINE_SMOOTHING_MS));
+      if (machine !== null) {
+        ctx.fillStyle = playheadColor;
+        ctx.strokeStyle = lineColor;
+        ctx.beginPath();
+        ctx.arc(px, y(machine), lineWidth + 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [script, reverse, appearance, width, videoRef, overlaid, height, lineWidth, before, after]);
+  }, [script, reverse, appearance, width, videoRef, ossm, overlaid, height, lineWidth, before, after]);
 
   return (
     <Box position="relative" flexShrink="0" height={cssHeight === undefined ? "100%" : undefined}>
