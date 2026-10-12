@@ -1227,12 +1227,39 @@ function ScriptPreview({ script, reverse, videoRef, ossm, machineLine, notice, l
     };
   }, [script, reverse, appearance, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
 
+  /**
+   * Drag the graph sideways to seek, as if grabbing the line; playback pauses
+   * while dragging so the machine does not follow every seek.
+   */
+  const seek = (e: PointerEvent<HTMLCanvasElement>) => {
+    const media = videoRef.current;
+    if (!media) return;
+    e.preventDefault();
+    const target = e.currentTarget;
+    const [startX, startTime, wasPlaying] = [e.clientX, media.currentTime, !media.paused];
+    media.pause();
+    const move = (m: globalThis.PointerEvent) => {
+      const t = startTime - (((m.clientX - startX) / width) * (before + after)) / 1000;
+      media.currentTime = Math.min(Math.max(t, 0), media.duration || 0);
+    };
+    target.setPointerCapture(e.pointerId);
+    target.addEventListener("pointermove", move);
+    target.addEventListener("lostpointercapture", () => {
+      target.removeEventListener("pointermove", move);
+      if (wasPlaying) void media.play();
+    }, { once: true });
+  };
+
   return (
     <Box position="relative" flexShrink="0" height={cssHeight === undefined ? "100%" : undefined}>
       <canvas
         ref={canvasRef}
+        // Over the video, clicks go through to it or move the graph.
+        onPointerDown={overlaid ? undefined : seek}
         style={{
           display: "block",
+          cursor: overlaid ? undefined : "ew-resize",
+          touchAction: "none",
           width: "100%",
           height: cssHeight ?? "100%",
           borderRadius: 6,
