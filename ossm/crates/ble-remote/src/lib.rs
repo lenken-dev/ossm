@@ -14,12 +14,16 @@ pub const MAX_COMMAND_LENGTH: usize = 64;
 pub const MAX_STATE_LENGTH: usize = 160;
 pub const MAX_PATTERN_LENGTH: usize = 1024;
 
+/// How often the planned position is sampled and, if changed, notified.
+const POSITION_INTERVAL: Duration = Duration::from_millis(100);
+
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_time::{Duration, Ticker, Timer};
 use esp_radio::ble::controller::BleConnector;
 use heapless::String;
 use log::{debug, error, info, warn};
+use ossm::MotionObserver;
 use pattern_engine::{EngineState, PatternInput, PatternSender, commands};
 use static_cell::StaticCell;
 use stream_engine::StreamSender;
@@ -33,6 +37,7 @@ const PRIMARY_COMMAND_UUID: Uuid = uuid!("522b443a-4f53-534d-1000-420badbabe69")
 const SPEED_KNOB_UUID: Uuid = uuid!("522b443a-4f53-534d-1010-420badbabe69");
 const LATENCY_COMPENSATION_UUID: Uuid = uuid!("522b443a-4f53-534d-1030-420badbabe69");
 const CURRENT_STATE_UUID: Uuid = uuid!("522b443a-4f53-534d-2000-420badbabe69");
+const CURRENT_POSITION_UUID: Uuid = uuid!("522b443a-4f53-534d-2010-420badbabe69");
 const PATTERN_LIST_UUID: Uuid = uuid!("522b443a-4f53-534d-3000-420badbabe69");
 const PATTERN_DESCRIPTION_UUID: Uuid = uuid!("522b443a-4f53-534d-3010-420badbabe69");
 const STREAM_LOOKAHEAD_UUID: Uuid = uuid!("522b443a-4f53-534d-5000-420badbabe69");
@@ -71,6 +76,10 @@ struct OssmService {
 
     #[characteristic(uuid = CURRENT_STATE_UUID, read, notify)]
     current_state: String<MAX_STATE_LENGTH>,
+
+    /// Planned machine position, 0–100 with one decimal.
+    #[characteristic(uuid = CURRENT_POSITION_UUID, read, notify)]
+    current_position: String<8>,
 
     #[characteristic(uuid = PATTERN_LIST_UUID, read)]
     pattern_list: String<MAX_PATTERN_LENGTH>,
@@ -144,6 +153,7 @@ pub fn start(
     connector: BleConnector<'static>,
     patterns: &'static PatternSender,
     stream: Option<&'static StreamSender>,
+    motion: &'static MotionObserver,
 ) {
     let bt_controller: ExternalController<_, 20> = ExternalController::new(connector);
 
@@ -162,7 +172,7 @@ pub fn start(
     } = stack.build();
 
     spawner.must_spawn(ble_runner_task(runner));
-    spawner.must_spawn(ble_events_task(stack, peripheral, patterns, stream));
+    spawner.must_spawn(ble_events_task(stack, peripheral, patterns, stream, motion));
 
     info!("BLE remote tasks started, waiting for connection...");
 }
@@ -181,6 +191,7 @@ pub async fn ble_events_task(
     >,
     patterns: &'static PatternSender,
     stream: Option<&'static StreamSender>,
+    motion: &'static MotionObserver,
 ) {
     info!("Starting advertising and GATT service");
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
@@ -235,17 +246,23 @@ pub async fn ble_events_task(
 
                 let events = gatt_events_task(&server, &gatt_connection, patterns, stream);
                 let notify = state_notifications(&server, &gatt_connection, patterns, stream);
+                let position = position_notifications(&server, &gatt_connection, motion);
 
-                match select(events, notify).await {
-                    Either::First(res) => {
+                match select3(events, notify, position).await {
+                    Either3::First(res) => {
                         if let Err(err) = res {
                             error!("[gatt] error in events task: {:?}", err);
                         }
                     }
-                    Either::Second(res) => match res {
+                    Either3::Second(res) => match res {
                         Ok(()) => info!("[gatt] notify task ended cleanly"),
                         Err(err) => error!("[gatt] error in notify task: {:?}", err),
                     },
+                    Either3::Third(res) => {
+                        if let Err(err) = res {
+                            error!("[gatt] error in position task: {:?}", err);
+                        }
+                    }
                 }
 
                 stop(patterns, stream);
@@ -439,6 +456,29 @@ async fn state_notifications<P: PacketPool>(
                 .await?;
             old_state = current;
         }
+    }
+}
+
+/// Notify the planned machine position whenever its 0–100 text changes.
+async fn position_notifications<P: PacketPool>(
+    server: &Server<'_>,
+    connection: &GattConnection<'_, '_, P>,
+    motion: &MotionObserver,
+) -> Result<(), Error> {
+    let mut ticker = Ticker::every(POSITION_INTERVAL);
+    let mut old: String<8> = String::new();
+    loop {
+        let mut text: String<8> = String::new();
+        write!(text, "{:.1}", motion.state().position * 100.0).ok();
+        if text != old {
+            server
+                .ossm_service
+                .current_position
+                .notify(connection, &text)
+                .await?;
+            old = text;
+        }
+        ticker.next().await;
     }
 }
 
