@@ -225,6 +225,8 @@ export default function PlayerPage() {
   const [scriptError, setScriptError] = useState<string | null>(null);
   const [reverse, setReverse] = useState(false);
   const [simplified, setSimplified] = usePersistedState("ossm:playerSimplify", true, localStorage);
+  /** Start the media, and with it the script, over at its end; the seek back reopens the stream. */
+  const [looped, setLooped] = usePersistedState("ossm:playerLoop", false, localStorage);
   /** Trace the machine's position on the graph as a second line. */
   const [machineLine, setMachineLine] = usePersistedState("ossm:playerMachineLine", false, localStorage);
   /** The script as streamed and previewed. */
@@ -615,6 +617,12 @@ export default function PlayerPage() {
                 <Switch checked={simplified} disabled={!paused} onCheckedChange={setSimplified} />
               </Flex>
             </Text>
+            <Text as="label" size="2" weight="medium">
+              <Flex align="center" justify="between" gap="2">
+                Loop
+                <Switch checked={looped} onCheckedChange={setLooped} />
+              </Flex>
+            </Text>
             {ready && (
               <Button
                 variant="soft"
@@ -658,6 +666,7 @@ export default function PlayerPage() {
   const mediaProps = {
     ref: (el: HTMLMediaElement | null) => void (videoRef.current = el),
     controls: true,
+    loop: mode === "funscript" && looped,
     onPlay: syncPaused,
     onPause: (e) => {
       syncPaused(e);
