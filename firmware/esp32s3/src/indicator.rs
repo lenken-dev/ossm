@@ -42,7 +42,7 @@ mod disabled {
     pub fn start(
         _spawner: &Spawner,
         _output: Option<Config>,
-        _motion: MotionObserver,
+        _motion: &'static MotionObserver,
         _engine: PatternObserver,
     ) {
     }

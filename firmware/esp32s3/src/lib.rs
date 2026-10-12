@@ -33,7 +33,7 @@ use esp_hal::{
 };
 use esp_rtos::embassy::InterruptExecutor;
 use log::info;
-use ossm::{MechanicalConfig, MotionController, MotionLimits, Ossm, fault};
+use ossm::{MechanicalConfig, MotionController, MotionLimits, MotionObserver, Ossm, fault};
 use pattern_engine::{PatternEngine, PatternSender};
 use static_cell::StaticCell;
 use stream_engine::{StreamEngine, StreamSender};
@@ -95,6 +95,7 @@ pub async fn run(spawner: Spawner, config: Config) {
 
     let indicator = indicator::build(config.indicator);
     let (receiver, motion_observer, motion) = OSSM_CELL.init(Ossm::new()).split();
+    let motion_observer: &'static MotionObserver = mk_static!(MotionObserver, motion_observer);
     let (runner, pattern_observer, patterns) = PATTERNS_CELL.init(PatternEngine::new()).split();
 
     let motor = match motor::build(config.motor).await {
@@ -151,7 +152,15 @@ pub async fn run(spawner: Spawner, config: Config) {
 
     indicator::start(&spawner, indicator, motion_observer, pattern_observer);
 
-    radio::start(&spawner, config.wifi, config.bt, patterns, stream, &limits);
+    radio::start(
+        &spawner,
+        config.wifi,
+        config.bt,
+        patterns,
+        stream,
+        &limits,
+        motion_observer,
+    );
 
     mode::Modes {
         motion: &motion,

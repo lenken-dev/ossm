@@ -31,7 +31,7 @@ where
 pub fn start(
     spawner: &Spawner,
     output: Option<StatusOutput>,
-    motion: MotionObserver,
+    motion: &'static MotionObserver,
     engine: PatternObserver,
 ) {
     if let Some(output) = output {
@@ -42,6 +42,10 @@ pub fn start(
 }
 
 #[embassy_executor::task]
-async fn status_task(output: StatusOutput, motion: MotionObserver, engine: PatternObserver) {
+async fn status_task(
+    output: StatusOutput,
+    motion: &'static MotionObserver,
+    engine: PatternObserver,
+) {
     runtime::run_status(output, motion, engine).await;
 }

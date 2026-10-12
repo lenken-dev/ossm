@@ -35,7 +35,7 @@ use esp_hal::{
 };
 use esp_rtos::embassy::InterruptExecutor;
 use log::info;
-use ossm::{MechanicalConfig, MotionController, MotionLimits, Ossm};
+use ossm::{MechanicalConfig, MotionController, MotionLimits, MotionObserver, Ossm};
 use pattern_engine::{AnyPattern, PatternEngine, PatternSender};
 use static_cell::StaticCell;
 
@@ -109,6 +109,7 @@ where
     let limits = MotionLimits::default();
 
     let (receiver, motion_observer, motion) = OSSM_CELL.init(Ossm::new()).split();
+    let motion_observer: &'static MotionObserver = mk_static!(MotionObserver, motion_observer);
 
     let board = board::build(motor, config.board, &MECHANICAL);
     let controller = receiver.into_controller(board, limits.clone(), UPDATE_INTERVAL_SECS);
@@ -148,7 +149,7 @@ where
 
     indicator::start(&spawner, indicator, motion_observer, pattern_observer);
 
-    radio::start(&spawner, config.bt, patterns);
+    radio::start(&spawner, config.bt, patterns, motion_observer);
 
     runner.run(&motion, AnyPattern::all_builtin(), Delay).await
 }
