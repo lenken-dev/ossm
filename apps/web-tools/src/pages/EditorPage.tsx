@@ -75,6 +75,10 @@ const DOT_SPACING = 6;
 /** A run of up to this many neighbouring selected points in view also shows rings on the points. */
 const RING_LIMIT = 50;
 
+/** Width of the graph's left and right edges where a drag scrolls it, in px, and its fastest scroll, in visible times per second. */
+const EDGE = 30;
+const EDGE_SPEED = 1.5;
+
 /** Height of the minimap that shows the whole script below the graph, in px. */
 const MINIMAP_HEIGHT = 40;
 
@@ -95,6 +99,9 @@ export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
   const [script, setScript] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
+  /** The view for drags, which read it between renders as they scroll it. */
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const [error, setError] = useState<string | null>(null);
   /** Indices of the selected points, moved together and deleted with the Delete key. */
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
@@ -296,10 +303,58 @@ export default function EditorPage() {
   /** The script time and position under the pointer. */
   const pointerAt = (e: { clientX: number; clientY: number }) => {
     const rect = boxRef.current!.getBoundingClientRect();
+    const { from, span } = viewRef.current;
     return {
-      at: Math.round(view.from + ((e.clientX - rect.left) / width) * view.span),
+      at: Math.round(from + ((e.clientX - rect.left) / width) * span),
       pos: Math.round(clamp(100 - ((e.clientY - rect.top - PAD) / (plotHeight - 2 * PAD)) * 100, 0, 100)),
     };
+  };
+
+  /**
+   * Follow a drag from `e` on `target` with `move`, then `end`. Held at the
+   * graph's left or right edge, or past it, the graph scrolls that way, faster
+   * the further out, and `move` follows; only once the drag has been away from
+   * the edges, so a press near one does not scroll, and while `scrolls` allows
+   * it in that direction (1 right, -1 left) with the pointer at `m`.
+   */
+  const track = (
+    target: Element,
+    e: PointerEvent<Element>,
+    move: (m: globalThis.PointerEvent) => void,
+    end?: () => void,
+    scrolls?: (dir: number, m: globalThis.PointerEvent) => boolean,
+  ) => {
+    let last: globalThis.PointerEvent | null = null;
+    let armed = false;
+    let before = performance.now();
+    const pushed = (m: { clientX: number }) => {
+      const rect = boxRef.current!.getBoundingClientRect();
+      const px = m.clientX - rect.left;
+      return clamp(px < EDGE ? (px - EDGE) / EDGE : px > rect.width - EDGE ? (px - rect.width + EDGE) / EDGE : 0, -1, 1);
+    };
+    let frame = requestAnimationFrame(function scroll(now) {
+      const v = viewRef.current;
+      const push = last && armed ? pushed(last) : 0;
+      const from = Math.max(v.from + (push && (scrolls?.(Math.sign(push), last!) ?? true) ? push : 0) * EDGE_SPEED * v.span * ((now - before) / 1000), 0);
+      before = now;
+      if (from !== v.from) {
+        setView((viewRef.current = { ...v, from }));
+        move(last!);
+      }
+      frame = requestAnimationFrame(scroll);
+    });
+    const moved = (m: globalThis.PointerEvent) => {
+      last = m;
+      armed ||= !pushed(m);
+      move(m);
+    };
+    target.setPointerCapture(e.pointerId);
+    target.addEventListener("pointermove", moved as EventListener);
+    target.addEventListener("lostpointercapture", () => {
+      target.removeEventListener("pointermove", moved as EventListener);
+      cancelAnimationFrame(frame);
+      end?.();
+    }, { once: true });
   };
 
   /**
@@ -316,6 +371,8 @@ export default function EditorPage() {
     const moving = new Set(indices);
     // Taken on the first move, so it includes a point added just before the drag.
     let start: Action[] | null = null;
+    /** How far in time they can go, from where they started; known from the first move. */
+    let limits: [number, number] | null = null;
     const move = (m: globalThis.PointerEvent) => {
       const p = pointerAt(m);
       setScript((s) => {
@@ -327,6 +384,7 @@ export default function EditorPage() {
           dpMin = Math.max(dpMin, -a[i].pos);
           dpMax = Math.min(dpMax, 100 - a[i].pos);
         }
+        limits = [dtMin, dtMax];
         const dt = clamp(p.at - origin.at, dtMin, dtMax);
         const dp = clamp(p.pos - origin.pos, dpMin, dpMax);
         const next = a.slice();
@@ -334,13 +392,15 @@ export default function EditorPage() {
         return { ...s, actions: next };
       });
     };
-    svg.setPointerCapture(e.pointerId);
-    svg.addEventListener("pointermove", move as EventListener);
-    svg.addEventListener("lostpointercapture", () => {
-      svg.removeEventListener("pointermove", move as EventListener);
+    // Scrolling stops where they can go no further that way.
+    const scrolls = (dir: number, m: globalThis.PointerEvent) => {
+      const dt = pointerAt(m).at - origin.at;
+      return !limits || (dir > 0 ? dt < limits[1] : dt > limits[0]);
+    };
+    track(svg, e, move, () => {
       dragging.current = false;
       setDragEnds((n) => n + 1);
-    }, { once: true });
+    }, scrolls);
   };
 
   /** The indices of the points in `area`. */
@@ -381,13 +441,10 @@ export default function EditorPage() {
       const area = spanned(origin, pointerAt(m));
       selectIn(keep ? boxed(area) : area, base);
     };
-    svg.setPointerCapture(e.pointerId);
-    svg.addEventListener("pointermove", move);
-    svg.addEventListener("lostpointercapture", () => {
-      svg.removeEventListener("pointermove", move);
+    track(svg, e, move, () => {
       if (!moved || !keep) setBox(null);
       if (!moved) setSelected(new Set());
-    }, { once: true });
+    });
   };
 
   /**
@@ -409,9 +466,7 @@ export default function EditorPage() {
       for (const side of sides) b[side] += side === "from" || side === "to" ? p.at - origin.at : dp;
       selectIn(spanned({ at: b.from, pos: b.low }, { at: b.to, pos: b.high }));
     };
-    svg.setPointerCapture(e.pointerId);
-    svg.addEventListener("pointermove", move);
-    svg.addEventListener("lostpointercapture", () => svg.removeEventListener("pointermove", move), { once: true });
+    track(svg, e, move);
   };
 
   /** Add a point under the pointer and keep dragging it; with several points selected, only clear the selection. */
@@ -497,12 +552,9 @@ export default function EditorPage() {
     const wasPlaying = !media.paused;
     media.pause();
     const move = (m: globalThis.PointerEvent) => seek(pointerAt(m).at);
-    target.setPointerCapture(e.pointerId);
-    target.addEventListener("pointermove", move as EventListener);
-    target.addEventListener("lostpointercapture", () => {
-      target.removeEventListener("pointermove", move as EventListener);
+    track(target, e, move, () => {
       if (wasPlaying) void media.play();
-    }, { once: true });
+    });
   };
 
   /** The time the minimap shows: the script, the video and the visible time, whichever is longest. */
@@ -637,9 +689,7 @@ export default function EditorPage() {
       const p = pointerAt(m);
       setPlaceAt({ at: start.at + p.at - origin.at, pos: start.pos + p.pos - origin.pos });
     };
-    svg.setPointerCapture(e.pointerId);
-    svg.addEventListener("pointermove", move);
-    svg.addEventListener("lostpointercapture", () => svg.removeEventListener("pointermove", move), { once: true });
+    track(svg, e, move);
   };
 
   /**
