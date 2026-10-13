@@ -53,6 +53,8 @@ export default function EditorPage() {
   /** Dragging on empty space draws a box that selects points instead of adding one; Shift does the same once. */
   const [boxMode, setBoxMode] = useState(false);
   /** The selection box being drawn, in px. */
+  /** Script time under the pointer while it is over the graph, in ms; where paste goes without media. */
+  const pointerTime = useRef<number | null>(null);
   const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   /** The point last clicked without Shift, where a Shift+click range starts. */
   const anchor = useRef<number | null>(null);
@@ -301,6 +303,11 @@ export default function EditorPage() {
     }, { once: true });
   };
 
+  const removeSelected = () => {
+    setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => !selected.has(j)) }));
+    setSelected(new Set());
+  };
+
   // Ctrl/Cmd+A selects all points, Escape none, Delete (or Backspace, the Mac's
   // delete key) removes the selected ones; not while typing in a field.
   useEffect(() => {
@@ -313,13 +320,59 @@ export default function EditorPage() {
         setSelected(new Set());
       } else if ((e.key === "Delete" || e.key === "Backspace") && selected.size) {
         e.preventDefault();
-        setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => !selected.has(j)) }));
-        setSelected(new Set());
+        removeSelected();
       }
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [actions, selected, setScript]);
+  });
+
+  // Copy and cut put the selected points on the system clipboard as funscript
+  // JSON, timed from the first. Paste puts them at the playhead, or without
+  // media at the pointer, replacing the points in the time they cover.
+  useEffect(() => {
+    const copy = (e: ClipboardEvent) => {
+      if (e.target instanceof HTMLInputElement || !selected.size) return;
+      e.preventDefault();
+      const picked = [...selected].sort((a, b) => a - b).map((i) => actions[i]);
+      const actionsOut = picked.map((a) => ({ at: a.at - picked[0].at, pos: a.pos }));
+      e.clipboardData!.setData("text/plain", JSON.stringify({ actions: actionsOut }));
+      if (e.type === "cut") removeSelected();
+    };
+    const paste = (e: ClipboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      let parsed: unknown;
+      try {
+        parsed = (JSON.parse(e.clipboardData!.getData("text/plain")) as { actions?: unknown } | null)?.actions;
+      } catch {
+        return;
+      }
+      if (!Array.isArray(parsed)) return;
+      // From the clipboard, so anything could be in it.
+      const valid = (parsed as Partial<Action>[])
+        .filter((a): a is Action => Number.isFinite(a?.at) && Number.isFinite(a?.pos))
+        .sort((a, b) => a.at - b.at);
+      if (!valid.length) return;
+      e.preventDefault();
+      const start = Math.max(Math.round(videoUrl ? time : pointerTime.current ?? view.from + view.span / 2), 0);
+      const pasted = valid
+        .map((a) => ({ at: start + Math.round(a.at - valid[0].at), pos: clamp(a.pos, 0, 100) }))
+        .filter((a, i, all) => i === 0 || a.at !== all[i - 1].at);
+      const end = pasted[pasted.length - 1].at;
+      const before = actions.filter((a) => a.at < start);
+      const after = actions.filter((a) => a.at > end);
+      setScript({ ...script, actions: [...before, ...pasted, ...after] });
+      setSelected(new Set(pasted.map((_, i) => before.length + i)));
+    };
+    window.addEventListener("copy", copy);
+    window.addEventListener("cut", copy);
+    window.addEventListener("paste", paste);
+    return () => {
+      window.removeEventListener("copy", copy);
+      window.removeEventListener("cut", copy);
+      window.removeEventListener("paste", paste);
+    };
+  });
 
   const open = async (file: File) => {
     try {
@@ -447,7 +500,7 @@ export default function EditorPage() {
       />
       <Text size="1" color="gray">
         Click to add a point, click a point to select it, drag it to move it. Ctrl+click adds to the selection,
-        Shift+click selects a range, Ctrl+A selects all, Escape none. Shift+drag (or drag with Box select on) selects the points in a box. Delete removes the selected points. Scroll to
+        Shift+click selects a range, Ctrl+A selects all, Escape none. Shift+drag (or drag with Box select on) selects the points in a box. Delete removes the selected points; Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste them, pasting at the playhead (without media, at the pointer). Scroll to
         move through time, Ctrl+scroll to zoom.{videoUrl && !isAudio && " Drag the bottom edge of the video to change its height."}
       </Text>
     </Flex>
@@ -543,7 +596,14 @@ export default function EditorPage() {
         </Flex>
       )}
       <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
-        <svg width={width} height={height} onPointerDown={add} style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}>
+        <svg
+          width={width}
+          height={height}
+          onPointerDown={add}
+          onPointerMove={(e) => void (pointerTime.current = pointerAt(e).at)}
+          onPointerLeave={() => void (pointerTime.current = null)}
+          style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
+        >
           {[0, 50, 100].map((pos) => (
             <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
           ))}
