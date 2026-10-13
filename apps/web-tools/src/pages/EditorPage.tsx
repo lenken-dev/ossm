@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Slider, Text, TextField } from "@radix-ui/themes";
-import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -34,6 +34,14 @@ const spanned = (a: Action, b: Action): Area => ({
   to: Math.max(a.at, b.at),
   low: Math.min(a.pos, b.pos),
   high: Math.max(a.pos, b.pos),
+});
+
+/** `area` grown to take in `a`. */
+const extended = (area: Area, a: Action): Area => ({
+  from: Math.min(area.from, a.at),
+  to: Math.max(area.to, a.at),
+  low: Math.min(area.low, a.pos),
+  high: Math.max(area.high, a.pos),
 });
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
@@ -79,8 +87,8 @@ export default function EditorPage() {
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   /**
    * Selection mode: dragging on empty space draws a box that selects points
-   * instead of adding one, and the box stays to be resized or moved; Shift
-   * draws one that goes when released, in either mode.
+   * instead of adding one, and the box stays to be resized or moved; only the
+   * points in it are selected. Otherwise Shift draws one that goes when released.
    */
   const [boxMode, setBoxMode] = useState(false);
   /** Pasted points, timed from the first, that follow the pointer until a click places them. */
@@ -91,6 +99,8 @@ export default function EditorPage() {
   const [placeAt, setPlaceAt] = useState<Action | null>(null);
   /** Placing inserts, moving later points right, instead of replacing the points the pasted ones cover. */
   const [insertMode, setInsertMode] = usePersistedState("ossm:editorInsert", false, localStorage);
+  /** Selection mode's box selects by time: it takes in whole stretches of the script, whatever their depth. */
+  const [selectByTime, setSelectByTime] = usePersistedState("ossm:editorSelectByTime", false, localStorage);
   /**
    * Modifiers held while placing: Shift switches to the other mode, Ctrl (or
    * Cmd) keeps the copied depths instead of following the pointer's.
@@ -284,27 +294,33 @@ export default function EditorPage() {
   };
 
   /** Show `area` as the selection box and select the points in it and `base`. */
-  const selectIn = (area: Area, base: Iterable<number>) => {
+  const selectIn = (area: Area, base: Iterable<number> = []) => {
     setBox(area);
     setSelected(new Set([...base, ...within(area)]));
   };
 
+  /** `area` as selection mode's box, over every depth when selecting by time. */
+  const boxed = (area: Area) => (selectByTime ? { ...area, low: 0, high: 100 } : area);
+
   /**
-   * Draw a box from the pointer and select the points in it; with Shift they
-   * add to the selection and the box goes when released, in selection mode
-   * without it stays. A click without dragging clears the selection.
+   * Draw a box from the pointer and select the points in it. In selection mode
+   * the box replaces the selection and stays; otherwise (with Shift) the points
+   * add to it and the box goes when released. A click without dragging clears
+   * the selection.
    */
   const boxSelect = (e: PointerEvent<SVGSVGElement>) => {
     e.preventDefault();
     const svg = e.currentTarget;
-    const base = e.shiftKey ? selected : [];
-    const keep = boxMode && !e.shiftKey;
+    const keep = boxMode;
+    const base = keep ? [] : selected;
     const origin = pointerAt(e);
     const [x0, y0] = [e.clientX, e.clientY];
     let moved = false;
     const move = (m: globalThis.PointerEvent) => {
       moved ||= Math.hypot(m.clientX - x0, m.clientY - y0) > 3;
-      if (moved) selectIn(spanned(origin, pointerAt(m)), base);
+      if (!moved) return;
+      const area = spanned(origin, pointerAt(m));
+      selectIn(keep ? boxed(area) : area, base);
     };
     svg.setPointerCapture(e.pointerId);
     svg.addEventListener("pointermove", move);
@@ -317,8 +333,7 @@ export default function EditorPage() {
 
   /**
    * Drag the `sides` of the selection box: an edge or corner resizes it, all
-   * four move it. The points in it are selected, along with those selected
-   * outside it.
+   * four move it. Only the points in it are selected.
    */
   const editBox = (e: PointerEvent<SVGRectElement>, sides: (keyof Area)[]) => {
     if (e.button !== 0) return;
@@ -327,15 +342,13 @@ export default function EditorPage() {
     const svg = e.currentTarget.ownerSVGElement!;
     const start = box!;
     const origin = pointerAt(e);
-    const inside = new Set(within(start));
-    const base = [...selected].filter((i) => !inside.has(i));
     const move = (m: globalThis.PointerEvent) => {
       const p = pointerAt(m);
       // Moved, the box stays within 0–100.
       const dp = clamp(p.pos - origin.pos, sides.includes("low") ? -start.low : -100, sides.includes("high") ? 100 - start.high : 100);
       const b = { ...start };
       for (const side of sides) b[side] += side === "from" || side === "to" ? p.at - origin.at : dp;
-      selectIn(spanned({ at: b.from, pos: b.low }, { at: b.to, pos: b.high }), base);
+      selectIn(spanned({ at: b.from, pos: b.low }, { at: b.to, pos: b.high }));
     };
     svg.setPointerCapture(e.pointerId);
     svg.addEventListener("pointermove", move);
@@ -367,13 +380,18 @@ export default function EditorPage() {
   /**
    * Ctrl/Cmd+click toggles a point in the selection, Shift+click selects the
    * range from the last clicked point. A plain click selects the point, or
-   * keeps the selection it is in, and drags.
+   * keeps the selection it is in, and drags. In selection mode, Ctrl/Cmd or
+   * Shift+click grows the box to take in the point.
    */
   const pointDown = (e: PointerEvent<SVGCircleElement>, i: number) => {
     if (e.button !== 0) return;
     if (e.ctrlKey || e.metaKey || e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
+      if (boxMode) {
+        selectIn(boxed(extended(box ?? spanned(actions[i], actions[i]), actions[i])));
+        return;
+      }
       if (e.shiftKey) {
         // The anchor may be past the end after deleting points.
         const from = Math.min(anchor.current ?? i, actions.length - 1);
@@ -505,19 +523,16 @@ export default function EditorPage() {
 
   /**
    * Switch selection mode; leaves move mode, putting the points back. Entered
-   * with points selected, the box fits around them to change from there.
+   * with points selected, the box fits around them, selecting the points in it.
    */
   const toggleBoxMode = () => {
     const sel = lifted ?? selected;
     if (lifted) cancelPlacing();
     setBoxMode(!boxMode);
-    let area: Area | null = null;
     if (!boxMode && sel.size) {
       const picked = [...sel].map((i) => actions[i]);
-      area = spanned(picked[0], picked[0]);
-      for (const a of picked) area = { from: Math.min(area.from, a.at), to: Math.max(area.to, a.at), low: Math.min(area.low, a.pos), high: Math.max(area.high, a.pos) };
-    }
-    setBox(area);
+      selectIn(boxed(picked.reduce(extended, spanned(picked[0], picked[0]))));
+    } else setBox(null);
   };
 
   /**
@@ -924,7 +939,7 @@ export default function EditorPage() {
           variant={boxMode ? "solid" : "soft"}
           color={boxMode ? undefined : "gray"}
           aria-pressed={boxMode}
-          title="Selection mode: drag a box to select points, then drag its edges to change it (S); Shift+drag selects in any mode"
+          title="Select points with a box (S)"
           onClick={toggleBoxMode}
         >
           {/* A dashed selection box, sized like the icons. */}
@@ -933,6 +948,20 @@ export default function EditorPage() {
           </svg>
           Select
         </Button>
+        {boxMode && (
+          <Button
+            variant={selectByTime ? "solid" : "soft"}
+            color={selectByTime ? undefined : "gray"}
+            aria-pressed={selectByTime}
+            title="Select by time, at any depth"
+            onClick={() => {
+              setSelectByTime(!selectByTime);
+              if (!selectByTime && box) selectIn({ ...box, low: 0, high: 100 });
+            }}
+          >
+            <HeightIcon /> By time
+          </Button>
+        )}
         <Button
           variant={lifted ? "solid" : "soft"}
           color={lifted ? undefined : "gray"}
@@ -1108,7 +1137,8 @@ export default function EditorPage() {
                 style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", cursor: "move", pointerEvents: boxMode ? undefined : "none" }}
                 onPointerDown={(e) => editBox(e, ["from", "to", "low", "high"])}
               />
-              {boxMode && GRIPS.map(([h, v]) => (
+              {/* Selecting by time, only the edges in time can be dragged. */}
+              {boxMode && GRIPS.filter(([, v]) => !selectByTime || !v).map(([h, v]) => (
                 <rect
                   key={`${h}-${v}`}
                   x={h ? edges[h] - GRIP / 2 : edges.from}
