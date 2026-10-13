@@ -20,19 +20,6 @@ interface Script {
   actions: Action[];
 }
 
-/**
- * A move that closed its gap: the points from `from` to `to` in the points
- * before went, `count` points from `at` in the points after came, replacing
- * the `replaced` points, timed as once the gap closed.
- */
-interface Move {
-  from: number;
-  to: number;
-  at: number;
-  count: number;
-  replaced: Action[];
-}
-
 /** A time range, in ms, and depth range. */
 interface Area {
   from: number;
@@ -260,25 +247,21 @@ export default function EditorPage() {
   })();
 
   /** Undo history: the points after each edit, the first as loaded; `index` is the current one. */
-  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, label: "Start" } as { actions: Action[]; label: string; move?: Move }], index: 0 }));
+  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, label: "Start" }], index: 0 }));
   /** Set while a drag runs, so the whole drag becomes one edit when it ends. */
   const dragging = useRef(false);
   const [dragEnds, setDragEnds] = useState(0);
   /** What the next edit is called in the undo history. */
   const editLabel = useRef<string | null>(null);
-  /** The next edit's move, for its diff; the points around it shift, so it shows as one otherwise. */
-  const editMove = useRef<Move | undefined>(undefined);
 
   // Every change of the points, except by undo and redo, is an edit.
   useEffect(() => {
     if (dragging.current) return;
     const label = editLabel.current ?? "Edit";
-    const move = editMove.current;
     editLabel.current = null;
-    editMove.current = undefined;
     setTimeline((tl) => {
       if (tl.states[tl.index].actions === actions) return tl;
-      const states = [...tl.states.slice(0, tl.index + 1), { actions, label, move }].slice(-UNDO_SIZE - 1);
+      const states = [...tl.states.slice(0, tl.index + 1), { actions, label }].slice(-UNDO_SIZE - 1);
       return { states, index: states.length - 1 };
     });
   }, [actions, dragEnds]);
@@ -707,10 +690,6 @@ export default function EditorPage() {
     const insert = insertMode !== e.shiftKey;
     const { before, after } = around(pasted, insert);
     editLabel.current = `${lifted ? "Move" : insert ? "Insert" : "Paste"} ${points(pasted.length)}`;
-    if (lifted && closeGap) {
-      const replaced = insert ? [] : kept.filter((a) => a.at >= pasted[0].at && a.at <= pasted[pasted.length - 1].at);
-      editMove.current = { from: Math.min(...lifted), to: Math.max(...lifted), at: before.length, count: pasted.length, replaced };
-    }
     setScript({ ...script, actions: [...before, ...pasted, ...after] });
     setSelected(new Set(pasted.map((_, i) => before.length + i)));
     setPlacing(null);
@@ -1131,7 +1110,7 @@ export default function EditorPage() {
                     <HoverCard.Content side="right" size="1" maxWidth="232px">
                       <Flex direction="column" gap="1">
                         <Text size="1">{state.label}</Text>
-                        {k > 0 && <DiffPreview before={timeline.states[k - 1].actions} after={state.actions} move={state.move} />}
+                        {k > 0 && <PreviewGraph pieces={diffPieces(timeline.states[k - 1].actions, state.actions)} />}
                       </Flex>
                     </HoverCard.Content>
                   </HoverCard.Root>
@@ -1187,7 +1166,7 @@ export default function EditorPage() {
                       </Popover.Close>
                     </HoverCard.Trigger>
                     <HoverCard.Content side="right" size="1">
-                      <PreviewGraph lines={[{ actions: copied, color: LINE_COLOR }]} from={0} to={copied[copied.length - 1].at} />
+                      <PreviewGraph pieces={[{ kind: "plain", points: copied }]} />
                     </HoverCard.Content>
                   </HoverCard.Root>
                 ))}
@@ -1426,129 +1405,199 @@ export default function EditorPage() {
 
 /** Height of a small graph's time axis, in px. */
 const PREVIEW_AXIS = 12;
+/** Unchanged points shown on each side of a change in a diff, the one next to it included. */
+const DIFF_CONTEXT = 3;
+/** Past this many differences, a diff shows everything from the first to the last as changed. */
+const DIFF_MAX = 500;
+/** Width of the break where a diff leaves out unchanged points, in px. */
+const DIFF_BREAK = 8;
 
-/** Size and scales of a small graph over `from`–`to` ms, its time axis below. */
-function previewScale(from: number, to: number) {
-  const [width, plotHeight, pad] = [200, 60, 4];
-  const span = to - from || 1;
-  return {
-    from,
-    to,
-    width,
-    plotHeight,
-    height: plotHeight + PREVIEW_AXIS,
-    x: (at: number) => pad + ((at - from) / span) * (width - 2 * pad),
-    y: (pos: number) => pad + (1 - pos / 100) * (plotHeight - 2 * pad),
-  };
+/**
+ * A stretch of a small graph, drawn right after the one before it whatever its
+ * times: points of one script, with the unchanged points on each side of a
+ * change. Moved points are drawn over where they were, the `old` points.
+ */
+interface Piece {
+  kind: "plain" | "same" | "removed" | "added" | "moved" | "break";
+  points: Action[];
+  from?: Action;
+  to?: Action;
+  old?: Action[];
 }
 
-/** The 0, 50 and 100 lines of a small graph, and its time ticks with labels. */
-function PreviewAxes({ from, to, width, plotHeight, height, x, y }: ReturnType<typeof previewScale>) {
-  const ticks = timeTicks(from / 1000, to / 1000, 3);
-  // Enough decimals to tell the ticks apart: their steps are 1, 2 or 5 times a power of ten below a second.
-  const decimals = ticks.length > 1 ? Math.max(0, -Math.floor(Math.log10(ticks[1] - ticks[0]) + 1e-9)) : 1;
+/** How each kind of piece draws: its line and points, whether dashed, and the band behind its points. */
+const PIECE_STYLES: Record<Piece["kind"], { color: string; dashed?: boolean; band?: string }> = {
+  plain: { color: LINE_COLOR },
+  same: { color: "var(--gray-8)" },
+  removed: { color: "var(--red-9)", dashed: true, band: "var(--red-a3)" },
+  added: { color: "var(--green-9)", band: "var(--green-a3)" },
+  moved: { color: "var(--gray-8)" },
+  break: { color: "var(--gray-8)", dashed: true },
+};
+
+/**
+ * Myers' diff of `a` and `b`: the index pairs of their longest common
+ * subsequence, in order; null past `max` differences.
+ */
+function common(a: string[], b: string[], max: number): [number, number][] | null {
+  const off = max + 1;
+  const v = new Int32Array(2 * max + 3);
+  /** `v` before each step, to go back along the path. */
+  const trace: Int32Array[] = [];
+  for (let d = 0; d <= max; d++) {
+    trace.push(v.slice());
+    for (let k = -d; k <= d; k += 2) {
+      let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < a.length && y < b.length && a[x] === b[y]) [x, y] = [x + 1, y + 1];
+      v[off + k] = x;
+      if (x < a.length || y < b.length) continue;
+      const pairs: [number, number][] = [];
+      for (let e = d; e > 0; e--) {
+        const [w, k] = [trace[e], x - y];
+        const prev = k === -e || (k !== e && w[off + k - 1] < w[off + k + 1]) ? k + 1 : k - 1;
+        const [px, py] = [w[off + prev], w[off + prev] - prev];
+        while (x > px && y > py) pairs.push([--x, --y]);
+        [x, y] = [px, py];
+      }
+      while (x > 0 && y > 0) pairs.push([--x, --y]);
+      return pairs.reverse();
+    }
+  }
+  return null;
+}
+
+/**
+ * A diff of two scripts' points like git's, as pieces of a small graph: each
+ * change shows the points removed, then the points added, between a few
+ * unchanged points; more unchanged points than that are left out. Points match
+ * by depth and time since the point before, so a stretch that only shifted in
+ * time stays unchanged. Points that all moved alike, all others unchanged, show
+ * moved instead, over where they were.
+ */
+function diffPieces(before: Action[], after: Action[]): Piece[] {
+  const pieces: Piece[] = [];
+  const same = (from: number, to: number) => from < to && pieces.push({ kind: "same", points: after.slice(from, to) });
+  if (before.length === after.length) {
+    const changed = [...before.keys()].filter((i) => before[i].at !== after[i].at || before[i].pos !== after[i].pos);
+    const [i0, i1] = [changed[0], changed[changed.length - 1]];
+    const moved = (i: number) => [after[i].at - before[i].at, after[i].pos - before[i].pos].join();
+    if (changed.length && changed.every((i) => moved(i) === moved(i0))) {
+      same(Math.max(i0 - DIFF_CONTEXT, 0), i0);
+      pieces.push({ kind: "moved", points: after.slice(i0, i1 + 1), old: before.slice(i0, i1 + 1), from: after[i0 - 1], to: after[i1 + 1] });
+      same(i1 + 1, Math.min(i1 + 1 + DIFF_CONTEXT, after.length));
+      return pieces;
+    }
+  }
+  const key = (a: Action, i: number, all: Action[]) => `${a.at - (all[i - 1]?.at ?? 0)},${a.pos}`;
+  const [kb, ka] = [before.map(key), after.map(key)];
+  let start = 0;
+  while (start < kb.length && start < ka.length && kb[start] === ka[start]) start++;
+  let end = 0;
+  while (end < kb.length - start && end < ka.length - start && kb[kb.length - 1 - end] === ka[ka.length - 1 - end]) end++;
+  const pairs = common(kb.slice(start, kb.length - end), ka.slice(start, ka.length - end), DIFF_MAX) ?? [];
+  /** The changes: the points before from `i0` to `i1` became the points after from `j0` to `j1`. */
+  const hunks = [];
+  let [i, j] = [start, start];
+  for (const [pi, pj] of [...pairs.map(([a, b]) => [a + start, b + start]), [kb.length - end, ka.length - end]]) {
+    let [i1, j1] = [pi, pj];
+    // The point after an insert or delete only changed its time since the point before; it stays unchanged.
+    // ponytail: also takes a replaced last point at the same depth as unchanged; compare the times past it if that misleads.
+    while (i1 > i && j1 > j && before[i1 - 1].pos === after[j1 - 1].pos) [i1, j1] = [i1 - 1, j1 - 1];
+    if (i1 > i || j1 > j) hunks.push({ i0: i, i1, j0: j, j1 });
+    [i, j] = [pi + 1, pj + 1];
+  }
+  let shown = 0;
+  hunks.forEach(({ i0, i1, j0, j1 }, h) => {
+    if (h === 0) same(Math.max(j0 - DIFF_CONTEXT, 0), j0);
+    else if (j0 - shown <= 2 * DIFF_CONTEXT) same(shown, j0);
+    else {
+      same(shown, shown + DIFF_CONTEXT);
+      pieces.push({ kind: "break", points: [] });
+      same(j0 - DIFF_CONTEXT, j0);
+    }
+    if (i1 > i0) pieces.push({ kind: "removed", points: before.slice(i0, i1), from: before[i0 - 1], to: before[i1] });
+    if (j1 > j0) pieces.push({ kind: "added", points: after.slice(j0, j1), from: after[j0 - 1], to: after[j1] });
+    shown = j1;
+  });
+  if (hunks.length) same(shown, Math.min(shown + DIFF_CONTEXT, after.length));
+  return pieces;
+}
+
+/**
+ * A small graph of `pieces` side by side, each as wide as its time, with
+ * breaks in between; the time ticks show each piece's own times.
+ */
+function PreviewGraph({ pieces }: { pieces: Piece[] }) {
+  if (!pieces.length) return <Text size="1" color="gray">No changes</Text>;
+  const [width, plotHeight, pad] = [200, 60, 4];
+  /** Moved points draw like removed ones where they were and added ones where they went, at the same times. */
+  const layers = pieces.flatMap((p, i) => p.kind === "moved" ? [{ ...p, kind: "removed" as const, points: p.old!, i }, { ...p, kind: "added" as const, i }] : [{ ...p, i }]);
+  const lines = layers.map((p) => [p.from, ...p.points, p.to].filter((a) => a !== undefined));
+  const ends = (l: Action[]) => (l.length ? [l[0].at, l[l.length - 1].at] : []);
+  const ranges = pieces.map((_, i) => {
+    const all = layers.flatMap((l, k) => (l.i === i ? ends(lines[k]) : []));
+    return all.length ? [Math.min(...all), Math.max(...all)] : [0, 0];
+  });
+  const breaks = pieces.filter((p) => p.kind === "break").length;
+  const scale = (width - 2 * pad - breaks * DIFF_BREAK) / (ranges.reduce((sum, [a, b]) => sum + b - a, 0) || 1);
+  let left = pad;
+  const xs = pieces.map((p, i) => {
+    const [from, x0] = [ranges[i][0], left];
+    left += p.kind === "break" ? DIFF_BREAK : (ranges[i][1] - from) * scale;
+    return (at: number) => x0 + (at - from) * scale;
+  });
+  const y = (pos: number) => pad + (1 - pos / 100) * (plotHeight - 2 * pad);
+  // Each piece's own ticks, about three across the graph, left out where they would crowd the one before.
+  const ticks: { x: number; label: string }[] = [];
+  pieces.forEach((p, i) => {
+    if (p.kind === "break") return;
+    const [a, b] = ranges[i];
+    const t = timeTicks(a / 1000, b / 1000, Math.max(1, Math.round((3 * (b - a) * scale) / (width - 2 * pad))));
+    // Enough decimals to tell the ticks apart: their steps are 1, 2 or 5 times a power of ten below a second.
+    const decimals = t.length > 1 ? Math.max(0, -Math.floor(Math.log10(t[1] - t[0]) + 1e-9)) : 1;
+    for (const s of t) {
+      const x = xs[i](s * 1000);
+      if (x - (ticks[ticks.length - 1]?.x ?? -Infinity) >= 40) ticks.push({ x, label: formatScriptTime(s, decimals) });
+    }
+  });
+  const dots = layers.reduce((n, p) => n + p.points.length, 0) <= 200;
   return (
-    <>
+    <svg width={width} height={plotHeight + PREVIEW_AXIS} style={{ display: "block" }}>
+      {layers.map(({ kind, points, i }, l) => {
+        const band = PIECE_STYLES[kind].band;
+        const [a, b] = [points[0], points[points.length - 1]];
+        return band && a && <rect key={l} x={xs[i](a.at)} width={Math.max(xs[i](b.at) - xs[i](a.at), 1)} y={0} height={plotHeight} style={{ fill: band }} />;
+      })}
       {[0, 50, 100].map((pos) => (
         <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
       ))}
-      {ticks.map((t) => {
-        const tx = x(t * 1000);
+      {ticks.map(({ x, label }) => {
         // Kept inside the graph at its edges.
-        const anchor = tx < 20 ? "start" : tx > width - 20 ? "end" : "middle";
+        const anchor = x < 20 ? "start" : x > width - 20 ? "end" : "middle";
         return (
-          <g key={t}>
-            <line x1={tx} x2={tx} y1={0} y2={plotHeight} style={{ stroke: "var(--gray-a4)" }} />
-            <text x={tx} y={height - 2} textAnchor={anchor} fontSize={9} style={{ fill: "var(--gray-11)" }}>
-              {formatScriptTime(t, decimals)}
+          <g key={x}>
+            <line x1={x} x2={x} y1={0} y2={plotHeight} style={{ stroke: "var(--gray-a4)" }} />
+            <text x={x} y={plotHeight + PREVIEW_AXIS - 2} textAnchor={anchor} fontSize={9} style={{ fill: "var(--gray-11)" }}>
+              {label}
             </text>
           </g>
         );
       })}
-    </>
-  );
-}
-
-/** A small graph of point lines over `from`–`to` ms; dots only while there are few. */
-function PreviewGraph({ lines, from, to }: {
-  lines: { actions: Action[]; color: string; dashed?: boolean }[];
-  from: number;
-  to: number;
-}) {
-  const scale = previewScale(from, to);
-  const { width, height, x, y } = scale;
-  return (
-    <svg width={width} height={height} style={{ display: "block" }}>
-      <PreviewAxes {...scale} />
-      {lines.map(({ actions, color, dashed }, l) => (
-        <g key={l} style={{ stroke: color, fill: color }}>
-          <polyline points={actions.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")} fill="none" strokeWidth={1.5} strokeDasharray={dashed ? "3 2" : undefined} />
-          {actions.length <= 200 && actions.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={2} stroke="none" />)}
-        </g>
-      ))}
-    </svg>
-  );
-}
-
-/**
- * What an edit changed, as a diff like placing shows it: the time removed points
- * covered in red, their old line dashed and the points crossed out; the time added
- * points cover in green, with their line. One unchanged point on each side joins
- * both. Unchanged points are the same objects in both.
- *
- * A `move` instead shows the moved points: where they went in red, where they
- * came in green, over the points after it in gray. The time they replaced shows
- * in red, with them and all later points right after it, like a diff's added
- * lines after the removed ones.
- */
-function DiffPreview({ before, after, move }: { before: Action[]; after: Action[]; move?: Move }) {
-  let start = 0;
-  while (start < before.length && start < after.length && before[start] === after[start]) start++;
-  let end = 0;
-  while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++;
-  const placed = move ? after.slice(move.at, move.at + move.count) : after.slice(start, after.length - end);
-  const replaced = move?.replaced ?? [];
-  /** Replacing, the time the points placed cover shows twice: first replaced, then placed. */
-  const shift = replaced.length ? placed[placed.length - 1].at - placed[0].at : 0;
-  /** `points` where they show: from where the placed ones start on, past the replaced time. */
-  const later = (points: Action[]) => (shift && points.length && points[0].at >= placed[0].at ? points.map((a) => ({ at: a.at + shift, pos: a.pos })) : points);
-  const lifted = move ? before.slice(move.from, move.to + 1) : before.slice(start, before.length - end);
-  const changed = [...lifted, ...placed, ...replaced];
-  const [from, to] = [Math.min(...changed.map((a) => a.at)), Math.max(...changed.map((a) => a.at))];
-  /** Moved, the points after it in the time shown and one beyond each edge; broken around the replaced time. */
-  const unmoved = move ? after.slice(Math.max(byTime(after, from) - 1, 0), byTime(after, to + 1) + 1) : [];
-  const segments = shift ? [unmoved.filter((a) => a.at < placed[0].at), later(unmoved.filter((a) => a.at >= placed[0].at))] : [unmoved];
-  const [removed, added] = [later(lifted), later(placed)];
-  const context = move ? [segments[0][0], segments[segments.length - 1].slice(-1)[0]].filter((a) => a !== undefined) : [before[start - 1], before[before.length - end]].filter((a) => a !== undefined);
-  const all = [...context, ...removed, ...added, ...replaced];
-  if (!all.length) return <Text size="1" color="gray">No points</Text>;
-  const scale = previewScale(Math.min(...all.map((a) => a.at)), Math.max(...all.map((a) => a.at)));
-  const { width, plotHeight, height, x, y } = scale;
-  const line = (changed: Action[]) => (move ? changed : [before[start - 1], ...changed, before[before.length - end]]).filter((a) => a !== undefined).map((a) => `${x(a.at)},${y(a.pos)}`).join(" ");
-  const band = (changed: Action[], color: string) => changed.length > 0 && (
-    <rect x={x(changed[0].at)} width={Math.max(x(changed[changed.length - 1].at) - x(changed[0].at), 1)} y={0} height={plotHeight} style={{ fill: color }} />
-  );
-  const dots = all.length <= 200;
-  return (
-    <svg width={width} height={height} style={{ display: "block" }}>
-      {band(removed, "var(--red-a3)")}
-      {shift > 0 && band(placed, "var(--red-a3)")}
-      {band(added, "var(--green-a3)")}
-      <PreviewAxes {...scale} />
-      {move && segments.map((s, i) => <polyline key={i} points={line(s)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--gray-8)" }} />)}
-      {/* As many points before as after: each moved, so join it to where it went. */}
-      {/* ponytail: pairs by order, so an edit that both moves and adds points shows no moves; match by nearest time if that misleads. */}
-      {dots && removed.length === added.length && removed.map((a, i) => (
-        <line key={i} x1={x(a.at)} y1={y(a.pos)} x2={x(added[i].at)} y2={y(added[i].pos)} strokeWidth={1} style={{ stroke: "var(--gray-8)" }} />
-      ))}
-      <polyline points={line(removed)} fill="none" strokeWidth={1.5} strokeDasharray="3 2" style={{ stroke: "var(--red-9)" }} />
-      {replaced.length > 0 && <polyline points={line(replaced)} fill="none" strokeWidth={1.5} strokeDasharray="3 2" style={{ stroke: "var(--red-9)" }} />}
-      <polyline points={line(added)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--green-9)" }} />
-      {dots && [...removed, ...replaced].map((a, i) => (
-        <path key={i} d={`M${x(a.at) - 2.5},${y(a.pos) - 2.5} l5,5 m0,-5 l-5,5`} strokeWidth={1.5} style={{ stroke: "var(--red-9)" }} />
-      ))}
-      {dots && added.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={2.5} style={{ fill: "var(--green-9)" }} />)}
-      {context.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={2} style={{ fill: "var(--gray-9)" }} />)}
+      {/* Each moved point joined to where it went. */}
+      {dots && pieces.flatMap((p, i) => (p.old ?? []).map((a, k) => (
+        <line key={`${i}-${k}`} x1={xs[i](a.at)} y1={y(a.pos)} x2={xs[i](p.points[k].at)} y2={y(p.points[k].pos)} strokeWidth={1} style={{ stroke: PIECE_STYLES.moved.color }} />
+      )))}
+      {layers.map(({ kind, i }, l) => {
+        const { color, dashed } = PIECE_STYLES[kind];
+        const stroke = { stroke: color, strokeWidth: 1.5, strokeDasharray: dashed ? "3 2" : undefined };
+        if (kind === "break") return <line key={l} x1={xs[i](0) + DIFF_BREAK / 2} x2={xs[i](0) + DIFF_BREAK / 2} y1={0} y2={plotHeight} {...stroke} />;
+        return <polyline key={l} points={lines[l].map((a) => `${xs[i](a.at)},${y(a.pos)}`).join(" ")} fill="none" {...stroke} />;
+      })}
+      {dots && layers.flatMap(({ kind, points, i }, l) => points.map((a, k) => kind === "removed"
+        ? <path key={`${l}-${k}`} d={`M${xs[i](a.at) - 2.5},${y(a.pos) - 2.5} l5,5 m0,-5 l-5,5`} strokeWidth={1.5} style={{ stroke: PIECE_STYLES.removed.color }} />
+        : <circle key={`${l}-${k}`} cx={xs[i](a.at)} cy={y(a.pos)} r={kind === "added" ? 2.5 : 2} style={{ fill: PIECE_STYLES[kind].color }} />))}
+      {pieces.flatMap((p, i) => [p.from, p.to].map((a, k) => a && <circle key={`${i}~${k}`} cx={xs[i](a.at)} cy={y(a.pos)} r={2} style={{ fill: "var(--gray-9)" }} />))}
     </svg>
   );
 }
