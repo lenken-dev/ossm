@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { Box, Button, Callout, Flex, IconButton, Popover, Slider, Switch, Text, TextField } from "@radix-ui/themes";
-import { Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Slider, Switch, Text, TextField } from "@radix-ui/themes";
+import { ClipboardIcon, CopyIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -21,6 +21,9 @@ interface Script {
 }
 
 const EMPTY: Script = { name: "untitled", actions: [] };
+
+/** Copies kept in the clipboard history. */
+const HISTORY_SIZE = 10;
 
 /** Visible time range, in ms. */
 const MIN_SPAN = 500;
@@ -53,6 +56,8 @@ export default function EditorPage() {
   /** Dragging on empty space draws a box that selects points instead of adding one; Shift does the same once. */
   const [boxMode, setBoxMode] = useState(false);
   /** The selection box being drawn, in px. */
+  /** The latest copies, newest first; for this visit to the page. */
+  const [history, setHistory] = useState<Action[][]>([]);
   /** Script time under the pointer while it is over the graph, in ms; where paste goes without media. */
   const pointerTime = useRef<number | null>(null);
   const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -327,42 +332,86 @@ export default function EditorPage() {
     return () => window.removeEventListener("keydown", keydown);
   });
 
-  // Copy and cut put the selected points on the system clipboard as funscript
-  // JSON, timed from the first. Paste puts them at the playhead, or without
-  // media at the pointer, replacing the points in the time they cover.
+  /** The selected points as funscript JSON, timed from the first. */
+  /** Also adds them to the clipboard history. */
+  const selectionJson = () => {
+    const picked = [...selected].sort((a, b) => a - b).map((i) => actions[i]);
+    const copied = picked.map((a) => ({ at: a.at - picked[0].at, pos: a.pos }));
+    return remember(copied);
+  };
+
+  /** Put `copied` on top of the clipboard history, without a duplicate; returns its JSON. */
+  const remember = (copied: Action[]) => {
+    const json = JSON.stringify({ actions: copied });
+    setHistory((h) => [copied, ...h.filter((c) => JSON.stringify({ actions: c }) !== json)].slice(0, HISTORY_SIZE));
+    return json;
+  };
+
+  /** Paste a history entry and make it the clipboard again, on top of the history. */
+  const pasteFromHistory = (copied: Action[]) => {
+    const json = remember(copied);
+    pasteJson(json);
+    navigator.clipboard.writeText(json).catch((e: Error) => setError(`Copying failed: ${e.message}`));
+  };
+
+  /**
+   * Paste funscript JSON at the playhead, or without media at the pointer,
+   * replacing the points in the time it covers. False when it holds no points.
+   */
+  const pasteJson = (text: string) => {
+    let parsed: unknown;
+    try {
+      parsed = (JSON.parse(text) as { actions?: unknown } | null)?.actions;
+    } catch {
+      return false;
+    }
+    if (!Array.isArray(parsed)) return false;
+    // From the clipboard, so anything could be in it.
+    const valid = (parsed as Partial<Action>[])
+      .filter((a): a is Action => Number.isFinite(a?.at) && Number.isFinite(a?.pos))
+      .sort((a, b) => a.at - b.at);
+    if (!valid.length) return false;
+    const start = Math.max(Math.round(videoUrl ? time : pointerTime.current ?? view.from + view.span / 2), 0);
+    const pasted = valid
+      .map((a) => ({ at: start + Math.round(a.at - valid[0].at), pos: clamp(a.pos, 0, 100) }))
+      .filter((a, i, all) => i === 0 || a.at !== all[i - 1].at);
+    const end = pasted[pasted.length - 1].at;
+    const before = actions.filter((a) => a.at < start);
+    const after = actions.filter((a) => a.at > end);
+    setScript({ ...script, actions: [...before, ...pasted, ...after] });
+    setSelected(new Set(pasted.map((_, i) => before.length + i)));
+    return true;
+  };
+
+  /** The toolbox buttons go through the Clipboard API, which may ask for permission to paste. */
+  const copyButton = async (cut: boolean) => {
+    try {
+      await navigator.clipboard.writeText(selectionJson());
+      if (cut) removeSelected();
+      setError(null);
+    } catch (e) {
+      setError(`Copying failed: ${(e as Error).message}`);
+    }
+  };
+  const pasteButton = async () => {
+    try {
+      setError(pasteJson(await navigator.clipboard.readText()) ? null : "The clipboard holds no funscript points.");
+    } catch (e) {
+      setError(`Pasting failed: ${(e as Error).message}`);
+    }
+  };
+
+  // Ctrl+C, Ctrl+X and Ctrl+V on the system clipboard; not while typing in a field.
   useEffect(() => {
     const copy = (e: ClipboardEvent) => {
       if (e.target instanceof HTMLInputElement || !selected.size) return;
       e.preventDefault();
-      const picked = [...selected].sort((a, b) => a - b).map((i) => actions[i]);
-      const actionsOut = picked.map((a) => ({ at: a.at - picked[0].at, pos: a.pos }));
-      e.clipboardData!.setData("text/plain", JSON.stringify({ actions: actionsOut }));
+      e.clipboardData!.setData("text/plain", selectionJson());
       if (e.type === "cut") removeSelected();
     };
     const paste = (e: ClipboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
-      let parsed: unknown;
-      try {
-        parsed = (JSON.parse(e.clipboardData!.getData("text/plain")) as { actions?: unknown } | null)?.actions;
-      } catch {
-        return;
-      }
-      if (!Array.isArray(parsed)) return;
-      // From the clipboard, so anything could be in it.
-      const valid = (parsed as Partial<Action>[])
-        .filter((a): a is Action => Number.isFinite(a?.at) && Number.isFinite(a?.pos))
-        .sort((a, b) => a.at - b.at);
-      if (!valid.length) return;
-      e.preventDefault();
-      const start = Math.max(Math.round(videoUrl ? time : pointerTime.current ?? view.from + view.span / 2), 0);
-      const pasted = valid
-        .map((a) => ({ at: start + Math.round(a.at - valid[0].at), pos: clamp(a.pos, 0, 100) }))
-        .filter((a, i, all) => i === 0 || a.at !== all[i - 1].at);
-      const end = pasted[pasted.length - 1].at;
-      const before = actions.filter((a) => a.at < start);
-      const after = actions.filter((a) => a.at > end);
-      setScript({ ...script, actions: [...before, ...pasted, ...after] });
-      setSelected(new Set(pasted.map((_, i) => before.length + i)));
+      if (pasteJson(e.clipboardData!.getData("text/plain"))) e.preventDefault();
     };
     window.addEventListener("copy", copy);
     window.addEventListener("cut", copy);
@@ -595,6 +644,59 @@ export default function EditorPage() {
           </Popover.Root>
         </Flex>
       )}
+      {/* Toolbox: convenience buttons for what the keyboard also does. */}
+      <Flex gap="2" flexShrink="0">
+        <Button variant="soft" color="gray" disabled={!selected.size} title="Copy (Ctrl+C)" onClick={() => void copyButton(false)}>
+          <CopyIcon /> Copy
+        </Button>
+        <Button variant="soft" color="gray" disabled={!selected.size} title="Cut (Ctrl+X)" onClick={() => void copyButton(true)}>
+          <ScissorsIcon /> Cut
+        </Button>
+        {/* With a history, its button docks to the paste button. */}
+        <Flex>
+          <Button
+            variant="soft"
+            color="gray"
+            title="Paste (Ctrl+V)"
+            onClick={() => void pasteButton()}
+            style={history.length ? { borderTopRightRadius: 0, borderBottomRightRadius: 0 } : undefined}
+          >
+            <ClipboardIcon /> Paste
+          </Button>
+          {history.length > 0 && <Popover.Root>
+            <Popover.Trigger>
+              <IconButton
+                variant="soft"
+                color="gray"
+                aria-label="Clipboard history"
+                title="Clipboard history"
+                style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeft: "1px solid var(--gray-a5)" }}
+              >
+                <CounterClockwiseClockIcon />
+              </IconButton>
+            </Popover.Trigger>
+            <Popover.Content width="220px">
+              <Flex direction="column" gap="1">
+                {history.map((copied, i) => (
+                  <HoverCard.Root key={i} openDelay={100} closeDelay={0}>
+                    <HoverCard.Trigger>
+                      <Popover.Close>
+                        <Button variant="ghost" color="gray" style={{ justifyContent: "flex-start" }} onClick={() => pasteFromHistory(copied)}>
+                          {copied.length} {copied.length === 1 ? "point" : "points"} · {formatScriptTime(copied[copied.length - 1].at / 1000)}
+                        </Button>
+                      </Popover.Close>
+                    </HoverCard.Trigger>
+                    <HoverCard.Content side="right" size="1">
+                      <PointsPreview actions={copied} />
+                    </HoverCard.Content>
+                  </HoverCard.Root>
+                ))}
+                <Text size="1" color="gray" mt="1">Click an entry to paste it and make it the clipboard again.</Text>
+              </Flex>
+            </Popover.Content>
+          </Popover.Root>}
+        </Flex>
+      </Flex>
       <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
         <svg
           width={width}
@@ -671,4 +773,18 @@ export default function EditorPage() {
   );
 
   return <GraphLayout sidebar={sidebar} content={content} />;
+}
+
+/** A small graph of copied points, scaled to fit. */
+function PointsPreview({ actions }: { actions: Action[] }) {
+  const [width, height, pad] = [200, 60, 4];
+  const duration = actions[actions.length - 1].at || 1;
+  const x = (at: number) => pad + (at / duration) * (width - 2 * pad);
+  const y = (pos: number) => pad + (1 - pos / 100) * (height - 2 * pad);
+  return (
+    <svg width={width} height={height} style={{ display: "block" }}>
+      <polyline points={actions.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")} fill="none" stroke={LINE_COLOR} strokeWidth={1.5} />
+      {actions.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={2} fill={LINE_COLOR} />)}
+    </svg>
+  );
 }
