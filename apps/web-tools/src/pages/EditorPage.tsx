@@ -936,7 +936,7 @@ export default function EditorPage() {
           >
             <ResetIcon />
           </IconButton>
-          <Popover.Root>
+          <Popover.Root modal>
             <Popover.Trigger>
               <IconButton
                 variant="soft"
@@ -1001,7 +1001,7 @@ export default function EditorPage() {
           >
             <ClipboardIcon />
           </IconButton>
-          {history.length > 0 && <Popover.Root>
+          {history.length > 0 && <Popover.Root modal>
             <Popover.Trigger>
               <IconButton
                 variant="soft"
