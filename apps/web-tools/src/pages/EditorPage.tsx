@@ -65,9 +65,12 @@ export default function EditorPage() {
   const [placeAt, setPlaceAt] = useState<Action | null>(null);
   /** Placing inserts, moving later points right, instead of replacing the points the pasted ones cover. */
   const [insertMode, setInsertMode] = usePersistedState("ossm:editorInsert", false, localStorage);
-  /** Holding Shift while placing switches to the other mode, until it is released. */
-  const [shiftHeld, setShiftHeld] = useState(false);
-  const inserting = insertMode !== shiftHeld;
+  /**
+   * Modifiers held while placing: Shift switches to the other mode, Ctrl (or
+   * Cmd) keeps the copied depths instead of following the pointer's.
+   */
+  const [held, setHeld] = useState({ shift: false, ctrl: false });
+  const inserting = insertMode !== held.shift;
   /** The latest copies, newest first; for this visit to the page. */
   const [history, setHistory] = useState<Action[][]>([]);
   const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -432,11 +435,11 @@ export default function EditorPage() {
   };
 
   /** The points being placed with the first at `at`, `pos`; they keep their shape and stay within 0–100. */
-  const positioned = (at: number, pos: number) => {
+  const positioned = (at: number, pos: number, keepDepth: boolean) => {
     const shape = placing!;
     const lowest = Math.min(...shape.map((a) => a.pos));
     const highest = Math.max(...shape.map((a) => a.pos));
-    const dp = clamp(pos - shape[0].pos, -lowest, 100 - highest);
+    const dp = keepDepth ? 0 : clamp(pos - shape[0].pos, -lowest, 100 - highest);
     return shape.map((a) => ({ at: Math.max(at, 0) + a.at, pos: a.pos + dp }));
   };
 
@@ -455,12 +458,12 @@ export default function EditorPage() {
     return { before, after: later.map((a) => ({ at: a.at + shift, pos: a.pos })) };
   };
 
-  // Track Shift while placing; pointer events correct it if it was pressed before.
+  // Track the modifiers while placing; pointer events correct them if they were pressed before.
   useEffect(() => {
-    setShiftHeld(false);
+    setHeld({ shift: false, ctrl: false });
     if (!placing) return;
-    const key = (e: KeyboardEvent) => e.key === "Shift" && setShiftHeld(e.type === "keydown");
-    const blur = () => setShiftHeld(false);
+    const key = (e: KeyboardEvent) => setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
+    const blur = () => setHeld({ shift: false, ctrl: false });
     window.addEventListener("keydown", key);
     window.addEventListener("keyup", key);
     window.addEventListener("blur", blur);
@@ -477,7 +480,7 @@ export default function EditorPage() {
     e.preventDefault();
     e.stopPropagation();
     const point = pointerAt(e);
-    const pasted = positioned(point.at, point.pos);
+    const pasted = positioned(point.at, point.pos, e.ctrlKey || e.metaKey);
     const insert = insertMode !== e.shiftKey;
     const { before, after } = around(pasted, insert);
     editLabel.current = `${insert ? "Insert" : "Paste"} ${points(pasted.length)}`;
@@ -550,7 +553,7 @@ export default function EditorPage() {
   };
 
   /** The points being placed where they would go. */
-  const ghost = placing && placeAt ? positioned(placeAt.at, placeAt.pos) : null;
+  const ghost = placing && placeAt ? positioned(placeAt.at, placeAt.pos, held.ctrl) : null;
   /** Whether a point at `at` would be replaced by them. */
   const replaced = (at: number) => !!ghost && !inserting && at >= ghost[0].at && at <= ghost[ghost.length - 1].at;
   /** The points as drawn: while inserting, the later ones where they would move. Same order and indices as `actions`. */
@@ -888,7 +891,7 @@ export default function EditorPage() {
           onPointerMove={(e) => {
             if (!placing) return;
             setPlaceAt(pointerAt(e));
-            setShiftHeld(e.shiftKey);
+            setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
           }}
           onPointerLeave={() => setPlaceAt(null)}
           style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
@@ -945,6 +948,10 @@ export default function EditorPage() {
               onPointerDown={(e) => pointDown(e, first + j)}
             />
           ))}
+          {/* The copied points' original lowest and highest depth, what Ctrl keeps them at. */}
+          {ghost && placing && [Math.min(...placing.map((a) => a.pos)), Math.max(...placing.map((a) => a.pos))].map((pos, i) => (
+            <line key={i} x1={0} x2={width} y1={y(pos)} y2={y(pos)} strokeDasharray="6 4" style={{ stroke: LINE_COLOR, opacity: 0.6, pointerEvents: "none" }} />
+          ))}
           {ghost && (
             <g opacity={0.6} style={{ pointerEvents: "none" }}>
               <polyline
@@ -958,7 +965,10 @@ export default function EditorPage() {
             </g>
           )}
           {/* While placing, a click anywhere places, over points and the playhead alike. */}
-          {placing && <rect width={width} height={height} fill="transparent" style={{ cursor: "copy" }} onPointerDown={place} />}
+          {placing && (
+            // No menu for Ctrl+click, which is a right-click on a Mac.
+            <rect width={width} height={height} fill="transparent" style={{ cursor: "copy" }} onPointerDown={place} onContextMenu={(e) => e.preventDefault()} />
+          )}
           {box && <rect {...box} strokeDasharray="4 2" style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", pointerEvents: "none" }} />}
           {only !== null && shown[only] && (
             <text
@@ -974,7 +984,7 @@ export default function EditorPage() {
         </svg>
         {placing && (
           <Text size="1" style={{ position: "absolute", top: 4, left: 8, padding: "2px 6px", borderRadius: 4, background: "var(--color-panel-solid)", pointerEvents: "none" }}>
-            Click to {inserting ? "insert" : "place"} {points(placing.length)} · Shift to {inserting ? "replace" : "insert"} · Esc cancels
+            Click to {inserting ? "insert" : "place"} {points(placing.length)} · Shift to {inserting ? "replace" : "insert"} · Ctrl keeps depths · Esc cancels
           </Text>
         )}
         {/* As in the player: 100 (top) is the shallow end, out towards home. */}
