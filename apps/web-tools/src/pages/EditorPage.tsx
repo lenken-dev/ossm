@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Switch, Text, TextField } from "@radix-ui/themes";
 import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
+import { useAppearance } from "../hooks/useAppearance";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
@@ -121,6 +122,9 @@ export default function EditorPage() {
   const anchor = useRef<number | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Re-rendered on a theme change, so the canvas picks up its colours.
+  useAppearance();
   const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
   const videoInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLMediaElement>(null);
@@ -392,6 +396,8 @@ export default function EditorPage() {
 
   /** Add a point under the pointer and keep dragging it; with several points selected, only clear the selection. */
   const add = (e: PointerEvent<SVGSVGElement>) => {
+    const hit = pointUnder(e);
+    if (hit !== null) return pointDown(e, hit);
     if (e.button !== 0) return;
     if (boxMode || e.shiftKey) {
       boxSelect(e);
@@ -418,7 +424,7 @@ export default function EditorPage() {
    * keeps the selection it is in, and drags. In selection mode, Ctrl/Cmd or
    * Shift+click grows the box to take in the point.
    */
-  const pointDown = (e: PointerEvent<SVGCircleElement>, i: number) => {
+  const pointDown = (e: PointerEvent<Element>, i: number) => {
     if (e.button !== 0) return;
     if (e.ctrlKey || e.metaKey || e.shiftKey) {
       e.preventDefault();
@@ -460,6 +466,9 @@ export default function EditorPage() {
 
   /** Drag the playhead to seek; playback pauses while dragging, as in the player. */
   const dragPlayhead = (e: PointerEvent<SVGGElement>) => {
+    // The points are drawn over the playhead.
+    const hit = pointUnder(e);
+    if (hit !== null) return pointDown(e, hit);
     const media = videoRef.current;
     if (!media || e.button !== 0) return;
     e.preventDefault();
@@ -743,12 +752,66 @@ export default function EditorPage() {
   const ghostLine = ghost && [neighbours!.before[neighbours!.before.length - 1], ...ghost, neighbours!.after[0]].filter((a) => a !== undefined);
 
   // The points in view and one beyond each edge, so the line reaches the edges.
-  // ponytail: all points in view are drawn as SVG; zoomed out on a dense script that is thousands of nodes, switch to canvas if it lags.
   const first = Math.max(byTime(shown, view.from) - 1, 0);
   const last = Math.min(byTime(shown, view.from + view.span) + 1, shown.length);
   const visible = shown.slice(first, last);
   /** The line through the points, broken where the points being placed go so they can join it. */
   const segments = ghost ? [visible.filter((a) => a.at < ghost[0].at), visible.filter((a) => a.at > ghost[ghost.length - 1].at)] : [visible];
+  /** The index of the point under the pointer, the one drawn on top if several, or null. */
+  const pointUnder = (e: { clientX: number; clientY: number }) => {
+    const rect = boxRef.current!.getBoundingClientRect();
+    const [px, py] = [e.clientX - rect.left, e.clientY - rect.top];
+    const near = (dx: number) => byTime(visible, view.from + ((px + dx) / width) * view.span);
+    // Selected points are drawn last, on top.
+    let hit = null;
+    for (let j = near(-8); j < near(8); j++) {
+      const i = first + j;
+      if (replaced(visible[j].at) || Math.hypot(x(visible[j].at) - px, y(visible[j].pos) - py) > (selected.has(i) ? 8 : 5)) continue;
+      if (hit === null || selected.has(i) || !selected.has(hit)) hit = i;
+    }
+    return hit;
+  };
+
+  // The line and points are drawn on a canvas: as SVG, thousands of them in view make scrolling and zooming lag.
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current!;
+    const dpr = window.devicePixelRatio;
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      [canvas.width, canvas.height] = [Math.round(width * dpr), Math.round(height * dpr)];
+    }
+    const ctx = canvas.getContext("2d")!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    const css = getComputedStyle(canvas);
+    Object.assign(ctx, { lineWidth: 2, lineJoin: "round", strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
+    for (const segment of segments) {
+      ctx.beginPath();
+      for (const a of segment) ctx.lineTo(x(a.at), y(a.pos));
+      ctx.stroke();
+    }
+    // One path per look, so drawing stays fast however many points there are. The points being replaced show as small crosses.
+    const [dots, ringed, crosses] = [new Path2D(), new Path2D(), new Path2D()];
+    visible.forEach((a, j) => {
+      const [cx, cy] = [x(a.at), y(a.pos)];
+      if (replaced(a.at)) {
+        crosses.moveTo(cx - 3, cy - 3);
+        crosses.lineTo(cx + 3, cy + 3);
+        crosses.moveTo(cx + 3, cy - 3);
+        crosses.lineTo(cx - 3, cy + 3);
+        return;
+      }
+      const path = selected.has(first + j) ? ringed : dots;
+      const r = selected.has(first + j) ? 7 : 5;
+      path.moveTo(cx + r, cy);
+      path.arc(cx, cy, r, 0, 2 * Math.PI);
+    });
+    ctx.fill(dots);
+    ctx.fill(ringed);
+    ctx.strokeStyle = css.getPropertyValue("--gray-12");
+    ctx.stroke(ringed);
+    Object.assign(ctx, { lineWidth: 1.5, strokeStyle: css.getPropertyValue("--red-9") });
+    ctx.stroke(crosses);
+  });
   /** The selection box's sides, in px. */
   const edges = box && { from: x(box.from), to: x(box.to), low: y(box.low), high: y(box.high) };
 
@@ -1133,6 +1196,8 @@ export default function EditorPage() {
           height={height}
           onPointerDown={add}
           onPointerMove={(e) => {
+            // Points are drawn on the canvas, so the cursor shows when one can be grabbed.
+            e.currentTarget.style.cursor = pointUnder(e) === null ? "crosshair" : "grab";
             if (!placing) return;
             setPlaceAt(pointerAt(e));
             setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
@@ -1169,39 +1234,10 @@ export default function EditorPage() {
               style={{ fill: inserting ? "var(--green-a3)" : "var(--red-a3)", pointerEvents: "none" }}
             />
           )}
-          {segments.map((segment, i) => (
-            <polyline
-              key={i}
-              points={segment.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")}
-              fill="none"
-              stroke={LINE_COLOR}
-              strokeWidth={2}
-              strokeLinejoin="round"
-            />
-          ))}
-          {visible.map((a, j) => replaced(a.at) ? (
-            // The points being replaced show as small crosses.
-            <path
-              key={first + j}
-              d={`M${x(a.at) - 3},${y(a.pos) - 3} l6,6 m0,-6 l-6,6`}
-              strokeWidth={1.5}
-              style={{ stroke: "var(--red-9)", pointerEvents: "none" }}
-            />
-          ) : (
-            <circle
-              key={first + j}
-              cx={x(a.at)}
-              cy={y(a.pos)}
-              r={selected.has(first + j) ? 7 : 5}
-              strokeWidth={2}
-              style={{
-                cursor: "grab",
-                fill: LINE_COLOR,
-                stroke: selected.has(first + j) ? "var(--gray-12)" : "none",
-              }}
-              onPointerDown={(e) => pointDown(e, first + j)}
-            />
-          ))}
+          {/* Kept in the SVG, so the line and points stay between what is drawn under and over them. */}
+          <foreignObject width={width} height={height} style={{ pointerEvents: "none" }}>
+            <canvas ref={canvasRef} style={{ display: "block", width, height }} />
+          </foreignObject>
           {/* The copied points' original lowest and highest depth, what Ctrl keeps them at. */}
           {ghost && placing && [Math.min(...placing.map((a) => a.pos)), Math.max(...placing.map((a) => a.pos))].map((pos, i) => (
             <line key={i} x1={0} x2={width} y1={y(pos)} y2={y(pos)} strokeDasharray="6 4" style={{ stroke: LINE_COLOR, opacity: 0.6, pointerEvents: "none" }} />
