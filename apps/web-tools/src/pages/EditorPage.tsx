@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -111,6 +111,8 @@ export default function EditorPage() {
   const [insertMode, setInsertMode] = usePersistedState("ossm:editorInsert", false, localStorage);
   /** Selection mode's box selects by time: it takes in whole stretches of the script, whatever their depth. */
   const [selectByTime, setSelectByTime] = usePersistedState("ossm:editorSelectByTime", false, localStorage);
+  /** Moving takes out the time the selection spanned, so moving and inserting keeps the script's length. */
+  const [closeGap, setCloseGap] = usePersistedState("ossm:editorCloseGap", false, localStorage);
   /**
    * Modifiers held while placing: Shift switches to the other mode, Ctrl (or
    * Cmd) keeps the copied depths instead of following the pointer's.
@@ -231,8 +233,18 @@ export default function EditorPage() {
 
   const { actions } = script;
   useEffect(() => setBox(null), [actions]);
-  /** The points that stay while placing. */
-  const kept = lifted ? actions.filter((_, i) => !lifted.has(i)) : actions;
+  /**
+   * The points that stay while placing. Closing the gap, the time from the
+   * first to the last lifted point goes, with any other points in it, and the
+   * later points move left by as much; inserting them back there undoes it.
+   */
+  const kept = (() => {
+    if (!lifted) return actions;
+    if (!closeGap) return actions.filter((_, i) => !lifted.has(i));
+    const [lo, hi] = [Math.min(...lifted), Math.max(...lifted)];
+    const span = actions[hi].at - actions[lo].at;
+    return [...actions.slice(0, lo), ...actions.slice(hi + 1).map((a) => ({ at: a.at - span, pos: a.pos }))];
+  })();
 
   /** Undo history: the points after each edit, the first as loaded; `index` is the current one. */
   const [timeline, setTimeline] = useState(() => ({ states: [{ actions, label: "Start" }], index: 0 }));
@@ -1211,6 +1223,17 @@ export default function EditorPage() {
             onClick={() => setInsertMode(!insertMode)}
           >
             <ColumnSpacingIcon /> Insert
+          </Button>
+        )}
+        {lifted && (
+          <Button
+            variant={closeGap ? "solid" : "soft"}
+            color={closeGap ? undefined : "gray"}
+            aria-pressed={closeGap}
+            title="Close the gap: take out the time the moved points spanned, moving later points left"
+            onClick={() => setCloseGap(!closeGap)}
+          >
+            <PinLeftIcon /> Close gap
           </Button>
         )}
       </Flex>
