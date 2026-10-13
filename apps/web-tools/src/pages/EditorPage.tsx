@@ -71,7 +71,7 @@ const PAD = 10;
 const LINE_COLOR = "#ec4899";
 /** Below this average spacing between the points in view, in px, the points are not drawn, only the line. */
 const DOT_SPACING = 6;
-/** A run of up to this many neighbouring selected points in view shows as rings; a longer one as the line through it drawn over. */
+/** A run of up to this many neighbouring selected points in view also shows rings on the points. */
 const RING_LIMIT = 50;
 
 /** Height of the minimap that shows the whole script below the graph, in px. */
@@ -793,7 +793,7 @@ export default function EditorPage() {
       for (const a of segment) ctx.lineTo(x(a.at), y(a.pos));
       ctx.stroke();
     }
-    // Each run of neighbouring selected points in view shows as rings, or as the line over it if it is long; zoomed in, a long run's part in view can show as rings.
+    // The line through selected points is drawn over; a short run of them in view also shows rings, so zoomed in, a long run's part in view does too.
     const long = new Array<boolean>(visible.length).fill(false);
     for (let j = 0; j < visible.length; ) {
       let end = j;
@@ -804,7 +804,7 @@ export default function EditorPage() {
     const line = new Path2D();
     for (let j = 1; j < visible.length; j++) {
       const [a, b] = [visible[j - 1], visible[j]];
-      if (!long[j - 1] || !long[j] || replaced(a.at) || replaced(b.at)) continue;
+      if (!selected.has(first + j - 1) || !selected.has(first + j) || replaced(a.at) || replaced(b.at)) continue;
       line.moveTo(x(a.at), y(a.pos));
       line.lineTo(x(b.at), y(b.pos));
     }
@@ -1346,6 +1346,15 @@ export default function EditorPage() {
             fill="none"
             stroke={LINE_COLOR}
             strokeWidth={1}
+          />
+          {/* The selected runs over it, a lone selected point as a dot. */}
+          <path
+            d={kept.map((a, i) => selected.has(i) ? `${selected.has(i - 1) ? "L" : "M"}${minimapX(a.at)},${2 + (1 - a.pos / 100) * (MINIMAP_HEIGHT - 4)}${selected.has(i - 1) ? "" : "l0,0"}` : "").join("")}
+            fill="none"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ stroke: "var(--gray-12)", pointerEvents: "none" }}
           />
           {videoUrl && <line x1={minimapX(time)} x2={minimapX(time)} y1={0} y2={MINIMAP_HEIGHT} style={{ stroke: "var(--gray-12)" }} />}
           <rect
