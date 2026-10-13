@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Slider, Text, TextField } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Text, TextField } from "@radix-ui/themes";
 import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -885,19 +885,19 @@ export default function EditorPage() {
         </Flex>
       )}
       {/* Toolbox: convenience buttons for what the keyboard also does. */}
-      <Flex gap="2" flexShrink="0">
-        {/* Undo with its history docked, as paste with the clipboard history. */}
+      <Flex gap="2" align="center" flexShrink="0">
         <Flex>
-          <Button
+          <IconButton
             variant="soft"
             color="gray"
             disabled={!canUndo}
+            aria-label="Undo"
             title="Undo (Ctrl+Z)"
             onClick={undo}
             style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
           >
-            <ResetIcon /> Undo
-          </Button>
+            <ResetIcon />
+          </IconButton>
           <Popover.Root>
             <Popover.Trigger>
               <IconButton
@@ -940,63 +940,28 @@ export default function EditorPage() {
             </Popover.Content>
           </Popover.Root>
         </Flex>
-        <Button variant="soft" color="gray" disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" onClick={redo}>
-          <ResetIcon style={{ transform: "scaleX(-1)" }} /> Redo
-        </Button>
-        <Button
-          variant={boxMode ? "solid" : "soft"}
-          color={boxMode ? undefined : "gray"}
-          aria-pressed={boxMode}
-          title="Select points with a box (S)"
-          onClick={toggleBoxMode}
-        >
-          {/* A dashed selection box, sized like the icons. */}
-          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-            <rect x="2" y="2" width="11" height="11" rx="1" stroke="currentColor" strokeDasharray="2 2" />
-          </svg>
-          Select
-        </Button>
-        {boxMode && (
-          <Button
-            variant={selectByTime ? "solid" : "soft"}
-            color={selectByTime ? undefined : "gray"}
-            aria-pressed={selectByTime}
-            title="Select by time, at any depth"
-            onClick={() => {
-              setSelectByTime(!selectByTime);
-              if (!selectByTime && box) selectIn({ ...box, low: 0, high: 100 });
-            }}
-          >
-            <HeightIcon /> By time
-          </Button>
-        )}
-        <Button
-          variant={lifted ? "solid" : "soft"}
-          color={lifted ? undefined : "gray"}
-          aria-pressed={!!lifted}
-          disabled={!lifted && !selected.size}
-          title="Move mode: place the selected points again (M)"
-          onClick={toggleMove}
-        >
-          <MoveIcon /> Move
-        </Button>
-        <Button variant="soft" color="gray" disabled={!selected.size} title="Copy (Ctrl+C)" onClick={() => void copyButton(false)}>
-          <CopyIcon /> Copy
-        </Button>
-        <Button variant="soft" color="gray" disabled={!selected.size} title="Cut (Ctrl+X)" onClick={() => void copyButton(true)}>
-          <ScissorsIcon /> Cut
-        </Button>
+        <IconButton variant="soft" color="gray" disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)" onClick={redo}>
+          <ResetIcon style={{ transform: "scaleX(-1)" }} />
+        </IconButton>
+        <Separator orientation="vertical" size="2" />
+        <IconButton variant="soft" color="gray" disabled={!selected.size} aria-label="Copy" title="Copy (Ctrl+C)" onClick={() => void copyButton(false)}>
+          <CopyIcon />
+        </IconButton>
+        <IconButton variant="soft" color="gray" disabled={!selected.size} aria-label="Cut" title="Cut (Ctrl+X)" onClick={() => void copyButton(true)}>
+          <ScissorsIcon />
+        </IconButton>
         {/* With a history, its button docks to the paste button. */}
         <Flex>
-          <Button
+          <IconButton
             variant="soft"
             color="gray"
+            aria-label="Paste"
             title="Paste (Ctrl+V)"
             onClick={() => void pasteButton()}
             style={history.length ? { borderTopRightRadius: 0, borderBottomRightRadius: 0 } : undefined}
           >
-            <ClipboardIcon /> Paste
-          </Button>
+            <ClipboardIcon />
+          </IconButton>
           {history.length > 0 && <Popover.Root>
             <Popover.Trigger>
               <IconButton
@@ -1030,6 +995,45 @@ export default function EditorPage() {
             </Popover.Content>
           </Popover.Root>}
         </Flex>
+        <Separator orientation="vertical" size="2" />
+        <Button
+          variant={boxMode ? "solid" : "soft"}
+          color={boxMode ? undefined : "gray"}
+          aria-pressed={boxMode}
+          title="Select points with a box (S)"
+          onClick={toggleBoxMode}
+        >
+          {/* A dashed selection box, sized like the icons. */}
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+            <rect x="2" y="2" width="11" height="11" rx="1" stroke="currentColor" strokeDasharray="2 2" />
+          </svg>
+          Select
+        </Button>
+        {boxMode && (
+          <Button
+            variant={selectByTime ? "solid" : "soft"}
+            color={selectByTime ? undefined : "gray"}
+            aria-pressed={selectByTime}
+            title="Select by time, at any depth"
+            onClick={() => {
+              setSelectByTime(!selectByTime);
+              if (!selectByTime && box) selectIn({ ...box, low: 0, high: 100 });
+            }}
+          >
+            <HeightIcon /> By time
+          </Button>
+        )}
+        <Separator orientation="vertical" size="2" />
+        <Button
+          variant={lifted ? "solid" : "soft"}
+          color={lifted ? undefined : "gray"}
+          aria-pressed={!!lifted}
+          disabled={!lifted && !selected.size}
+          title="Move the selected points (M)"
+          onClick={toggleMove}
+        >
+          <MoveIcon /> Move
+        </Button>
         {placing && (
           <Button
             variant={inserting ? "solid" : "soft"}
