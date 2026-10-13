@@ -938,7 +938,21 @@ export default function EditorPage() {
       </Flex>
       <Box>
         <Text as="label" size="2" weight="medium" mb="1" style={{ display: "block" }} htmlFor="editor-name">Name</Text>
-        <TextField.Root id="editor-name" value={script.name} onChange={(e) => setScript({ ...script, name: e.target.value })} />
+        <TextField.Root id="editor-name" value={script.name} onChange={(e) => setScript({ ...script, name: e.target.value })}>
+          {videoFile && (
+            <TextField.Slot side="right">
+              <IconButton
+                size="1"
+                variant="ghost"
+                aria-label="Name after the media"
+                title="Name after the media"
+                onClick={() => setScript({ ...script, name: videoFile.name.replace(/\.[^.]+$/, "") })}
+              >
+                <VideoIcon />
+              </IconButton>
+            </TextField.Slot>
+          )}
+        </TextField.Root>
       </Box>
       <Button disabled={actions.length < 2} onClick={save}>
         <DownloadIcon /> Save
