@@ -1,8 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
-import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Switch, Text, TextField } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
 import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
-import { useAppearance } from "../hooks/useAppearance";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
@@ -127,8 +126,8 @@ export default function EditorPage() {
   const input = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Re-rendered on a theme change, so the canvas picks up its colours.
-  useAppearance();
+  // Re-rendered on a theme change, so the canvas picks up its colours. Radix's own context, as the theme's colours change a render after the app's appearance does.
+  useThemeContext();
   const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
   const videoInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLMediaElement>(null);
