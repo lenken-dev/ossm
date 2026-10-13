@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -48,6 +48,8 @@ const extended = (area: Area, a: Action): Area => ({
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
 /** Size of the selection box's grips, in px. */
 const GRIP = 8;
+/** Size of the buttons in the selection box that extend it, in px. */
+const EXTEND = 24;
 
 const EMPTY: Script = { name: "untitled", actions: [] };
 
@@ -870,6 +872,23 @@ export default function EditorPage() {
   });
   /** The selection box's sides, in px. */
   const edges = box && { from: x(box.from), to: x(box.to), low: y(box.low), high: y(box.high) };
+  /**
+   * Buttons in the middle of the selection box's edges, in its part in view,
+   * that grow it to the start or end of the script, or the top or bottom; each
+   * only while that edge is not there yet. None in a box too small for them.
+   */
+  const extenders = (() => {
+    if (!boxMode || !box || !edges) return [];
+    const [left, right] = [Math.max(edges.from, 0), Math.min(edges.to, width)];
+    const [midX, midY] = [(left + right) / 2 - EXTEND / 2, (edges.high + edges.low) / 2 - EXTEND / 2];
+    if (right - left < 3 * EXTEND + 16 || edges.low - edges.high < 3 * EXTEND + 16) return [];
+    return ([
+      ["Extend the selection to the start", DoubleArrowLeftIcon, { from: 0 }, box.from > 0, left + 6, midY],
+      ["Extend the selection to the end", DoubleArrowRightIcon, { to: end }, box.to < end, right - 6 - EXTEND, midY],
+      ["Extend the selection to the top", DoubleArrowUpIcon, { high: 100 }, box.high < 100, midX, edges.high + 6],
+      ["Extend the selection to the bottom", DoubleArrowDownIcon, { low: 0 }, box.low > 0, midX, edges.low - 6 - EXTEND],
+    ] as const).filter(([, , , shown]) => shown);
+  })();
 
   const sidebar = (
     <Flex direction="column" gap="3" p="3">
@@ -1377,6 +1396,19 @@ export default function EditorPage() {
             </text>
           )}
         </svg>
+        {extenders.map(([label, Icon, sides, , left, top]) => (
+          <IconButton
+            key={label}
+            size="1"
+            variant="surface"
+            aria-label={label}
+            title={label}
+            style={{ position: "absolute", left, top }}
+            onClick={() => selectIn({ ...box!, ...sides })}
+          >
+            <Icon />
+          </IconButton>
+        ))}
         {placing && (
           <Text size="1" style={{ position: "absolute", top: 4, left: 8, padding: "2px 6px", borderRadius: 4, background: "var(--color-panel-solid)", pointerEvents: "none" }}>
             Click to {inserting ? "insert" : "place"} {points(placing.length)} · Shift to {inserting ? "replace" : "insert"} · Ctrl keeps depths · Esc cancels
