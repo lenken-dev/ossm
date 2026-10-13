@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Slider, Switch, Text, TextField } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Slider, Text, TextField } from "@radix-ui/themes";
 import { ClipboardIcon, CopyIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -532,12 +532,6 @@ export default function EditorPage() {
       <Text size="2" color="gray">
         {actions.length} points{selected.size > 1 && ` · ${selected.size} selected`} · {formatScriptTime(end / 1000)}
       </Text>
-      <Text as="label" size="2" weight="medium">
-        <Flex align="center" justify="between" gap="2">
-          Box select
-          <Switch checked={boxMode} onCheckedChange={setBoxMode} />
-        </Flex>
-      </Text>
       <LabeledSlider
         label="Visible time"
         value={view.span / 1000}
@@ -547,11 +541,6 @@ export default function EditorPage() {
         step={0.5}
         onChange={(s) => setView({ ...view, span: s * 1000 })}
       />
-      <Text size="1" color="gray">
-        Click to add a point, click a point to select it, drag it to move it. Ctrl+click adds to the selection,
-        Shift+click selects a range, Ctrl+A selects all, Escape none. Shift+drag (or drag with Box select on) selects the points in a box. Delete removes the selected points; Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste them, pasting at the playhead (without media, at the pointer). Scroll to
-        move through time, Ctrl+scroll to zoom.{videoUrl && !isAudio && " Drag the bottom edge of the video to change its height."}
-      </Text>
     </Flex>
   );
 
@@ -646,6 +635,19 @@ export default function EditorPage() {
       )}
       {/* Toolbox: convenience buttons for what the keyboard also does. */}
       <Flex gap="2" flexShrink="0">
+        <Button
+          variant={boxMode ? "solid" : "soft"}
+          color={boxMode ? undefined : "gray"}
+          aria-pressed={boxMode}
+          title="Selection mode: drag to select points (or Shift+drag)"
+          onClick={() => setBoxMode(!boxMode)}
+        >
+          {/* A dashed selection box, sized like the icons. */}
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+            <rect x="2" y="2" width="11" height="11" rx="1" stroke="currentColor" strokeDasharray="2 2" />
+          </svg>
+          Select
+        </Button>
         <Button variant="soft" color="gray" disabled={!selected.size} title="Copy (Ctrl+C)" onClick={() => void copyButton(false)}>
           <CopyIcon /> Copy
         </Button>
