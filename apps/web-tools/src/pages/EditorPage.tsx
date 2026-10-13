@@ -235,6 +235,13 @@ export default function EditorPage() {
     setPlacing(null);
     setLifted(null);
   };
+  /** The points as last saved, opened or started anew; unknown after a reload with unsaved changes. */
+  const [unsaved, setUnsaved] = usePersistedState("ossm:editorUnsaved", false, localStorage);
+  const [saved, setSaved] = useState<Action[] | null>(() => (unsaved ? null : actions));
+  useEffect(() => setUnsaved(actions !== saved), [actions, saved, setUnsaved]);
+  useWindowEvent("beforeunload", (e) => {
+    if (actions !== saved) e.preventDefault();
+  });
   const canUndo = timeline.index > 0;
   const canRedo = timeline.index < timeline.states.length - 1;
   const undo = () => canUndo && jump(timeline.index - 1);
@@ -661,7 +668,9 @@ export default function EditorPage() {
       setLifted(null);
       setSelected(new Set());
       editLabel.current = `Open ${file.name}`;
-      setScript({ name: file.name.replace(/\.funscript$/, ""), actions: Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] })) });
+      const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
+      setSaved(opened);
+      setScript({ name: file.name.replace(/\.funscript$/, ""), actions: opened });
       setView((v) => ({ ...v, from: 0 }));
       setError(null);
     } catch (e) {
@@ -677,6 +686,7 @@ export default function EditorPage() {
     });
     a.click();
     URL.revokeObjectURL(a.href);
+    setSaved(actions);
   };
 
   /** The points being placed where they would go. */
@@ -722,6 +732,7 @@ export default function EditorPage() {
             setLifted(null);
             setSelected(new Set());
             editLabel.current = "New script";
+            setSaved(EMPTY.actions);
             setScript(EMPTY);
             setView((v) => ({ ...v, from: 0 }));
           }}
