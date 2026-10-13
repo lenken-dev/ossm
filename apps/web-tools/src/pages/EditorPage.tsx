@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
 import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
@@ -86,6 +86,7 @@ const DEFAULT_STEPS = ["1", "", ""];
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 const byTime = bisector((a: Action) => a.at).left;
+const afterTime = bisector((a: Action) => a.at).right;
 const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
 
 export default function EditorPage() {
@@ -238,13 +239,13 @@ export default function EditorPage() {
    * first to the last lifted point goes, with any other points in it, and the
    * later points move left by as much; inserting them back there undoes it.
    */
-  const kept = (() => {
+  const kept = useMemo(() => {
     if (!lifted) return actions;
     if (!closeGap) return actions.filter((_, i) => !lifted.has(i));
     const [lo, hi] = [Math.min(...lifted), Math.max(...lifted)];
     const span = actions[hi].at - actions[lo].at;
     return [...actions.slice(0, lo), ...actions.slice(hi + 1).map((a) => ({ at: a.at - span, pos: a.pos }))];
-  })();
+  }, [actions, lifted, closeGap]);
 
   /** Undo history: the points after each edit, the first as loaded; `index` is the current one. */
   const [timeline, setTimeline] = useState(() => ({ states: [{ actions, label: "Start" }], index: 0 }));
@@ -657,8 +658,8 @@ export default function EditorPage() {
    */
   const around = (pasted: Action[], insert: boolean) => {
     const [start, end] = [pasted[0].at, pasted[pasted.length - 1].at];
-    const before = kept.filter((a) => a.at < start);
-    if (!insert) return { before, after: kept.filter((a) => a.at > end) };
+    const before = kept.slice(0, byTime(kept, start));
+    if (!insert) return { before, after: kept.slice(afterTime(kept, end)) };
     const later = kept.slice(before.length);
     const shift = later.length ? Math.max(end - start, end + 1 - later[0].at) : 0;
     return { before, after: later.map((a) => ({ at: a.at + shift, pos: a.pos })) };
@@ -847,6 +848,25 @@ export default function EditorPage() {
     ctx.stroke(ringed);
     Object.assign(ctx, { lineWidth: 1.5, strokeStyle: css.getPropertyValue("--red-9") });
     ctx.stroke(crosses);
+    // The points being placed, faded, over the rest; only those in view, as a selection to move can be the whole script.
+    if (ghostLine) {
+      ctx.save();
+      Object.assign(ctx, { globalAlpha: 0.6, lineWidth: 2, strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      const [l0, l1] = [Math.max(byTime(ghostLine, view.from) - 1, 0), Math.min(byTime(ghostLine, view.from + view.span) + 1, ghostLine.length)];
+      for (let j = l0; j < l1; j++) ctx.lineTo(x(ghostLine[j].at), y(ghostLine[j].pos));
+      ctx.stroke();
+      const ghostDots = new Path2D();
+      const r = (5 / width) * view.span;
+      for (const a of ghost!.slice(byTime(ghost!, view.from - r), afterTime(ghost!, view.from + view.span + r))) {
+        const [cx, cy] = [x(a.at), y(a.pos)];
+        ghostDots.moveTo(cx + 5, cy);
+        ghostDots.arc(cx, cy, 5, 0, 2 * Math.PI);
+      }
+      ctx.fill(ghostDots);
+      ctx.restore();
+    }
   });
   /** The selection box's sides, in px. */
   const edges = box && { from: x(box.from), to: x(box.to), low: y(box.low), high: y(box.high) };
@@ -961,6 +981,14 @@ export default function EditorPage() {
     onDurationChange: () => setVideoDuration((videoRef.current?.duration || 0) * 1000),
     onSeeked: seeked,
   };
+
+  // Built only when they change, not on every pointer move while placing.
+  const minimapY = (pos: number) => 2 + (1 - pos / 100) * (MINIMAP_HEIGHT - 4);
+  const minimapLine = useMemo(() => actions.map((a) => `${minimapX(a.at)},${minimapY(a.pos)}`).join(" "), [actions, width, total]);
+  const minimapSelected = useMemo(
+    () => kept.map((a, i) => selected.has(i) ? `${selected.has(i - 1) ? "L" : "M"}${minimapX(a.at)},${minimapY(a.pos)}${selected.has(i - 1) ? "" : "l0,0"}` : "").join(""),
+    [kept, selected, width, total],
+  );
 
   /** The selected point when there is just one, labelled with its time and position. */
   const only = selected.size === 1 ? [...selected][0] : null;
@@ -1243,9 +1271,11 @@ export default function EditorPage() {
           height={height}
           onPointerDown={add}
           onPointerMove={(e) => {
-            // Points are drawn on the canvas, so the cursor shows when one can be grabbed.
-            e.currentTarget.style.cursor = pointUnder(e) === null ? "crosshair" : "grab";
-            if (!placing) return;
+            // Points are drawn on the canvas, so the cursor shows when one can be grabbed; placing, a click places instead.
+            if (!placing) {
+              e.currentTarget.style.cursor = pointUnder(e) === null ? "crosshair" : "grab";
+              return;
+            }
             setPlaceAt(pointerAt(e));
             setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
           }}
@@ -1289,18 +1319,6 @@ export default function EditorPage() {
           {ghost && placing && [Math.min(...placing.map((a) => a.pos)), Math.max(...placing.map((a) => a.pos))].map((pos, i) => (
             <line key={i} x1={0} x2={width} y1={y(pos)} y2={y(pos)} strokeDasharray="6 4" style={{ stroke: LINE_COLOR, opacity: 0.6, pointerEvents: "none" }} />
           ))}
-          {ghost && (
-            <g opacity={0.6} style={{ pointerEvents: "none" }}>
-              <polyline
-                points={ghostLine!.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")}
-                fill="none"
-                stroke={LINE_COLOR}
-                strokeWidth={2}
-                strokeDasharray="4 3"
-              />
-              {ghost.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={5} fill={LINE_COLOR} />)}
-            </g>
-          )}
           {/* While placing, a click anywhere places, over points and the playhead alike. */}
           {edges && (
             <g>
@@ -1364,14 +1382,14 @@ export default function EditorPage() {
         >
           {/* ponytail: the whole script as one polyline; fine for thousands of points, thin it out if a long script lags. */}
           <polyline
-            points={actions.map((a) => `${minimapX(a.at)},${2 + (1 - a.pos / 100) * (MINIMAP_HEIGHT - 4)}`).join(" ")}
+            points={minimapLine}
             fill="none"
             stroke={LINE_COLOR}
             strokeWidth={1}
           />
           {/* The selected runs over it, a lone selected point as a dot. */}
           <path
-            d={kept.map((a, i) => selected.has(i) ? `${selected.has(i - 1) ? "L" : "M"}${minimapX(a.at)},${2 + (1 - a.pos / 100) * (MINIMAP_HEIGHT - 4)}${selected.has(i - 1) ? "" : "l0,0"}` : "").join("")}
+            d={minimapSelected}
             fill="none"
             strokeWidth={2}
             strokeLinecap="round"
