@@ -56,9 +56,12 @@ const HISTORY_SIZE = 10;
 /** Edits kept for undo. */
 const UNDO_SIZE = 100;
 
-/** Visible time range, in ms. */
+/** Visible time range, in ms; at most the script or the video, whichever is longer, but at least the floor. */
 const MIN_SPAN = 500;
-const MAX_SPAN = 120_000;
+const MAX_SPAN_FLOOR = 10_000;
+/** Steps of the visible time slider, in s; the first that keeps it to about this many steps is used. */
+const SPAN_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60];
+const SPAN_STEP_COUNT = 240;
 
 /** Height of the time axis below the graph and space above and below the points, in px. */
 const AXIS = 20;
@@ -130,6 +133,11 @@ export default function EditorPage() {
   const shownSteps = steps.map(Number).map((v, i) => (v > 0 ? v : i === 0 ? Number(DEFAULT_STEPS[0]) : null)).filter((v) => v !== null);
   /** Video time, in ms. */
   const [time, setTime] = useState(0);
+  /** Video length, in ms; 0 without one. */
+  const [videoDuration, setVideoDuration] = useState(0);
+  const end = script.actions.length ? script.actions[script.actions.length - 1].at : 0;
+  const maxSpan = Math.max(end, videoDuration, MAX_SPAN_FLOOR);
+  const spanStep = SPAN_STEPS.find((s) => s * SPAN_STEP_COUNT >= maxSpan / 1000) ?? SPAN_STEPS[SPAN_STEPS.length - 1];
 
   useEffect(() => {
     setVideoUrl(null);
@@ -186,13 +194,13 @@ export default function EditorPage() {
       const fraction = (e.clientX - rect.left) / rect.width;
       setView((v) => {
         if (!(e.ctrlKey || e.metaKey)) return { ...v, from: Math.max(v.from + ((e.deltaX || e.deltaY) / rect.width) * v.span, 0) };
-        const span = clamp(v.span * Math.exp(e.deltaY * 0.002), MIN_SPAN, MAX_SPAN);
+        const span = clamp(v.span * Math.exp(e.deltaY * 0.002), MIN_SPAN, maxSpan);
         return { from: Math.max(v.from + fraction * (v.span - span), 0), span };
       });
     };
     el.addEventListener("wheel", wheel, { passive: false });
     return () => el.removeEventListener("wheel", wheel);
-  }, [setView]);
+  }, [setView, maxSpan]);
 
   const { actions } = script;
   useEffect(() => setBox(null), [actions]);
@@ -689,7 +697,6 @@ export default function EditorPage() {
   const visible = shown.slice(first, last);
   /** The line through the points, broken where the points being placed go so they can join it. */
   const segments = ghost ? [visible.filter((a) => a.at < ghost[0].at), visible.filter((a) => a.at > ghost[ghost.length - 1].at)] : [visible];
-  const end = actions.length ? actions[actions.length - 1].at : 0;
   /** The selection box's sides, in px. */
   const edges = box && { from: x(box.from), to: x(box.to), low: y(box.low), high: y(box.high) };
 
@@ -778,10 +785,10 @@ export default function EditorPage() {
       <LabeledSlider
         label="Visible time"
         value={view.span / 1000}
-        display={`${(view.span / 1000).toFixed(1)} s`}
-        min={MIN_SPAN / 1000}
-        max={MAX_SPAN / 1000}
-        step={0.5}
+        display={formatScriptTime(view.span / 1000)}
+        min={Math.max(spanStep, MIN_SPAN / 1000)}
+        max={Math.ceil(maxSpan / 1000 / spanStep) * spanStep}
+        step={spanStep}
         onChange={(s) => setView({ ...view, span: s * 1000 })}
       />
     </Flex>
@@ -793,7 +800,8 @@ export default function EditorPage() {
     controls: true,
     onPlay: () => setPaused(false),
     onPause: () => setPaused(true),
-    onEmptied: () => setPaused(true),
+    onEmptied: () => (setPaused(true), setVideoDuration(0)),
+    onDurationChange: () => setVideoDuration((videoRef.current?.duration || 0) * 1000),
     onSeeked: seeked,
   };
 
