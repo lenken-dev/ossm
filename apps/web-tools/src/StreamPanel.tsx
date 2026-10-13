@@ -331,9 +331,9 @@ export function useStreamCharts(
   }, [windowed, isAbsolute, units, rangeMm, minPosMm]);
 }
 
-/** Time axis ticks on d3's time steps, about eight of them. */
-export function timeTicks(min: number, max: number): number[] {
-  return utcTicks(new Date(min * 1000), new Date(max * 1000), 8).map((d) => d.getTime() / 1000);
+/** Time axis ticks on d3's time steps, about `count` of them. */
+export function timeTicks(min: number, max: number, count = 8): number[] {
+  return utcTicks(new Date(min * 1000), new Date(max * 1000), count).map((d) => d.getTime() / 1000);
 }
 
 /** Format script time as `12.5s` or `3:07.5`. */
