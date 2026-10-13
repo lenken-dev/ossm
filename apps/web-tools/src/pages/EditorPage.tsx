@@ -59,10 +59,12 @@ export default function EditorPage() {
   /** Dragging on empty space draws a box that selects points instead of adding one; Shift does the same once. */
   const [boxMode, setBoxMode] = useState(false);
   /** The selection box being drawn, in px. */
+  /** Pasted points, timed from the first, that follow the pointer until a click places them. */
+  const [placing, setPlacing] = useState<Action[] | null>(null);
+  /** Where the first point being placed is, under the pointer. */
+  const [placeAt, setPlaceAt] = useState<Action | null>(null);
   /** The latest copies, newest first; for this visit to the page. */
   const [history, setHistory] = useState<Action[][]>([]);
-  /** Script time under the pointer while it is over the graph, in ms; where paste goes without media. */
-  const pointerTime = useRef<number | null>(null);
   const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   /** The point last clicked without Shift, where a Shift+click range starts. */
   const anchor = useRef<number | null>(null);
@@ -367,7 +369,9 @@ export default function EditorPage() {
         e.preventDefault();
         setSelected(new Set(actions.keys()));
       } else if (e.key === "Escape") {
-        setSelected(new Set());
+        // Cancels placing pasted points first.
+        if (placing) setPlacing(null);
+        else setSelected(new Set());
       } else if ((e.key === "Delete" || e.key === "Backspace") && selected.size) {
         e.preventDefault();
         removeSelected();
@@ -400,8 +404,8 @@ export default function EditorPage() {
   };
 
   /**
-   * Paste funscript JSON at the playhead, or without media at the pointer,
-   * replacing the points in the time it covers. False when it holds no points.
+   * Start placing the points in funscript JSON: they follow the pointer until
+   * a click places them. False when it holds no points.
    */
   const pasteJson = (text: string) => {
     let parsed: unknown;
@@ -416,17 +420,34 @@ export default function EditorPage() {
       .filter((a): a is Action => Number.isFinite(a?.at) && Number.isFinite(a?.pos))
       .sort((a, b) => a.at - b.at);
     if (!valid.length) return false;
-    const start = Math.max(Math.round(videoUrl ? time : pointerTime.current ?? view.from + view.span / 2), 0);
-    const pasted = valid
-      .map((a) => ({ at: start + Math.round(a.at - valid[0].at), pos: clamp(a.pos, 0, 100) }))
-      .filter((a, i, all) => i === 0 || a.at !== all[i - 1].at);
-    const end = pasted[pasted.length - 1].at;
-    const before = actions.filter((a) => a.at < start);
-    const after = actions.filter((a) => a.at > end);
+    setPlacing(valid
+      .map((a) => ({ at: Math.round(a.at - valid[0].at), pos: clamp(a.pos, 0, 100) }))
+      .filter((a, i, all) => i === 0 || a.at !== all[i - 1].at));
+    return true;
+  };
+
+  /** The points being placed with the first at `at`, `pos`; they keep their shape and stay within 0–100. */
+  const positioned = (at: number, pos: number) => {
+    const shape = placing!;
+    const lowest = Math.min(...shape.map((a) => a.pos));
+    const highest = Math.max(...shape.map((a) => a.pos));
+    const dp = clamp(pos - shape[0].pos, -lowest, 100 - highest);
+    return shape.map((a) => ({ at: Math.max(at, 0) + a.at, pos: a.pos + dp }));
+  };
+
+  /** Place the points at the pointer, replacing the points in the time they cover, and select them. */
+  const place = (e: PointerEvent<SVGRectElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const point = pointerAt(e);
+    const pasted = positioned(point.at, point.pos);
+    const before = actions.filter((a) => a.at < pasted[0].at);
+    const after = actions.filter((a) => a.at > pasted[pasted.length - 1].at);
     editLabel.current = `Paste ${points(pasted.length)}`;
     setScript({ ...script, actions: [...before, ...pasted, ...after] });
     setSelected(new Set(pasted.map((_, i) => before.length + i)));
-    return true;
+    setPlacing(null);
   };
 
   /** The toolbox buttons go through the Clipboard API, which may ask for permission to paste. */
@@ -604,6 +625,10 @@ export default function EditorPage() {
 
   /** The selected point when there is just one, labelled with its time and position. */
   const only = selected.size === 1 ? [...selected][0] : null;
+
+  /** The points being placed where they would go, and whether a point at `at` would be replaced by them. */
+  const ghost = placing && placeAt ? positioned(placeAt.at, placeAt.pos) : null;
+  const replaced = (at: number) => !!ghost && at >= ghost[0].at && at <= ghost[ghost.length - 1].at;
 
   const content = (
     <Flex direction="column" gap="3" p="3" height="100%">
@@ -809,8 +834,8 @@ export default function EditorPage() {
           width={width}
           height={height}
           onPointerDown={add}
-          onPointerMove={(e) => void (pointerTime.current = pointerAt(e).at)}
-          onPointerLeave={() => void (pointerTime.current = null)}
+          onPointerMove={(e) => placing && setPlaceAt(pointerAt(e))}
+          onPointerLeave={() => setPlaceAt(null)}
           style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
         >
           {[0, 50, 100].map((pos) => (
@@ -832,6 +857,16 @@ export default function EditorPage() {
               <path d={`M${x(time) - 6},0 h12 l-6,8 z`} style={{ fill: "var(--gray-12)" }} />
             </g>
           )}
+          {/* The time the pasted points cover; the points in it are replaced, shown red. */}
+          {ghost && (
+            <rect
+              x={x(ghost[0].at)}
+              width={Math.max(x(ghost[ghost.length - 1].at) - x(ghost[0].at), 1)}
+              y={0}
+              height={plotHeight}
+              style={{ fill: "var(--red-a3)", pointerEvents: "none" }}
+            />
+          )}
           <polyline
             points={visible.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")}
             fill="none"
@@ -845,12 +880,30 @@ export default function EditorPage() {
               cx={x(a.at)}
               cy={y(a.pos)}
               r={selected.has(first + j) ? 7 : 5}
-              fill={LINE_COLOR}
               strokeWidth={2}
-              style={{ cursor: "grab", stroke: selected.has(first + j) ? "var(--gray-12)" : "none" }}
+              opacity={replaced(a.at) ? 0.5 : 1}
+              style={{
+                cursor: "grab",
+                fill: replaced(a.at) ? "var(--red-9)" : LINE_COLOR,
+                stroke: selected.has(first + j) ? "var(--gray-12)" : "none",
+              }}
               onPointerDown={(e) => pointDown(e, first + j)}
             />
           ))}
+          {ghost && (
+            <g opacity={0.6} style={{ pointerEvents: "none" }}>
+              <polyline
+                points={ghost.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")}
+                fill="none"
+                stroke={LINE_COLOR}
+                strokeWidth={2}
+                strokeDasharray="4 3"
+              />
+              {ghost.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={5} fill={LINE_COLOR} />)}
+            </g>
+          )}
+          {/* While placing, a click anywhere places, over points and the playhead alike. */}
+          {placing && <rect width={width} height={height} fill="transparent" style={{ cursor: "copy" }} onPointerDown={place} />}
           {box && <rect {...box} strokeDasharray="4 2" style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", pointerEvents: "none" }} />}
           {only !== null && actions[only] && (
             <text
@@ -864,6 +917,11 @@ export default function EditorPage() {
             </text>
           )}
         </svg>
+        {placing && (
+          <Text size="1" style={{ position: "absolute", top: 4, left: 8, padding: "2px 6px", borderRadius: 4, background: "var(--color-panel-solid)", pointerEvents: "none" }}>
+            Click to place {points(placing.length)} · Esc cancels
+          </Text>
+        )}
         {/* As in the player: 100 (top) is the shallow end, out towards home. */}
         <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
         <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
