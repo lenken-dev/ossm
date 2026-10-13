@@ -962,15 +962,16 @@ export default function EditorPage() {
                           style={{ justifyContent: "flex-start", opacity: k > timeline.index ? 0.5 : 1 }}
                           onClick={() => jump(k)}
                         >
-                          {state.label}
+                          <Text truncate>{state.label}</Text>
                         </Button>
                       </Popover.Close>
                     </HoverCard.Trigger>
-                    {k > 0 && (
-                      <HoverCard.Content side="right" size="1">
-                        <DiffPreview before={timeline.states[k - 1].actions} after={state.actions} />
-                      </HoverCard.Content>
-                    )}
+                    <HoverCard.Content side="right" size="1" maxWidth="232px">
+                      <Flex direction="column" gap="1">
+                        <Text size="1">{state.label}</Text>
+                        {k > 0 && <DiffPreview before={timeline.states[k - 1].actions} after={state.actions} />}
+                      </Flex>
+                    </HoverCard.Content>
                   </HoverCard.Root>
                 )).reverse()}
                 <Text size="1" color="gray" mt="1">Click an entry to go back or forward to it.</Text>
