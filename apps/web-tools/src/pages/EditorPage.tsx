@@ -1255,6 +1255,9 @@ function PreviewGraph({ lines, from, to }: {
   const y = (pos: number) => pad + (1 - pos / 100) * (height - 2 * pad);
   return (
     <svg width={width} height={height} style={{ display: "block" }}>
+      {[0, 50, 100].map((pos) => (
+        <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
+      ))}
       {lines.map(({ actions, color, dashed }, l) => (
         <g key={l} style={{ stroke: color, fill: color }}>
           <polyline points={actions.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")} fill="none" strokeWidth={1.5} strokeDasharray={dashed ? "3 2" : undefined} />
