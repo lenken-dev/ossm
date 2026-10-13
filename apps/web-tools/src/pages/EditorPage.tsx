@@ -124,8 +124,10 @@ export default function EditorPage() {
   const inserting = insertMode !== held.shift;
   /** The latest copies, newest first; for this visit to the page. */
   const [history, setHistory] = useState<Action[][]>([]);
-  /** The selection box; it goes when the points change. */
-  const [box, setBox] = useState<Area | null>(null);
+  /** The selection box, with the points it was drawn on; it goes when they change. */
+  const [boxOn, setBoxOn] = useState<{ area: Area; actions: Action[] } | null>(null);
+  const box = boxOn?.actions === script.actions ? boxOn.area : null;
+  const setBox = (area: Area | null, on = script.actions) => setBoxOn(area && { area, actions: on });
   /** The point last clicked without Shift, where a Shift+click range starts. */
   const anchor = useRef<number | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -235,7 +237,6 @@ export default function EditorPage() {
   }, [setView, maxSpan]);
 
   const { actions } = script;
-  useEffect(() => setBox(null), [actions]);
   /**
    * The points that stay while placing. Closing the gap, the time from the
    * first to the last lifted point goes, with any other points in it, and the
@@ -274,6 +275,7 @@ export default function EditorPage() {
     setTimeline((tl) => ({ ...tl, index }));
     setScript((s) => ({ ...s, actions: timeline.states[index].actions }));
     setSelected(new Set());
+    setBox(null);
     setPlacing(null);
     setLifted(null);
   };
@@ -550,6 +552,11 @@ export default function EditorPage() {
         setSelected(new Set());
         setBox(null);
       }
+    } else if (e.key === "Enter" && ghost) {
+      // Places the points being placed where they are shown.
+      e.preventDefault();
+      if (lifted) drop();
+      else put(ghost, inserting);
     } else if (e.key === "s" && !e.ctrlKey && !e.metaKey) {
       toggleBoxMode();
     } else if (e.key === "m" && !e.ctrlKey && !e.metaKey) {
@@ -590,11 +597,11 @@ export default function EditorPage() {
   };
 
   /**
-   * Move mode: place the selected points again, as if cut and pasted; they
-   * start where they are. Leaves selection mode; again, puts them back.
+   * Move mode: lift the selected points, as if cut, and drag them by the time
+   * they cover. Leaves selection mode; again, places them.
    */
   const toggleMove = () => {
-    if (lifted) return cancelPlacing();
+    if (lifted) return drop();
     if (!selected.size) return;
     const picked = [...selected].sort((a, b) => a - b).map((i) => actions[i]);
     setPlacing(picked.map((a) => ({ at: a.at - picked[0].at, pos: a.pos })));
@@ -606,17 +613,33 @@ export default function EditorPage() {
   };
 
   /**
-   * Switch selection mode; leaves move mode, putting the points back. Entered
-   * with points selected, the box fits around them, selecting the points in it.
+   * Switch selection mode. Entered with points selected, the box fits around
+   * them, selecting the points in it; entered while moving, it places them
+   * with the box around them.
    */
   const toggleBoxMode = () => {
-    const sel = lifted ?? selected;
-    if (lifted) cancelPlacing();
     setBoxMode(!boxMode);
-    if (!boxMode && sel.size) {
-      const picked = [...sel].map((i) => actions[i]);
+    if (lifted) return drop(true);
+    if (!boxMode && selected.size) {
+      const picked = [...selected].map((i) => actions[i]);
       selectIn(boxed(picked.reduce(extended, spanned(picked[0], picked[0]))));
     } else setBox(null);
+  };
+
+  /** Drag the points being moved, from where they are shown. */
+  const dragLifted = (e: PointerEvent<SVGRectElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const svg = e.currentTarget.ownerSVGElement!;
+    const [start, origin] = [ghost![0], pointerAt(e)];
+    const move = (m: globalThis.PointerEvent) => {
+      const p = pointerAt(m);
+      setPlaceAt({ at: start.at + p.at - origin.at, pos: start.pos + p.pos - origin.pos });
+    };
+    svg.setPointerCapture(e.pointerId);
+    svg.addEventListener("pointermove", move);
+    svg.addEventListener("lostpointercapture", () => svg.removeEventListener("pointermove", move), { once: true });
   };
 
   /**
@@ -683,20 +706,33 @@ export default function EditorPage() {
     };
   }, [placing]);
 
-  /** Place the points at the pointer, inserting or replacing, and select them. */
+  /** Put `pasted` into the script, inserting or replacing, and select them; returns the new points. */
+  const put = (pasted: Action[], insert: boolean) => {
+    const { before, after } = around(pasted, insert);
+    editLabel.current = `${lifted ? "Move" : insert ? "Insert" : "Paste"} ${points(pasted.length)}`;
+    const next = [...before, ...pasted, ...after];
+    setScript({ ...script, actions: next });
+    setSelected(new Set(pasted.map((_, i) => before.length + i)));
+    setPlacing(null);
+    setLifted(null);
+    return next;
+  };
+
+  /** Place the points being moved where they were dragged; `boxIn` for selection mode, with the box around them. */
+  const drop = (boxIn = false) => {
+    const moved = ghost!;
+    const next = put(moved, inserting);
+    if (boxIn) setBox(boxed(moved.reduce(extended, spanned(moved[0], moved[0]))), next);
+  };
+
+  /** A click places pasted points at the pointer; outside their box, it places the points being moved. */
   const place = (e: PointerEvent<SVGRectElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    if (lifted) return drop();
     const point = pointerAt(e);
-    const pasted = positioned(point.at, point.pos, e.ctrlKey || e.metaKey);
-    const insert = insertMode !== e.shiftKey;
-    const { before, after } = around(pasted, insert);
-    editLabel.current = `${lifted ? "Move" : insert ? "Insert" : "Paste"} ${points(pasted.length)}`;
-    setScript({ ...script, actions: [...before, ...pasted, ...after] });
-    setSelected(new Set(pasted.map((_, i) => before.length + i)));
-    setPlacing(null);
-    setLifted(null);
+    put(positioned(point.at, point.pos, e.ctrlKey || e.metaKey), insertMode !== e.shiftKey);
   };
 
   /** The toolbox buttons go through the Clipboard API, which may ask for permission to paste. */
@@ -878,7 +914,7 @@ export default function EditorPage() {
    * only while that edge is not there yet. None in a box too small for them.
    */
   const extenders = (() => {
-    if (!boxMode || !box || !edges) return [];
+    if (!boxMode || placing || !box || !edges) return [];
     const [left, right] = [Math.max(edges.from, 0), Math.min(edges.to, width)];
     const [midX, midY] = [(left + right) / 2 - EXTEND / 2, (edges.high + edges.low) / 2 - EXTEND / 2];
     if (right - left < 3 * EXTEND + 16 || edges.low - edges.high < 3 * EXTEND + 16) return [];
@@ -1270,7 +1306,7 @@ export default function EditorPage() {
           color={lifted ? undefined : "gray"}
           aria-pressed={!!lifted}
           disabled={!lifted && !selected.size}
-          title="Move the selected points (M)"
+          title="Move the selected points by dragging them; again places them (M)"
           onClick={toggleMove}
         >
           <MoveIcon /> Move
@@ -1309,10 +1345,11 @@ export default function EditorPage() {
               e.currentTarget.style.cursor = pointUnder(e) === null ? "crosshair" : "grab";
               return;
             }
-            setPlaceAt(pointerAt(e));
+            // Pasted points follow the pointer; moved ones stay where their box is dragged.
+            if (!lifted) setPlaceAt(pointerAt(e));
             setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
           }}
-          onPointerLeave={() => setPlaceAt(null)}
+          onPointerLeave={() => !lifted && setPlaceAt(null)}
           style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
         >
           {[0, 50, 100].map((pos) => (
@@ -1352,7 +1389,17 @@ export default function EditorPage() {
           {ghost && placing && [Math.min(...placing.map((a) => a.pos)), Math.max(...placing.map((a) => a.pos))].map((pos, i) => (
             <line key={i} x1={0} x2={width} y1={y(pos)} y2={y(pos)} strokeDasharray="6 4" style={{ stroke: LINE_COLOR, opacity: 0.6, pointerEvents: "none" }} />
           ))}
-          {/* While placing, a click anywhere places, over points and the playhead alike. */}
+          {/* While placing, a click anywhere places, over points and the playhead alike; moving, outside the time they cover. */}
+          {placing && (
+            // No menu for Ctrl+click, which is a right-click on a Mac.
+            <rect width={width} height={height} fill="transparent" style={{ cursor: lifted ? "default" : "copy" }} onPointerDown={place} onContextMenu={(e) => e.preventDefault()} />
+          )}
+          {/* Moving, the time the points cover is dragged; at least a grip wide, for a single point. */}
+          {lifted && ghost && (() => {
+            const [from, to] = [x(ghost[0].at), x(ghost[ghost.length - 1].at)];
+            const w = Math.max(to - from, 2 * GRIP);
+            return <rect x={(from + to - w) / 2} width={w} height={plotHeight} fill="transparent" style={{ cursor: "move" }} onPointerDown={dragLifted} />;
+          })()}
           {edges && (
             <g>
               <rect
@@ -1361,11 +1408,11 @@ export default function EditorPage() {
                 width={edges.to - edges.from}
                 height={edges.low - edges.high}
                 strokeDasharray="4 2"
-                style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", cursor: "move", pointerEvents: boxMode ? undefined : "none" }}
+                style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", cursor: "move", pointerEvents: boxMode && !placing ? undefined : "none" }}
                 onPointerDown={(e) => editBox(e, ["from", "to", "low", "high"])}
               />
               {/* Selecting by time, only the edges in time can be dragged. */}
-              {boxMode && GRIPS.filter(([, v]) => !selectByTime || !v).map(([h, v]) => (
+              {boxMode && !placing && GRIPS.filter(([, v]) => !selectByTime || !v).map(([h, v]) => (
                 <rect
                   key={`${h}-${v}`}
                   x={h ? edges[h] - GRIP / 2 : edges.from}
@@ -1379,10 +1426,6 @@ export default function EditorPage() {
                 />
               ))}
             </g>
-          )}
-          {placing && (
-            // No menu for Ctrl+click, which is a right-click on a Mac.
-            <rect width={width} height={height} fill="transparent" style={{ cursor: "copy" }} onPointerDown={place} onContextMenu={(e) => e.preventDefault()} />
           )}
           {only !== null && shown[only] && (
             <text
@@ -1409,11 +1452,6 @@ export default function EditorPage() {
             <Icon />
           </IconButton>
         ))}
-        {placing && (
-          <Text size="1" style={{ position: "absolute", top: 4, left: 8, padding: "2px 6px", borderRadius: 4, background: "var(--color-panel-solid)", pointerEvents: "none" }}>
-            Click to {inserting ? "insert" : "place"} {points(placing.length)} · Shift to {inserting ? "replace" : "insert"} · Ctrl keeps depths · Esc cancels
-          </Text>
-        )}
         {/* As in the player: 100 (top) is the shallow end, out towards home. */}
         <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
         <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
