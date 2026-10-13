@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Slider, Text, TextField } from "@radix-ui/themes";
-import { ClipboardIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -63,6 +63,11 @@ export default function EditorPage() {
   const [placing, setPlacing] = useState<Action[] | null>(null);
   /** Where the first point being placed is, under the pointer. */
   const [placeAt, setPlaceAt] = useState<Action | null>(null);
+  /** Placing inserts, moving later points right, instead of replacing the points the pasted ones cover. */
+  const [insertMode, setInsertMode] = usePersistedState("ossm:editorInsert", false, localStorage);
+  /** Holding Shift while placing switches to the other mode, until it is released. */
+  const [shiftHeld, setShiftHeld] = useState(false);
+  const inserting = insertMode !== shiftHeld;
   /** The latest copies, newest first; for this visit to the page. */
   const [history, setHistory] = useState<Action[][]>([]);
   const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -435,16 +440,47 @@ export default function EditorPage() {
     return shape.map((a) => ({ at: Math.max(at, 0) + a.at, pos: a.pos + dp }));
   };
 
-  /** Place the points at the pointer, replacing the points in the time they cover, and select them. */
+  /**
+   * The existing points before and after `pasted` once placed. Inserting moves
+   * the points from the first pasted one on right by the pasted length, so the
+   * gap that followed stays, and at least 1 ms past the last pasted point.
+   * Replacing drops the points in the time `pasted` covers.
+   */
+  const around = (pasted: Action[], insert: boolean) => {
+    const [start, end] = [pasted[0].at, pasted[pasted.length - 1].at];
+    const before = actions.filter((a) => a.at < start);
+    if (!insert) return { before, after: actions.filter((a) => a.at > end) };
+    const later = actions.slice(before.length);
+    const shift = later.length ? Math.max(end - start, end + 1 - later[0].at) : 0;
+    return { before, after: later.map((a) => ({ at: a.at + shift, pos: a.pos })) };
+  };
+
+  // Track Shift while placing; pointer events correct it if it was pressed before.
+  useEffect(() => {
+    setShiftHeld(false);
+    if (!placing) return;
+    const key = (e: KeyboardEvent) => e.key === "Shift" && setShiftHeld(e.type === "keydown");
+    const blur = () => setShiftHeld(false);
+    window.addEventListener("keydown", key);
+    window.addEventListener("keyup", key);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("keyup", key);
+      window.removeEventListener("blur", blur);
+    };
+  }, [placing]);
+
+  /** Place the points at the pointer, inserting or replacing, and select them. */
   const place = (e: PointerEvent<SVGRectElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     const point = pointerAt(e);
     const pasted = positioned(point.at, point.pos);
-    const before = actions.filter((a) => a.at < pasted[0].at);
-    const after = actions.filter((a) => a.at > pasted[pasted.length - 1].at);
-    editLabel.current = `Paste ${points(pasted.length)}`;
+    const insert = insertMode !== e.shiftKey;
+    const { before, after } = around(pasted, insert);
+    editLabel.current = `${insert ? "Insert" : "Paste"} ${points(pasted.length)}`;
     setScript({ ...script, actions: [...before, ...pasted, ...after] });
     setSelected(new Set(pasted.map((_, i) => before.length + i)));
     setPlacing(null);
@@ -513,11 +549,19 @@ export default function EditorPage() {
     URL.revokeObjectURL(a.href);
   };
 
+  /** The points being placed where they would go. */
+  const ghost = placing && placeAt ? positioned(placeAt.at, placeAt.pos) : null;
+  /** Whether a point at `at` would be replaced by them. */
+  const replaced = (at: number) => !!ghost && !inserting && at >= ghost[0].at && at <= ghost[ghost.length - 1].at;
+  /** The points as drawn: while inserting, the later ones where they would move. Same order and indices as `actions`. */
+  const moved = ghost && inserting ? around(ghost, true) : null;
+  const shown = moved ? [...moved.before, ...moved.after] : actions;
+
   // The points in view and one beyond each edge, so the line reaches the edges.
   // ponytail: all points in view are drawn as SVG; zoomed out on a dense script that is thousands of nodes, switch to canvas if it lags.
-  const first = Math.max(byTime(actions, view.from) - 1, 0);
-  const last = Math.min(byTime(actions, view.from + view.span) + 1, actions.length);
-  const visible = actions.slice(first, last);
+  const first = Math.max(byTime(shown, view.from) - 1, 0);
+  const last = Math.min(byTime(shown, view.from + view.span) + 1, shown.length);
+  const visible = shown.slice(first, last);
   const end = actions.length ? actions[actions.length - 1].at : 0;
 
   const sidebar = (
@@ -625,10 +669,6 @@ export default function EditorPage() {
 
   /** The selected point when there is just one, labelled with its time and position. */
   const only = selected.size === 1 ? [...selected][0] : null;
-
-  /** The points being placed where they would go, and whether a point at `at` would be replaced by them. */
-  const ghost = placing && placeAt ? positioned(placeAt.at, placeAt.pos) : null;
-  const replaced = (at: number) => !!ghost && at >= ghost[0].at && at <= ghost[ghost.length - 1].at;
 
   const content = (
     <Flex direction="column" gap="3" p="3" height="100%">
@@ -828,13 +868,28 @@ export default function EditorPage() {
             </Popover.Content>
           </Popover.Root>}
         </Flex>
+        {placing && (
+          <Button
+            variant={inserting ? "solid" : "soft"}
+            color={inserting ? undefined : "gray"}
+            aria-pressed={inserting}
+            title="Insert: move later points right instead of replacing them (hold Shift to switch)"
+            onClick={() => setInsertMode(!insertMode)}
+          >
+            <ColumnSpacingIcon /> Insert
+          </Button>
+        )}
       </Flex>
       <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
         <svg
           width={width}
           height={height}
           onPointerDown={add}
-          onPointerMove={(e) => placing && setPlaceAt(pointerAt(e))}
+          onPointerMove={(e) => {
+            if (!placing) return;
+            setPlaceAt(pointerAt(e));
+            setShiftHeld(e.shiftKey);
+          }}
           onPointerLeave={() => setPlaceAt(null)}
           style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
         >
@@ -857,14 +912,14 @@ export default function EditorPage() {
               <path d={`M${x(time) - 6},0 h12 l-6,8 z`} style={{ fill: "var(--gray-12)" }} />
             </g>
           )}
-          {/* The time the pasted points cover; the points in it are replaced, shown red. */}
+          {/* The time the pasted points cover: replacing, its points go and show red; inserting, the later points move past it. */}
           {ghost && (
             <rect
               x={x(ghost[0].at)}
               width={Math.max(x(ghost[ghost.length - 1].at) - x(ghost[0].at), 1)}
               y={0}
               height={plotHeight}
-              style={{ fill: "var(--red-a3)", pointerEvents: "none" }}
+              style={{ fill: inserting ? "var(--green-a3)" : "var(--red-a3)", pointerEvents: "none" }}
             />
           )}
           <polyline
@@ -905,21 +960,21 @@ export default function EditorPage() {
           {/* While placing, a click anywhere places, over points and the playhead alike. */}
           {placing && <rect width={width} height={height} fill="transparent" style={{ cursor: "copy" }} onPointerDown={place} />}
           {box && <rect {...box} strokeDasharray="4 2" style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", pointerEvents: "none" }} />}
-          {only !== null && actions[only] && (
+          {only !== null && shown[only] && (
             <text
-              x={x(actions[only].at)}
-              y={y(actions[only].pos) + (actions[only].pos > 80 ? 22 : -12)}
+              x={x(shown[only].at)}
+              y={y(shown[only].pos) + (shown[only].pos > 80 ? 22 : -12)}
               textAnchor="middle"
               fontSize={12}
               style={{ fill: "var(--gray-12)" }}
             >
-              {formatScriptTime(actions[only].at / 1000, 2)} · {Math.round(actions[only].pos)}
+              {formatScriptTime(shown[only].at / 1000, 2)} · {Math.round(shown[only].pos)}
             </text>
           )}
         </svg>
         {placing && (
           <Text size="1" style={{ position: "absolute", top: 4, left: 8, padding: "2px 6px", borderRadius: 4, background: "var(--color-panel-solid)", pointerEvents: "none" }}>
-            Click to place {points(placing.length)} · Esc cancels
+            Click to {inserting ? "insert" : "place"} {points(placing.length)} · Shift to {inserting ? "replace" : "insert"} · Esc cancels
           </Text>
         )}
         {/* As in the player: 100 (top) is the shallow end, out towards home. */}
