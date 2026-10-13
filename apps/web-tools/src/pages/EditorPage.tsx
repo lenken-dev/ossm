@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Text, TextField } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Switch, Text, TextField } from "@radix-ui/themes";
 import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -69,6 +69,9 @@ const PAD = 10;
 
 const LINE_COLOR = "#ec4899";
 
+/** Height of the minimap that shows the whole script below the graph, in px. */
+const MINIMAP_HEIGHT = 40;
+
 /** Default and smallest height of the reference video, in px. */
 const VIDEO_HEIGHT = 300;
 const VIDEO_MIN_HEIGHT = 80;
@@ -132,6 +135,8 @@ export default function EditorPage() {
   const [paused, setPaused] = useState(true);
   const [pip, setPip] = useState(false);
   const [videoHeight, setVideoHeight] = pip ? [pipHeight, setPipHeight] : [normalHeight, setNormalHeight];
+  /** A minimap of the whole script to scroll with, instead of the slider. */
+  const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
   const [steps, setSteps] = usePersistedState("ossm:editorSteps", DEFAULT_STEPS, localStorage);
   /** The steps in use; a first step that is not a positive number falls back to the default. */
   const shownSteps = steps.map(Number).map((v, i) => (v > 0 ? v : i === 0 ? Number(DEFAULT_STEPS[0]) : null)).filter((v) => v !== null);
@@ -469,6 +474,28 @@ export default function EditorPage() {
       target.removeEventListener("pointermove", move as EventListener);
       if (wasPlaying) void media.play();
     }, { once: true });
+  };
+
+  /** The time the minimap shows: the script, the video and the visible time, whichever is longest. */
+  const total = Math.max(end, videoDuration, view.span);
+  const minimapX = (at: number) => (at / total) * width;
+  /**
+   * Drag the visible time around in the minimap. Pressed outside it, it
+   * centres on the pointer first, as in a code editor's minimap.
+   */
+  const dragMinimap = (e: PointerEvent<SVGSVGElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const target = e.currentTarget;
+    const left = target.getBoundingClientRect().left;
+    const at = (m: { clientX: number }) => ((m.clientX - left) / width) * total;
+    const pressed = at(e);
+    const offset = pressed >= view.from && pressed <= view.from + view.span ? pressed - view.from : view.span / 2;
+    const move = (m: { clientX: number }) => setView((v) => ({ ...v, from: clamp(at(m) - offset, 0, total - v.span) }));
+    move(e);
+    target.setPointerCapture(e.pointerId);
+    target.addEventListener("pointermove", move);
+    target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
   };
 
   const removeSelected = (verb = "Delete") => {
@@ -817,6 +844,11 @@ export default function EditorPage() {
         step={spanStep}
         onChange={(s) => setView({ ...view, span: s * 1000 })}
       />
+      <Text as="label" size="2">
+        <Flex gap="2" align="center">
+          <Switch checked={minimap} onCheckedChange={setMinimap} /> Minimap
+        </Flex>
+      </Text>
     </Flex>
   );
 
@@ -1229,14 +1261,40 @@ export default function EditorPage() {
         <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
         <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
       </Box>
-      <Slider
-        aria-label="Scroll through time"
-        min={0}
-        max={Math.max(end, view.span)}
-        step={10}
-        value={[view.from]}
-        onValueChange={([from]) => setView({ ...view, from })}
-      />
+      {minimap ? (
+        <svg
+          width={width}
+          height={MINIMAP_HEIGHT}
+          aria-label="Minimap"
+          onPointerDown={dragMinimap}
+          style={{ display: "block", flexShrink: 0, borderRadius: 6, background: "var(--gray-a2)", touchAction: "none", userSelect: "none" }}
+        >
+          {/* ponytail: the whole script as one polyline; fine for thousands of points, thin it out if a long script lags. */}
+          <polyline
+            points={actions.map((a) => `${minimapX(a.at)},${2 + (1 - a.pos / 100) * (MINIMAP_HEIGHT - 4)}`).join(" ")}
+            fill="none"
+            stroke={LINE_COLOR}
+            strokeWidth={1}
+          />
+          {videoUrl && <line x1={minimapX(time)} x2={minimapX(time)} y1={0} y2={MINIMAP_HEIGHT} style={{ stroke: "var(--gray-12)" }} />}
+          <rect
+            x={minimapX(view.from)}
+            width={Math.max(minimapX(view.span), 4)}
+            height={MINIMAP_HEIGHT}
+            rx={4}
+            style={{ fill: "var(--gray-a5)", stroke: "var(--gray-a8)", cursor: "grab" }}
+          />
+        </svg>
+      ) : (
+        <Slider
+          aria-label="Scroll through time"
+          min={0}
+          max={Math.max(end, view.span)}
+          step={10}
+          value={[view.from]}
+          onValueChange={([from]) => setView({ ...view, from })}
+        />
+      )}
     </Flex>
   );
 
