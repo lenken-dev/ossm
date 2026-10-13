@@ -1243,23 +1243,49 @@ export default function EditorPage() {
   return <GraphLayout sidebar={sidebar} content={content} />;
 }
 
-/** Size and scales of a small graph over `from`–`to` ms. */
+/** Height of a small graph's time axis, in px. */
+const PREVIEW_AXIS = 12;
+
+/** Size and scales of a small graph over `from`–`to` ms, its time axis below. */
 function previewScale(from: number, to: number) {
-  const [width, height, pad] = [200, 60, 4];
+  const [width, plotHeight, pad] = [200, 60, 4];
   const span = to - from || 1;
   return {
+    from,
+    to,
     width,
-    height,
+    plotHeight,
+    height: plotHeight + PREVIEW_AXIS,
     x: (at: number) => pad + ((at - from) / span) * (width - 2 * pad),
-    y: (pos: number) => pad + (1 - pos / 100) * (height - 2 * pad),
+    y: (pos: number) => pad + (1 - pos / 100) * (plotHeight - 2 * pad),
   };
 }
 
-/** The 0, 50 and 100 lines of a small graph. */
-function PreviewReference({ width, y }: { width: number; y: (pos: number) => number }) {
-  return [0, 50, 100].map((pos) => (
-    <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
-  ));
+/** The 0, 50 and 100 lines of a small graph, and its time ticks with labels. */
+function PreviewAxes({ from, to, width, plotHeight, height, x, y }: ReturnType<typeof previewScale>) {
+  const ticks = timeTicks(from / 1000, to / 1000, 3);
+  // Enough decimals to tell the ticks apart: their steps are 1, 2 or 5 times a power of ten below a second.
+  const decimals = ticks.length > 1 ? Math.max(0, -Math.floor(Math.log10(ticks[1] - ticks[0]) + 1e-9)) : 1;
+  return (
+    <>
+      {[0, 50, 100].map((pos) => (
+        <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
+      ))}
+      {ticks.map((t) => {
+        const tx = x(t * 1000);
+        // Kept inside the graph at its edges.
+        const anchor = tx < 20 ? "start" : tx > width - 20 ? "end" : "middle";
+        return (
+          <g key={t}>
+            <line x1={tx} x2={tx} y1={0} y2={plotHeight} style={{ stroke: "var(--gray-a4)" }} />
+            <text x={tx} y={height - 2} textAnchor={anchor} fontSize={9} style={{ fill: "var(--gray-11)" }}>
+              {formatScriptTime(t, decimals)}
+            </text>
+          </g>
+        );
+      })}
+    </>
+  );
 }
 
 /** A small graph of point lines over `from`–`to` ms; dots only while there are few. */
@@ -1268,10 +1294,11 @@ function PreviewGraph({ lines, from, to }: {
   from: number;
   to: number;
 }) {
-  const { width, height, x, y } = previewScale(from, to);
+  const scale = previewScale(from, to);
+  const { width, height, x, y } = scale;
   return (
     <svg width={width} height={height} style={{ display: "block" }}>
-      <PreviewReference width={width} y={y} />
+      <PreviewAxes {...scale} />
       {lines.map(({ actions, color, dashed }, l) => (
         <g key={l} style={{ stroke: color, fill: color }}>
           <polyline points={actions.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")} fill="none" strokeWidth={1.5} strokeDasharray={dashed ? "3 2" : undefined} />
@@ -1298,17 +1325,18 @@ function DiffPreview({ before, after }: { before: Action[]; after: Action[] }) {
   const context = [before[start - 1], before[before.length - end]].filter((a) => a !== undefined);
   const all = [...context, ...removed, ...added];
   if (!all.length) return <Text size="1" color="gray">No points</Text>;
-  const { width, height, x, y } = previewScale(Math.min(...all.map((a) => a.at)), Math.max(...all.map((a) => a.at)));
+  const scale = previewScale(Math.min(...all.map((a) => a.at)), Math.max(...all.map((a) => a.at)));
+  const { width, plotHeight, height, x, y } = scale;
   const line = (changed: Action[]) => [before[start - 1], ...changed, before[before.length - end]].filter((a) => a !== undefined).map((a) => `${x(a.at)},${y(a.pos)}`).join(" ");
   const band = (changed: Action[], color: string) => changed.length > 0 && (
-    <rect x={x(changed[0].at)} width={Math.max(x(changed[changed.length - 1].at) - x(changed[0].at), 1)} y={0} height={height} style={{ fill: color }} />
+    <rect x={x(changed[0].at)} width={Math.max(x(changed[changed.length - 1].at) - x(changed[0].at), 1)} y={0} height={plotHeight} style={{ fill: color }} />
   );
   const dots = all.length <= 200;
   return (
     <svg width={width} height={height} style={{ display: "block" }}>
       {band(removed, "var(--red-a3)")}
       {band(added, "var(--green-a3)")}
-      <PreviewReference width={width} y={y} />
+      <PreviewAxes {...scale} />
       {/* As many points before as after: each moved, so join it to where it went. */}
       {/* ponytail: pairs by order, so an edit that both moves and adds points shows no moves; match by nearest time if that misleads. */}
       {dots && removed.length === added.length && removed.map((a, i) => (
