@@ -547,12 +547,17 @@ export default function EditorPage() {
   /** The points as drawn: while inserting, the later ones where they would move. Same order and indices as `actions`. */
   const moved = ghost && inserting ? around(ghost, true) : null;
   const shown = moved ? [...moved.before, ...moved.after] : actions;
+  /** The points being placed joined to the existing points they would sit between. */
+  const neighbours = ghost && (moved ?? around(ghost, false));
+  const ghostLine = ghost && [neighbours!.before[neighbours!.before.length - 1], ...ghost, neighbours!.after[0]].filter((a) => a !== undefined);
 
   // The points in view and one beyond each edge, so the line reaches the edges.
   // ponytail: all points in view are drawn as SVG; zoomed out on a dense script that is thousands of nodes, switch to canvas if it lags.
   const first = Math.max(byTime(shown, view.from) - 1, 0);
   const last = Math.min(byTime(shown, view.from + view.span) + 1, shown.length);
   const visible = shown.slice(first, last);
+  /** The line through the points, broken where the points being placed go so they can join it. */
+  const segments = ghost ? [visible.filter((a) => a.at < ghost[0].at), visible.filter((a) => a.at > ghost[ghost.length - 1].at)] : [visible];
   const end = actions.length ? actions[actions.length - 1].at : 0;
 
   const sidebar = (
@@ -913,24 +918,34 @@ export default function EditorPage() {
               style={{ fill: inserting ? "var(--green-a3)" : "var(--red-a3)", pointerEvents: "none" }}
             />
           )}
-          <polyline
-            points={visible.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")}
-            fill="none"
-            stroke={LINE_COLOR}
-            strokeWidth={2}
-            strokeLinejoin="round"
-          />
-          {visible.map((a, j) => (
+          {segments.map((segment, i) => (
+            <polyline
+              key={i}
+              points={segment.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")}
+              fill="none"
+              stroke={LINE_COLOR}
+              strokeWidth={2}
+              strokeLinejoin="round"
+            />
+          ))}
+          {visible.map((a, j) => replaced(a.at) ? (
+            // The points being replaced show as small crosses.
+            <path
+              key={first + j}
+              d={`M${x(a.at) - 3},${y(a.pos) - 3} l6,6 m0,-6 l-6,6`}
+              strokeWidth={1.5}
+              style={{ stroke: "var(--red-9)", pointerEvents: "none" }}
+            />
+          ) : (
             <circle
               key={first + j}
               cx={x(a.at)}
               cy={y(a.pos)}
               r={selected.has(first + j) ? 7 : 5}
               strokeWidth={2}
-              opacity={replaced(a.at) ? 0.5 : 1}
               style={{
                 cursor: "grab",
-                fill: replaced(a.at) ? "var(--red-9)" : LINE_COLOR,
+                fill: LINE_COLOR,
                 stroke: selected.has(first + j) ? "var(--gray-12)" : "none",
               }}
               onPointerDown={(e) => pointDown(e, first + j)}
@@ -943,7 +958,7 @@ export default function EditorPage() {
           {ghost && (
             <g opacity={0.6} style={{ pointerEvents: "none" }}>
               <polyline
-                points={ghost.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")}
+                points={ghostLine!.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")}
                 fill="none"
                 stroke={LINE_COLOR}
                 strokeWidth={2}
