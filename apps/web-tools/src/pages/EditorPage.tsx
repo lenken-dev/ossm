@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Text, TextField } from "@radix-ui/themes";
-import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -126,8 +126,12 @@ export default function EditorPage() {
   /** An audio file plays in a bar instead of the video area. */
   const isAudio = !!videoFile?.type.startsWith("audio/");
   /** Separate from the player's sizes. */
-  const [videoHeight, setVideoHeight] = usePersistedState("ossm:editorVideoHeight", VIDEO_HEIGHT, localStorage);
+  const [normalHeight, setNormalHeight] = usePersistedState("ossm:editorVideoHeight", VIDEO_HEIGHT, localStorage);
+  /** The video left in the page while it plays picture-in-picture has a height of its own. */
+  const [pipHeight, setPipHeight] = usePersistedState("ossm:editorVideoPipHeight", VIDEO_MIN_HEIGHT, localStorage);
   const [paused, setPaused] = useState(true);
+  const [pip, setPip] = useState(false);
+  const [videoHeight, setVideoHeight] = pip ? [pipHeight, setPipHeight] : [normalHeight, setNormalHeight];
   const [steps, setSteps] = usePersistedState("ossm:editorSteps", DEFAULT_STEPS, localStorage);
   /** The steps in use; a first step that is not a positive number falls back to the default. */
   const shownSteps = steps.map(Number).map((v, i) => (v > 0 ? v : i === 0 ? Number(DEFAULT_STEPS[0]) : null)).filter((v) => v !== null);
@@ -146,6 +150,17 @@ export default function EditorPage() {
     setVideoUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [videoFile]);
+
+  // Picture-in-picture events bubble, so the document sees them for whichever video is shown.
+  useEffect(() => {
+    const update = () => setPip(!!document.pictureInPictureElement);
+    document.addEventListener("enterpictureinpicture", update);
+    document.addEventListener("leavepictureinpicture", update);
+    return () => {
+      document.removeEventListener("enterpictureinpicture", update);
+      document.removeEventListener("leavepictureinpicture", update);
+    };
+  }, []);
 
   // While the video plays, the playhead moves every frame and the graph follows it.
   useEffect(() => {
@@ -866,6 +881,18 @@ export default function EditorPage() {
               +{step}s
             </Button>
           ))}
+          {!isAudio && document.pictureInPictureEnabled && (
+            <IconButton
+              variant={pip ? "solid" : "soft"}
+              color="gray"
+              aria-label="Picture in picture"
+              aria-pressed={pip}
+              title="Picture in picture"
+              onClick={() => void (pip ? document.exitPictureInPicture() : (videoRef.current as HTMLVideoElement).requestPictureInPicture())}
+            >
+              <OpenInNewWindowIcon />
+            </IconButton>
+          )}
           <Popover.Root>
             <Popover.Trigger>
               <IconButton variant="soft" color="gray" aria-label="Step settings">
