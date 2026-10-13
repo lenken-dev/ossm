@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Slider, Text, TextField } from "@radix-ui/themes";
-import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -61,6 +61,8 @@ export default function EditorPage() {
   /** The selection box being drawn, in px. */
   /** Pasted points, timed from the first, that follow the pointer until a click places them. */
   const [placing, setPlacing] = useState<Action[] | null>(null);
+  /** The selected points being placed again, left out of the script until placed; Escape puts them back. */
+  const [lifted, setLifted] = useState<Set<number> | null>(null);
   /** Where the first point being placed is, under the pointer. */
   const [placeAt, setPlaceAt] = useState<Action | null>(null);
   /** Placing inserts, moving later points right, instead of replacing the points the pasted ones cover. */
@@ -158,6 +160,8 @@ export default function EditorPage() {
   }, [setView]);
 
   const { actions } = script;
+  /** The points that stay while placing. */
+  const kept = lifted ? actions.filter((_, i) => !lifted.has(i)) : actions;
 
   /** Undo history: the points after each edit, the first as loaded; `index` is the current one. */
   const [timeline, setTimeline] = useState(() => ({ states: [{ actions, label: "Start" }], index: 0 }));
@@ -184,6 +188,8 @@ export default function EditorPage() {
     setTimeline((tl) => ({ ...tl, index }));
     setScript((s) => ({ ...s, actions: timeline.states[index].actions }));
     setSelected(new Set());
+    setPlacing(null);
+    setLifted(null);
   };
   const canUndo = timeline.index > 0;
   const canRedo = timeline.index < timeline.states.length - 1;
@@ -376,9 +382,11 @@ export default function EditorPage() {
       e.preventDefault();
       setSelected(new Set(actions.keys()));
     } else if (e.key === "Escape") {
-      // Cancels placing pasted points first.
-      if (placing) setPlacing(null);
+      // Cancels placing points first.
+      if (placing) cancelPlacing();
       else setSelected(new Set());
+    } else if (e.key === "m" && !e.ctrlKey && !e.metaKey && selected.size) {
+      move();
     } else if ((e.key === "Delete" || e.key === "Backspace") && selected.size) {
       e.preventDefault();
       removeSelected();
@@ -407,6 +415,22 @@ export default function EditorPage() {
     navigator.clipboard.writeText(json).catch((e: Error) => setError(`Copying failed: ${e.message}`));
   };
 
+  /** Stop placing points; moved ones go back where they were, still selected. */
+  const cancelPlacing = () => {
+    if (lifted) setSelected(lifted);
+    setPlacing(null);
+    setLifted(null);
+  };
+
+  /** Place the selected points again, as if cut and pasted; they start where they are. */
+  const move = () => {
+    const picked = [...selected].sort((a, b) => a - b).map((i) => actions[i]);
+    setPlacing(picked.map((a) => ({ at: a.at - picked[0].at, pos: a.pos })));
+    setPlaceAt(picked[0]);
+    setLifted(selected);
+    setSelected(new Set());
+  };
+
   /**
    * Start placing the points in funscript JSON: they follow the pointer until
    * a click places them. False when it holds no points.
@@ -424,6 +448,7 @@ export default function EditorPage() {
       .filter((a): a is Action => Number.isFinite(a?.at) && Number.isFinite(a?.pos))
       .sort((a, b) => a.at - b.at);
     if (!valid.length) return false;
+    cancelPlacing();
     setPlacing(valid
       .map((a) => ({ at: Math.round(a.at - valid[0].at), pos: clamp(a.pos, 0, 100) }))
       .filter((a, i, all) => i === 0 || a.at !== all[i - 1].at));
@@ -447,9 +472,9 @@ export default function EditorPage() {
    */
   const around = (pasted: Action[], insert: boolean) => {
     const [start, end] = [pasted[0].at, pasted[pasted.length - 1].at];
-    const before = actions.filter((a) => a.at < start);
-    if (!insert) return { before, after: actions.filter((a) => a.at > end) };
-    const later = actions.slice(before.length);
+    const before = kept.filter((a) => a.at < start);
+    if (!insert) return { before, after: kept.filter((a) => a.at > end) };
+    const later = kept.slice(before.length);
     const shift = later.length ? Math.max(end - start, end + 1 - later[0].at) : 0;
     return { before, after: later.map((a) => ({ at: a.at + shift, pos: a.pos })) };
   };
@@ -479,10 +504,11 @@ export default function EditorPage() {
     const pasted = positioned(point.at, point.pos, e.ctrlKey || e.metaKey);
     const insert = insertMode !== e.shiftKey;
     const { before, after } = around(pasted, insert);
-    editLabel.current = `${insert ? "Insert" : "Paste"} ${points(pasted.length)}`;
+    editLabel.current = `${lifted ? "Move" : insert ? "Insert" : "Paste"} ${points(pasted.length)}`;
     setScript({ ...script, actions: [...before, ...pasted, ...after] });
     setSelected(new Set(pasted.map((_, i) => before.length + i)));
     setPlacing(null);
+    setLifted(null);
   };
 
   /** The toolbox buttons go through the Clipboard API, which may ask for permission to paste. */
@@ -520,6 +546,7 @@ export default function EditorPage() {
   const open = async (file: File) => {
     try {
       const parsed = await readFunscript(file);
+      setLifted(null);
       setSelected(new Set());
       editLabel.current = `Open ${file.name}`;
       setScript({ name: file.name.replace(/\.funscript$/, ""), actions: Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] })) });
@@ -544,9 +571,9 @@ export default function EditorPage() {
   const ghost = placing && placeAt ? positioned(placeAt.at, placeAt.pos, held.ctrl) : null;
   /** Whether a point at `at` would be replaced by them. */
   const replaced = (at: number) => !!ghost && !inserting && at >= ghost[0].at && at <= ghost[ghost.length - 1].at;
-  /** The points as drawn: while inserting, the later ones where they would move. Same order and indices as `actions`. */
+  /** The points as drawn: while inserting, the later ones where they would move. Same order and indices as `kept`. */
   const moved = ghost && inserting ? around(ghost, true) : null;
-  const shown = moved ? [...moved.before, ...moved.after] : actions;
+  const shown = moved ? [...moved.before, ...moved.after] : kept;
   /** The points being placed joined to the existing points they would sit between. */
   const neighbours = ghost && (moved ?? around(ghost, false));
   const ghostLine = ghost && [neighbours!.before[neighbours!.before.length - 1], ...ghost, neighbours!.after[0]].filter((a) => a !== undefined);
@@ -579,6 +606,7 @@ export default function EditorPage() {
           style={{ flex: 1 }}
           onClick={() => {
             if (actions.length && !confirm("Discard the current script?")) return;
+            setLifted(null);
             setSelected(new Set());
             editLabel.current = "New script";
             setScript(EMPTY);
@@ -814,6 +842,11 @@ export default function EditorPage() {
           </svg>
           Select
         </Button>
+        {selected.size > 0 && (
+          <Button variant="soft" color="gray" title="Move: place the selected points again (M)" onClick={move}>
+            <MoveIcon /> Move
+          </Button>
+        )}
         <Button variant="soft" color="gray" disabled={!selected.size} title="Copy (Ctrl+C)" onClick={() => void copyButton(false)}>
           <CopyIcon /> Copy
         </Button>
