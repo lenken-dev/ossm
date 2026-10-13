@@ -20,6 +20,19 @@ interface Script {
   actions: Action[];
 }
 
+/**
+ * A move that closed its gap: the points from `from` to `to` in the points
+ * before went, `count` points from `at` in the points after came, replacing
+ * the `replaced` points, timed as once the gap closed.
+ */
+interface Move {
+  from: number;
+  to: number;
+  at: number;
+  count: number;
+  replaced: Action[];
+}
+
 /** A time range, in ms, and depth range. */
 interface Area {
   from: number;
@@ -247,21 +260,25 @@ export default function EditorPage() {
   })();
 
   /** Undo history: the points after each edit, the first as loaded; `index` is the current one. */
-  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, label: "Start" }], index: 0 }));
+  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, label: "Start" } as { actions: Action[]; label: string; move?: Move }], index: 0 }));
   /** Set while a drag runs, so the whole drag becomes one edit when it ends. */
   const dragging = useRef(false);
   const [dragEnds, setDragEnds] = useState(0);
   /** What the next edit is called in the undo history. */
   const editLabel = useRef<string | null>(null);
+  /** The next edit's move, for its diff; the points around it shift, so it shows as one otherwise. */
+  const editMove = useRef<Move | undefined>(undefined);
 
   // Every change of the points, except by undo and redo, is an edit.
   useEffect(() => {
     if (dragging.current) return;
     const label = editLabel.current ?? "Edit";
+    const move = editMove.current;
     editLabel.current = null;
+    editMove.current = undefined;
     setTimeline((tl) => {
       if (tl.states[tl.index].actions === actions) return tl;
-      const states = [...tl.states.slice(0, tl.index + 1), { actions, label }].slice(-UNDO_SIZE - 1);
+      const states = [...tl.states.slice(0, tl.index + 1), { actions, label, move }].slice(-UNDO_SIZE - 1);
       return { states, index: states.length - 1 };
     });
   }, [actions, dragEnds]);
@@ -690,6 +707,10 @@ export default function EditorPage() {
     const insert = insertMode !== e.shiftKey;
     const { before, after } = around(pasted, insert);
     editLabel.current = `${lifted ? "Move" : insert ? "Insert" : "Paste"} ${points(pasted.length)}`;
+    if (lifted && closeGap) {
+      const replaced = insert ? [] : kept.filter((a) => a.at >= pasted[0].at && a.at <= pasted[pasted.length - 1].at);
+      editMove.current = { from: Math.min(...lifted), to: Math.max(...lifted), at: before.length, count: pasted.length, replaced };
+    }
     setScript({ ...script, actions: [...before, ...pasted, ...after] });
     setSelected(new Set(pasted.map((_, i) => before.length + i)));
     setPlacing(null);
@@ -1110,7 +1131,7 @@ export default function EditorPage() {
                     <HoverCard.Content side="right" size="1" maxWidth="232px">
                       <Flex direction="column" gap="1">
                         <Text size="1">{state.label}</Text>
-                        {k > 0 && <DiffPreview before={timeline.states[k - 1].actions} after={state.actions} />}
+                        {k > 0 && <DiffPreview before={timeline.states[k - 1].actions} after={state.actions} move={state.move} />}
                       </Flex>
                     </HoverCard.Content>
                   </HoverCard.Root>
@@ -1474,20 +1495,36 @@ function PreviewGraph({ lines, from, to }: {
  * covered in red, their old line dashed and the points crossed out; the time added
  * points cover in green, with their line. One unchanged point on each side joins
  * both. Unchanged points are the same objects in both.
+ *
+ * A `move` instead shows the moved points: where they went in red, where they
+ * came in green, over the points after it in gray. The time they replaced shows
+ * in red, with them and all later points right after it, like a diff's added
+ * lines after the removed ones.
  */
-function DiffPreview({ before, after }: { before: Action[]; after: Action[] }) {
+function DiffPreview({ before, after, move }: { before: Action[]; after: Action[]; move?: Move }) {
   let start = 0;
   while (start < before.length && start < after.length && before[start] === after[start]) start++;
   let end = 0;
   while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++;
-  const removed = before.slice(start, before.length - end);
-  const added = after.slice(start, after.length - end);
-  const context = [before[start - 1], before[before.length - end]].filter((a) => a !== undefined);
-  const all = [...context, ...removed, ...added];
+  const placed = move ? after.slice(move.at, move.at + move.count) : after.slice(start, after.length - end);
+  const replaced = move?.replaced ?? [];
+  /** Replacing, the time the points placed cover shows twice: first replaced, then placed. */
+  const shift = replaced.length ? placed[placed.length - 1].at - placed[0].at : 0;
+  /** `points` where they show: from where the placed ones start on, past the replaced time. */
+  const later = (points: Action[]) => (shift && points.length && points[0].at >= placed[0].at ? points.map((a) => ({ at: a.at + shift, pos: a.pos })) : points);
+  const lifted = move ? before.slice(move.from, move.to + 1) : before.slice(start, before.length - end);
+  const changed = [...lifted, ...placed, ...replaced];
+  const [from, to] = [Math.min(...changed.map((a) => a.at)), Math.max(...changed.map((a) => a.at))];
+  /** Moved, the points after it in the time shown and one beyond each edge; broken around the replaced time. */
+  const unmoved = move ? after.slice(Math.max(byTime(after, from) - 1, 0), byTime(after, to + 1) + 1) : [];
+  const segments = shift ? [unmoved.filter((a) => a.at < placed[0].at), later(unmoved.filter((a) => a.at >= placed[0].at))] : [unmoved];
+  const [removed, added] = [later(lifted), later(placed)];
+  const context = move ? [segments[0][0], segments[segments.length - 1].slice(-1)[0]].filter((a) => a !== undefined) : [before[start - 1], before[before.length - end]].filter((a) => a !== undefined);
+  const all = [...context, ...removed, ...added, ...replaced];
   if (!all.length) return <Text size="1" color="gray">No points</Text>;
   const scale = previewScale(Math.min(...all.map((a) => a.at)), Math.max(...all.map((a) => a.at)));
   const { width, plotHeight, height, x, y } = scale;
-  const line = (changed: Action[]) => [before[start - 1], ...changed, before[before.length - end]].filter((a) => a !== undefined).map((a) => `${x(a.at)},${y(a.pos)}`).join(" ");
+  const line = (changed: Action[]) => (move ? changed : [before[start - 1], ...changed, before[before.length - end]]).filter((a) => a !== undefined).map((a) => `${x(a.at)},${y(a.pos)}`).join(" ");
   const band = (changed: Action[], color: string) => changed.length > 0 && (
     <rect x={x(changed[0].at)} width={Math.max(x(changed[changed.length - 1].at) - x(changed[0].at), 1)} y={0} height={plotHeight} style={{ fill: color }} />
   );
@@ -1495,16 +1532,19 @@ function DiffPreview({ before, after }: { before: Action[]; after: Action[] }) {
   return (
     <svg width={width} height={height} style={{ display: "block" }}>
       {band(removed, "var(--red-a3)")}
+      {shift > 0 && band(placed, "var(--red-a3)")}
       {band(added, "var(--green-a3)")}
       <PreviewAxes {...scale} />
+      {move && segments.map((s, i) => <polyline key={i} points={line(s)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--gray-8)" }} />)}
       {/* As many points before as after: each moved, so join it to where it went. */}
       {/* ponytail: pairs by order, so an edit that both moves and adds points shows no moves; match by nearest time if that misleads. */}
       {dots && removed.length === added.length && removed.map((a, i) => (
         <line key={i} x1={x(a.at)} y1={y(a.pos)} x2={x(added[i].at)} y2={y(added[i].pos)} strokeWidth={1} style={{ stroke: "var(--gray-8)" }} />
       ))}
       <polyline points={line(removed)} fill="none" strokeWidth={1.5} strokeDasharray="3 2" style={{ stroke: "var(--red-9)" }} />
+      {replaced.length > 0 && <polyline points={line(replaced)} fill="none" strokeWidth={1.5} strokeDasharray="3 2" style={{ stroke: "var(--red-9)" }} />}
       <polyline points={line(added)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--green-9)" }} />
-      {dots && removed.map((a, i) => (
+      {dots && [...removed, ...replaced].map((a, i) => (
         <path key={i} d={`M${x(a.at) - 2.5},${y(a.pos) - 2.5} l5,5 m0,-5 l-5,5`} strokeWidth={1.5} style={{ stroke: "var(--red-9)" }} />
       ))}
       {dots && added.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={2.5} style={{ fill: "var(--green-9)" }} />)}
