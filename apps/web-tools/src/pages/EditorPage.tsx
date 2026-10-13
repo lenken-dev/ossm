@@ -1243,21 +1243,35 @@ export default function EditorPage() {
   return <GraphLayout sidebar={sidebar} content={content} />;
 }
 
+/** Size and scales of a small graph over `from`–`to` ms. */
+function previewScale(from: number, to: number) {
+  const [width, height, pad] = [200, 60, 4];
+  const span = to - from || 1;
+  return {
+    width,
+    height,
+    x: (at: number) => pad + ((at - from) / span) * (width - 2 * pad),
+    y: (pos: number) => pad + (1 - pos / 100) * (height - 2 * pad),
+  };
+}
+
+/** The 0, 50 and 100 lines of a small graph. */
+function PreviewReference({ width, y }: { width: number; y: (pos: number) => number }) {
+  return [0, 50, 100].map((pos) => (
+    <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
+  ));
+}
+
 /** A small graph of point lines over `from`–`to` ms; dots only while there are few. */
 function PreviewGraph({ lines, from, to }: {
   lines: { actions: Action[]; color: string; dashed?: boolean }[];
   from: number;
   to: number;
 }) {
-  const [width, height, pad] = [200, 60, 4];
-  const span = to - from || 1;
-  const x = (at: number) => pad + ((at - from) / span) * (width - 2 * pad);
-  const y = (pos: number) => pad + (1 - pos / 100) * (height - 2 * pad);
+  const { width, height, x, y } = previewScale(from, to);
   return (
     <svg width={width} height={height} style={{ display: "block" }}>
-      {[0, 50, 100].map((pos) => (
-        <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
-      ))}
+      <PreviewReference width={width} y={y} />
       {lines.map(({ actions, color, dashed }, l) => (
         <g key={l} style={{ stroke: color, fill: color }}>
           <polyline points={actions.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")} fill="none" strokeWidth={1.5} strokeDasharray={dashed ? "3 2" : undefined} />
@@ -1269,24 +1283,45 @@ function PreviewGraph({ lines, from, to }: {
 }
 
 /**
- * What an edit changed: the points before (grey, dashed) and after, with one
- * unchanged point on each side. Unchanged points are the same objects in both.
+ * What an edit changed, as a diff like placing shows it: the time removed points
+ * covered in red, their old line dashed and the points crossed out; the time added
+ * points cover in green, with their line. One unchanged point on each side joins
+ * both. Unchanged points are the same objects in both.
  */
 function DiffPreview({ before, after }: { before: Action[]; after: Action[] }) {
   let start = 0;
   while (start < before.length && start < after.length && before[start] === after[start]) start++;
   let end = 0;
   while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++;
-  const old = before.slice(Math.max(start - 1, 0), before.length - end + 1);
-  const now = after.slice(Math.max(start - 1, 0), after.length - end + 1);
-  const ats = [old[0], now[0], old[old.length - 1], now[now.length - 1]].filter(Boolean).map((a) => a.at);
-  if (!ats.length) return <Text size="1" color="gray">No points</Text>;
+  const removed = before.slice(start, before.length - end);
+  const added = after.slice(start, after.length - end);
+  const context = [before[start - 1], before[before.length - end]].filter((a) => a !== undefined);
+  const all = [...context, ...removed, ...added];
+  if (!all.length) return <Text size="1" color="gray">No points</Text>;
+  const { width, height, x, y } = previewScale(Math.min(...all.map((a) => a.at)), Math.max(...all.map((a) => a.at)));
+  const line = (changed: Action[]) => [before[start - 1], ...changed, before[before.length - end]].filter((a) => a !== undefined).map((a) => `${x(a.at)},${y(a.pos)}`).join(" ");
+  const band = (changed: Action[], color: string) => changed.length > 0 && (
+    <rect x={x(changed[0].at)} width={Math.max(x(changed[changed.length - 1].at) - x(changed[0].at), 1)} y={0} height={height} style={{ fill: color }} />
+  );
+  const dots = all.length <= 200;
   return (
-    <PreviewGraph
-      lines={[{ actions: old, color: "var(--gray-9)", dashed: true }, { actions: now, color: LINE_COLOR }]}
-      from={Math.min(...ats)}
-      to={Math.max(...ats)}
-    />
+    <svg width={width} height={height} style={{ display: "block" }}>
+      {band(removed, "var(--red-a3)")}
+      {band(added, "var(--green-a3)")}
+      <PreviewReference width={width} y={y} />
+      {/* As many points before as after: each moved, so join it to where it went. */}
+      {/* ponytail: pairs by order, so an edit that both moves and adds points shows no moves; match by nearest time if that misleads. */}
+      {dots && removed.length === added.length && removed.map((a, i) => (
+        <line key={i} x1={x(a.at)} y1={y(a.pos)} x2={x(added[i].at)} y2={y(added[i].pos)} strokeWidth={1} style={{ stroke: "var(--gray-8)" }} />
+      ))}
+      <polyline points={line(removed)} fill="none" strokeWidth={1.5} strokeDasharray="3 2" style={{ stroke: "var(--red-9)" }} />
+      <polyline points={line(added)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--green-9)" }} />
+      {dots && removed.map((a, i) => (
+        <path key={i} d={`M${x(a.at) - 2.5},${y(a.pos) - 2.5} l5,5 m0,-5 l-5,5`} strokeWidth={1.5} style={{ stroke: "var(--red-9)" }} />
+      ))}
+      {dots && added.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={2.5} style={{ fill: "var(--green-9)" }} />)}
+      {context.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={2} style={{ fill: "var(--gray-9)" }} />)}
+    </svg>
   );
 }
 
