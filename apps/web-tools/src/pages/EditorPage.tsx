@@ -69,6 +69,10 @@ const AXIS = 20;
 const PAD = 10;
 
 const LINE_COLOR = "#ec4899";
+/** Below this average spacing between the points in view, in px, the points are not drawn, only the line. */
+const DOT_SPACING = 6;
+/** A run of up to this many neighbouring selected points in view shows as rings; a longer one as the line through it drawn over. */
+const RING_LIMIT = 50;
 
 /** Height of the minimap that shows the whole script below the graph, in px. */
 const MINIMAP_HEIGHT = 40;
@@ -789,6 +793,25 @@ export default function EditorPage() {
       for (const a of segment) ctx.lineTo(x(a.at), y(a.pos));
       ctx.stroke();
     }
+    // Each run of neighbouring selected points in view shows as rings, or as the line over it if it is long; zoomed in, a long run's part in view can show as rings.
+    const long = new Array<boolean>(visible.length).fill(false);
+    for (let j = 0; j < visible.length; ) {
+      let end = j;
+      while (end < visible.length && selected.has(first + end)) end++;
+      if (end - j > RING_LIMIT) long.fill(true, j, end);
+      j = Math.max(end, j + 1);
+    }
+    const line = new Path2D();
+    for (let j = 1; j < visible.length; j++) {
+      const [a, b] = [visible[j - 1], visible[j]];
+      if (!long[j - 1] || !long[j] || replaced(a.at) || replaced(b.at)) continue;
+      line.moveTo(x(a.at), y(a.pos));
+      line.lineTo(x(b.at), y(b.pos));
+    }
+    ctx.strokeStyle = css.getPropertyValue("--gray-12");
+    ctx.stroke(line);
+    // Packed this close, the points would only blur the line.
+    const showDots = visible.length * DOT_SPACING < width;
     // One path per look, so drawing stays fast however many points there are. The points being replaced show as small crosses.
     const [dots, ringed, crosses] = [new Path2D(), new Path2D(), new Path2D()];
     visible.forEach((a, j) => {
@@ -800,8 +823,10 @@ export default function EditorPage() {
         crosses.lineTo(cx - 3, cy + 3);
         return;
       }
-      const path = selected.has(first + j) ? ringed : dots;
-      const r = selected.has(first + j) ? 7 : 5;
+      const ring = selected.has(first + j) && !long[j];
+      if (!ring && !showDots) return;
+      const path = ring ? ringed : dots;
+      const r = ring ? 7 : 5;
       path.moveTo(cx + r, cy);
       path.arc(cx, cy, r, 0, 2 * Math.PI);
     });
