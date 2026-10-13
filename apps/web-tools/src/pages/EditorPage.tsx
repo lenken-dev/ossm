@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Slider, Text, TextField } from "@radix-ui/themes";
-import { ClipboardIcon, CopyIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ClipboardIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -24,6 +24,8 @@ const EMPTY: Script = { name: "untitled", actions: [] };
 
 /** Copies kept in the clipboard history. */
 const HISTORY_SIZE = 10;
+/** Edits kept for undo. */
+const UNDO_SIZE = 100;
 
 /** Visible time range, in ms. */
 const MIN_SPAN = 500;
@@ -45,6 +47,7 @@ const DEFAULT_STEPS = ["1", "", ""];
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 const byTime = bisector((a: Action) => a.at).left;
+const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
 
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
@@ -145,6 +148,37 @@ export default function EditorPage() {
   }, [setView]);
 
   const { actions } = script;
+
+  /** Undo history: the points after each edit, the first as loaded; `index` is the current one. */
+  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, label: "Start" }], index: 0 }));
+  /** Set while a drag runs, so the whole drag becomes one edit when it ends. */
+  const dragging = useRef(false);
+  const [dragEnds, setDragEnds] = useState(0);
+  /** What the next edit is called in the undo history. */
+  const editLabel = useRef<string | null>(null);
+
+  // Every change of the points, except by undo and redo, is an edit.
+  useEffect(() => {
+    if (dragging.current) return;
+    const label = editLabel.current ?? "Edit";
+    editLabel.current = null;
+    setTimeline((tl) => {
+      if (tl.states[tl.index].actions === actions) return tl;
+      const states = [...tl.states.slice(0, tl.index + 1), { actions, label }].slice(-UNDO_SIZE - 1);
+      return { states, index: states.length - 1 };
+    });
+  }, [actions, dragEnds]);
+
+  /** Go to the points after edit `index` of the undo history. */
+  const jump = (index: number) => {
+    setTimeline((tl) => ({ ...tl, index }));
+    setScript((s) => ({ ...s, actions: timeline.states[index].actions }));
+    setSelected(new Set());
+  };
+  const canUndo = timeline.index > 0;
+  const canRedo = timeline.index < timeline.states.length - 1;
+  const undo = () => canUndo && jump(timeline.index - 1);
+  const redo = () => canRedo && jump(timeline.index + 1);
   const plotHeight = height - AXIS;
   const x = (at: number) => ((at - view.from) / view.span) * width;
   const y = (pos: number) => PAD + (1 - pos / 100) * (plotHeight - 2 * PAD);
@@ -165,6 +199,8 @@ export default function EditorPage() {
     e.preventDefault();
     e.stopPropagation();
     const svg = e.currentTarget.closest("svg")!;
+    dragging.current = true;
+    editLabel.current ??= `Move ${points(indices.length)}`;
     const origin = pointerAt(e);
     const moving = new Set(indices);
     // Taken on the first move, so it includes a point added just before the drag.
@@ -191,6 +227,8 @@ export default function EditorPage() {
     svg.addEventListener("pointermove", move as EventListener);
     svg.addEventListener("lostpointercapture", () => {
       svg.removeEventListener("pointermove", move as EventListener);
+      dragging.current = false;
+      setDragEnds((n) => n + 1);
     }, { once: true });
   };
 
@@ -243,6 +281,7 @@ export default function EditorPage() {
     if (point.at < 0) return;
     const i = byTime(actions, point.at);
     if (actions[i]?.at === point.at) return;
+    editLabel.current = "Add point";
     setScript((s) => ({ ...s, actions: [...s.actions.slice(0, i), point, ...s.actions.slice(i)] }));
     setSelected(new Set([i]));
     anchor.current = i;
@@ -308,17 +347,23 @@ export default function EditorPage() {
     }, { once: true });
   };
 
-  const removeSelected = () => {
+  const removeSelected = (verb = "Delete") => {
+    editLabel.current = `${verb} ${points(selected.size)}`;
     setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => !selected.has(j)) }));
     setSelected(new Set());
   };
 
-  // Ctrl/Cmd+A selects all points, Escape none, Delete (or Backspace, the Mac's
+  // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points, Escape none, Delete (or Backspace, the Mac's
   // delete key) removes the selected ones; not while typing in a field.
   useEffect(() => {
     const keydown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
-      if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && (key === "z" || key === "y")) {
+        e.preventDefault();
+        if (key === "y" || e.shiftKey) redo();
+        else undo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "a") {
         e.preventDefault();
         setSelected(new Set(actions.keys()));
       } else if (e.key === "Escape") {
@@ -378,6 +423,7 @@ export default function EditorPage() {
     const end = pasted[pasted.length - 1].at;
     const before = actions.filter((a) => a.at < start);
     const after = actions.filter((a) => a.at > end);
+    editLabel.current = `Paste ${points(pasted.length)}`;
     setScript({ ...script, actions: [...before, ...pasted, ...after] });
     setSelected(new Set(pasted.map((_, i) => before.length + i)));
     return true;
@@ -387,7 +433,7 @@ export default function EditorPage() {
   const copyButton = async (cut: boolean) => {
     try {
       await navigator.clipboard.writeText(selectionJson());
-      if (cut) removeSelected();
+      if (cut) removeSelected("Cut");
       setError(null);
     } catch (e) {
       setError(`Copying failed: ${(e as Error).message}`);
@@ -407,7 +453,7 @@ export default function EditorPage() {
       if (e.target instanceof HTMLInputElement || !selected.size) return;
       e.preventDefault();
       e.clipboardData!.setData("text/plain", selectionJson());
-      if (e.type === "cut") removeSelected();
+      if (e.type === "cut") removeSelected("Cut");
     };
     const paste = (e: ClipboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -427,6 +473,7 @@ export default function EditorPage() {
     try {
       const parsed = await readFunscript(file);
       setSelected(new Set());
+      editLabel.current = `Open ${file.name}`;
       setScript({ name: file.name.replace(/\.funscript$/, ""), actions: Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] })) });
       setView((v) => ({ ...v, from: 0 }));
       setError(null);
@@ -472,6 +519,7 @@ export default function EditorPage() {
           onClick={() => {
             if (actions.length && !confirm("Discard the current script?")) return;
             setSelected(new Set());
+            editLabel.current = "New script";
             setScript(EMPTY);
             setView((v) => ({ ...v, from: 0 }));
           }}
@@ -635,6 +683,63 @@ export default function EditorPage() {
       )}
       {/* Toolbox: convenience buttons for what the keyboard also does. */}
       <Flex gap="2" flexShrink="0">
+        {/* Undo with its history docked, as paste with the clipboard history. */}
+        <Flex>
+          <Button
+            variant="soft"
+            color="gray"
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+            onClick={undo}
+            style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+          >
+            <ResetIcon /> Undo
+          </Button>
+          <Popover.Root>
+            <Popover.Trigger>
+              <IconButton
+                variant="soft"
+                color="gray"
+                disabled={timeline.states.length < 2}
+                aria-label="Undo history"
+                title="Undo history"
+                style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeft: "1px solid var(--gray-a5)" }}
+              >
+                <CounterClockwiseClockIcon />
+              </IconButton>
+            </Popover.Trigger>
+            <Popover.Content width="240px" style={{ maxHeight: 400, overflowY: "auto" }}>
+              <Flex direction="column" gap="1">
+                {/* Newest first; undone edits are dimmed until redone or replaced. */}
+                {timeline.states.map((state, k) => (
+                  <HoverCard.Root key={k} openDelay={100} closeDelay={0}>
+                    <HoverCard.Trigger>
+                      <Popover.Close>
+                        <Button
+                          variant={k === timeline.index ? "soft" : "ghost"}
+                          color="gray"
+                          style={{ justifyContent: "flex-start", opacity: k > timeline.index ? 0.5 : 1 }}
+                          onClick={() => jump(k)}
+                        >
+                          {state.label}
+                        </Button>
+                      </Popover.Close>
+                    </HoverCard.Trigger>
+                    {k > 0 && (
+                      <HoverCard.Content side="right" size="1">
+                        <DiffPreview before={timeline.states[k - 1].actions} after={state.actions} />
+                      </HoverCard.Content>
+                    )}
+                  </HoverCard.Root>
+                )).reverse()}
+                <Text size="1" color="gray" mt="1">Click an entry to go back or forward to it.</Text>
+              </Flex>
+            </Popover.Content>
+          </Popover.Root>
+        </Flex>
+        <Button variant="soft" color="gray" disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" onClick={redo}>
+          <ResetIcon style={{ transform: "scaleX(-1)" }} /> Redo
+        </Button>
         <Button
           variant={boxMode ? "solid" : "soft"}
           color={boxMode ? undefined : "gray"}
@@ -684,12 +789,12 @@ export default function EditorPage() {
                     <HoverCard.Trigger>
                       <Popover.Close>
                         <Button variant="ghost" color="gray" style={{ justifyContent: "flex-start" }} onClick={() => pasteFromHistory(copied)}>
-                          {copied.length} {copied.length === 1 ? "point" : "points"} · {formatScriptTime(copied[copied.length - 1].at / 1000)}
+                          {points(copied.length)} · {formatScriptTime(copied[copied.length - 1].at / 1000)}
                         </Button>
                       </Popover.Close>
                     </HoverCard.Trigger>
                     <HoverCard.Content side="right" size="1">
-                      <PointsPreview actions={copied} />
+                      <PreviewGraph lines={[{ actions: copied, color: LINE_COLOR }]} from={0} to={copied[copied.length - 1].at} />
                     </HoverCard.Content>
                   </HoverCard.Root>
                 ))}
@@ -777,16 +882,46 @@ export default function EditorPage() {
   return <GraphLayout sidebar={sidebar} content={content} />;
 }
 
-/** A small graph of copied points, scaled to fit. */
-function PointsPreview({ actions }: { actions: Action[] }) {
+/** A small graph of point lines over `from`–`to` ms; dots only while there are few. */
+function PreviewGraph({ lines, from, to }: {
+  lines: { actions: Action[]; color: string; dashed?: boolean }[];
+  from: number;
+  to: number;
+}) {
   const [width, height, pad] = [200, 60, 4];
-  const duration = actions[actions.length - 1].at || 1;
-  const x = (at: number) => pad + (at / duration) * (width - 2 * pad);
+  const span = to - from || 1;
+  const x = (at: number) => pad + ((at - from) / span) * (width - 2 * pad);
   const y = (pos: number) => pad + (1 - pos / 100) * (height - 2 * pad);
   return (
     <svg width={width} height={height} style={{ display: "block" }}>
-      <polyline points={actions.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")} fill="none" stroke={LINE_COLOR} strokeWidth={1.5} />
-      {actions.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={2} fill={LINE_COLOR} />)}
+      {lines.map(({ actions, color, dashed }, l) => (
+        <g key={l} style={{ stroke: color, fill: color }}>
+          <polyline points={actions.map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")} fill="none" strokeWidth={1.5} strokeDasharray={dashed ? "3 2" : undefined} />
+          {actions.length <= 200 && actions.map((a, i) => <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={2} stroke="none" />)}
+        </g>
+      ))}
     </svg>
+  );
+}
+
+/**
+ * What an edit changed: the points before (grey, dashed) and after, with one
+ * unchanged point on each side. Unchanged points are the same objects in both.
+ */
+function DiffPreview({ before, after }: { before: Action[]; after: Action[] }) {
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start++;
+  let end = 0;
+  while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++;
+  const old = before.slice(Math.max(start - 1, 0), before.length - end + 1);
+  const now = after.slice(Math.max(start - 1, 0), after.length - end + 1);
+  const ats = [old[0], now[0], old[old.length - 1], now[now.length - 1]].filter(Boolean).map((a) => a.at);
+  if (!ats.length) return <Text size="1" color="gray">No points</Text>;
+  return (
+    <PreviewGraph
+      lines={[{ actions: old, color: "var(--gray-9)", dashed: true }, { actions: now, color: LINE_COLOR }]}
+      from={Math.min(...ats)}
+      to={Math.max(...ats)}
+    />
   );
 }
