@@ -365,28 +365,24 @@ export default function EditorPage() {
 
   // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points, Escape none, Delete (or Backspace, the Mac's
   // delete key) removes the selected ones; not while typing in a field.
-  useEffect(() => {
-    const keydown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
-      const key = e.key.toLowerCase();
-      if ((e.ctrlKey || e.metaKey) && (key === "z" || key === "y")) {
-        e.preventDefault();
-        if (key === "y" || e.shiftKey) redo();
-        else undo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === "a") {
-        e.preventDefault();
-        setSelected(new Set(actions.keys()));
-      } else if (e.key === "Escape") {
-        // Cancels placing pasted points first.
-        if (placing) setPlacing(null);
-        else setSelected(new Set());
-      } else if ((e.key === "Delete" || e.key === "Backspace") && selected.size) {
-        e.preventDefault();
-        removeSelected();
-      }
-    };
-    window.addEventListener("keydown", keydown);
-    return () => window.removeEventListener("keydown", keydown);
+  useWindowEvent("keydown", (e) => {
+    if (e.target instanceof HTMLInputElement) return;
+    const key = e.key.toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && (key === "z" || key === "y")) {
+      e.preventDefault();
+      if (key === "y" || e.shiftKey) redo();
+      else undo();
+    } else if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+      e.preventDefault();
+      setSelected(new Set(actions.keys()));
+    } else if (e.key === "Escape") {
+      // Cancels placing pasted points first.
+      if (placing) setPlacing(null);
+      else setSelected(new Set());
+    } else if ((e.key === "Delete" || e.key === "Backspace") && selected.size) {
+      e.preventDefault();
+      removeSelected();
+    }
   });
 
   /** The selected points as funscript JSON, timed from the first. */
@@ -508,25 +504,17 @@ export default function EditorPage() {
   };
 
   // Ctrl+C, Ctrl+X and Ctrl+V on the system clipboard; not while typing in a field.
-  useEffect(() => {
-    const copy = (e: ClipboardEvent) => {
-      if (e.target instanceof HTMLInputElement || !selected.size) return;
-      e.preventDefault();
-      e.clipboardData!.setData("text/plain", selectionJson());
-      if (e.type === "cut") removeSelected("Cut");
-    };
-    const paste = (e: ClipboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
-      if (pasteJson(e.clipboardData!.getData("text/plain"))) e.preventDefault();
-    };
-    window.addEventListener("copy", copy);
-    window.addEventListener("cut", copy);
-    window.addEventListener("paste", paste);
-    return () => {
-      window.removeEventListener("copy", copy);
-      window.removeEventListener("cut", copy);
-      window.removeEventListener("paste", paste);
-    };
+  const copy = (e: ClipboardEvent) => {
+    if (e.target instanceof HTMLInputElement || !selected.size) return;
+    e.preventDefault();
+    e.clipboardData!.setData("text/plain", selectionJson());
+    if (e.type === "cut") removeSelected("Cut");
+  };
+  useWindowEvent("copy", copy);
+  useWindowEvent("cut", copy);
+  useWindowEvent("paste", (e) => {
+    if (e.target instanceof HTMLInputElement) return;
+    if (pasteJson(e.clipboardData!.getData("text/plain"))) e.preventDefault();
   });
 
   const open = async (file: File) => {
@@ -1047,4 +1035,19 @@ function DiffPreview({ before, after }: { before: Action[]; after: Action[] }) {
       to={Math.max(...ats)}
     />
   );
+}
+
+/**
+ * Listen to `type` on the window with the latest `handler`. The listener is
+ * added once: one re-added on every render can miss an event, when another
+ * listener's state update re-renders while the event is being dispatched.
+ */
+function useWindowEvent<K extends keyof WindowEventMap>(type: K, handler: (e: WindowEventMap[K]) => void) {
+  const latest = useRef(handler);
+  latest.current = handler;
+  useEffect(() => {
+    const listener = (e: WindowEventMap[K]) => latest.current(e);
+    window.addEventListener(type, listener);
+    return () => window.removeEventListener(type, listener);
+  }, [type]);
 }
