@@ -317,18 +317,30 @@ function funcAt(func: Func, t: number, span: number) {
 
 /**
  * Generate's points in `range`: reversals alternating between High and Low,
- * from its start, each the Interval after the one before, at least 1 ms, the
- * last at or before its end; null while a field is refused.
+ * from its start, the last at or before its end; null while a field is
+ * refused. Each next point goes the Interval after the one before, or with
+ * Speed timing at the first ms where the segment to it is no faster than the
+ * Speed; at least 1 ms after either way.
  */
 function generated(setup: GenerateSetup, range: Area): Action[] | null {
+  const span = range.to - range.from;
+  /** The depth a point on `func` gets at `at`, rounded; NaN while a field is refused. */
+  const depthAt = (func: Func, at: number) => Math.round(range.low + (clamp(funcAt(func, at - range.from, span), 0, 100) * (range.high - range.low)) / 100);
   const out: Action[] = [];
   for (let at = range.from, high = setup.first === "out"; at <= range.to; high = !high) {
-    const t = at - range.from;
-    const depth = funcAt(high ? setup.high : setup.low, t, range.to - range.from);
-    const interval = funcAt(setup.interval, t, range.to - range.from);
-    if (Number.isNaN(depth) || Number.isNaN(interval)) return null;
-    out.push({ at, pos: Math.round(range.low + (clamp(depth, 0, 100) * (range.high - range.low)) / 100) });
-    at += Math.max(Math.round(interval), 1);
+    const pos = depthAt(high ? setup.high : setup.low, at);
+    const step = Math.max(funcAt(setup.timing === "speed" ? setup.speed : setup.interval, at - range.from, span), 1);
+    if (Number.isNaN(pos) || Number.isNaN(step)) return null;
+    out.push({ at, pos });
+    if (setup.timing === "interval") {
+      at += Math.round(step);
+      continue;
+    }
+    // A ms at a time, so no crossing is missed: as many steps in all as the range has ms. Between the rounded depths, as the points get them.
+    const next = high ? setup.low : setup.high;
+    let dt = 1;
+    while (at + dt <= range.to && Math.abs(depthAt(next, at + dt) - pos) * 1000 > step * dt) dt++;
+    at += dt;
   }
   return out;
 }
@@ -1960,8 +1972,15 @@ export default function EditorPage() {
                 <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
               </SegmentedControl.Root>
             </Flex>
-            {/* Each function: its shape, then its fields, two to a row; values in the function's unit. */}
-            {([["interval", "Interval", "ms"], ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([key, label, unit]) => {
+            <Flex gap="2" align="center" justify="between">
+              <Text size="2">Timing</Text>
+              <SegmentedControl.Root size="1" value={genSetup.timing} onValueChange={(v) => setGenSetup({ ...genSetup, timing: v as "interval" | "speed" })} title="Space the points by a time, or by a speed">
+                <SegmentedControl.Item value="interval">Interval</SegmentedControl.Item>
+                <SegmentedControl.Item value="speed">Speed</SegmentedControl.Item>
+              </SegmentedControl.Root>
+            </Flex>
+            {/* Each function: its shape, then its fields, two to a row; values in the function's unit, Speed's none, as Max speed's. */}
+            {([genSetup.timing === "speed" ? (["speed", "Speed", ""] as const) : (["interval", "Interval", "ms"] as const), ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([key, label, unit]) => {
               const func = genSetup[key];
               const set = (next: Func) => setGenSetup({ ...genSetup, [key]: next });
               return (
