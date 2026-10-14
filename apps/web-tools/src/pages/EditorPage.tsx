@@ -43,6 +43,11 @@ interface Bookmark {
   [other: string]: unknown;
 }
 
+type Marker = Chapter | Bookmark;
+
+/** `list` with the markers in `to` swapped for what they map to. */
+const swapped = <T extends Marker>(list: T[], to: Map<Marker, Marker>) => list.map((m) => (to.get(m) as T | undefined) ?? m);
+
 /** A time range, in ms, and depth range. */
 interface Area {
   from: number;
@@ -107,7 +112,7 @@ const MINIMAP_HEIGHT = 40;
 
 /** Height of the marker lane below the graph, in px. */
 const LANE_HEIGHT = 24;
-/** How the selected marker shows in the lane. */
+/** How the selected markers show in the lane. */
 const SELECTED_MARKER = { outline: "2px solid var(--accent-9)", outlineOffset: -2 };
 /** Width of the grips on a chapter's edges in the lane, in px. */
 const MARKER_GRIP = 6;
@@ -176,11 +181,15 @@ export default function EditorPage() {
   const [error, setError] = useState<string | null>(null);
   /** Indices of the selected points, moved together and deleted with the Delete key. */
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
-  /** The selected marker, deleted with the Delete key; one or the other, selecting points clears it. */
-  const [marker, setMarker] = useState<Chapter | Bookmark | null>(null);
+  /** The selected markers, moved, renamed and deleted together: a chapter, or bookmarks; one or the other, selecting points clears them. */
+  const [marked, setMarked] = useState<Set<Marker>>(() => new Set());
   useEffect(() => {
-    if (selected.size) setMarker(null);
+    if (selected.size) setMarked(new Set());
   }, [selected]);
+  /** The marker last clicked without Shift, where a Shift+click range of bookmarks starts. */
+  const markerAnchor = useRef<Marker | null>(null);
+  /** Whether the pointer is over the marker lane, where Ctrl/Cmd+A selects all bookmarks. */
+  const overLane = useRef(false);
   /** What a new bookmark is called: the name last given to one, for this visit to the page. */
   const [lastName, setLastName] = useState("Marker");
   /**
@@ -192,7 +201,7 @@ export default function EditorPage() {
   /** The time under the pointer over the graph or the marker lane, where B adds a bookmark without media. */
   const hoverAt = useRef<number | null>(null);
   /** The marker last pressed and when, to tell a double-click: the drag's pointer capture keeps the browser's own from reaching the marker. */
-  const lastPress = useRef<{ m: Chapter | Bookmark; at: number } | null>(null);
+  const lastPress = useRef<{ m: Marker; at: number } | null>(null);
   /**
    * Selection mode: dragging on empty space draws a box that selects points
    * instead of adding one, and the box stays to be resized or moved; only the
@@ -373,7 +382,7 @@ export default function EditorPage() {
     setTimeline((tl) => ({ ...tl, index }));
     setScript((s) => ({ ...s, actions, chapters, bookmarks }));
     setSelected(new Set());
-    setMarker(null);
+    setMarked(new Set());
     setBox(null);
     setPlacing(null);
     setLifted(null);
@@ -672,63 +681,78 @@ export default function EditorPage() {
     target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
   };
 
-  /** Select marker `m`, clearing the point selection. */
-  const selectMarker = (m: Chapter | Bookmark) => {
-    setMarker(m);
+  /** Select the markers `ms`, clearing the point selection. */
+  const selectMarkers = (ms: Iterable<Marker>) => {
+    setMarked(new Set(ms));
     setSelected(new Set());
     setBox(null);
   };
+  const isChapter = (m: Marker): m is Chapter => chapters.includes(m as Chapter);
+  const timeOf = (m: Marker) => (isChapter(m) ? m.start : m.time);
 
   /** Add a bookmark at `time` ms, with the last used name, and select it. */
   const addBookmark = (time: number) => {
     const added = { name: lastName, time };
     editLabel.current = "Add marker";
     setScript((s) => ({ ...s, bookmarks: [...s.bookmarks, added].sort((a, b) => a.time - b.time) }));
-    selectMarker(added);
+    selectMarkers([added]);
+    markerAnchor.current = added;
   };
 
   /**
-   * A press on a marker selects it, and dragging it moves its `sides`: a
-   * chapter's edge resizes it, both move it, between its neighbours and 0 and
-   * at least 1 ms long; a bookmark goes anywhere from 0, past other bookmarks.
-   * It never draws a chapter. Pressed twice in a row, it opens its name field.
+   * A press on a marker selects it, and dragging it moves it: a chapter's
+   * `sides`, both to move it, between its neighbours and 0 and at least 1 ms
+   * long; a bookmark, with the other selected ones, anywhere from 0, past other
+   * bookmarks. It never draws a chapter. Only bookmarks are selected together:
+   * Ctrl/Cmd+click toggles one in the selection, Shift+click selects the ones
+   * from the last clicked. Pressed twice in a row, it opens the selection's
+   * name field.
    */
-  const markerDown = (e: PointerEvent<HTMLElement>, m: Chapter | Bookmark, sides: ("start" | "end")[] = []) => {
+  const markerDown = (e: PointerEvent<HTMLElement>, m: Marker, sides: ("start" | "end")[] = ["start", "end"]) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    selectMarker(m);
+    if (!isChapter(m) && (e.ctrlKey || e.metaKey)) {
+      markerAnchor.current = m;
+      const next = new Set([...marked].filter((o) => !isChapter(o)));
+      if (!next.delete(m)) next.add(m);
+      return selectMarkers(next);
+    }
+    if (!isChapter(m) && e.shiftKey) {
+      const [i, j] = [bookmarks.indexOf(markerAnchor.current as Bookmark), bookmarks.indexOf(m)];
+      return selectMarkers(i < 0 ? [m] : bookmarks.slice(Math.min(i, j), Math.max(i, j) + 1));
+    }
+    markerAnchor.current = m;
+    const group = !isChapter(m) && marked.has(m) ? [...marked] : [m];
+    selectMarkers(group);
     const twice = lastPress.current?.m === m && e.timeStamp - lastPress.current.at < 500;
     lastPress.current = twice ? null : { m, at: e.timeStamp };
-    if (twice) return rename(m);
+    if (twice) return rename(group);
     const i = chapters.indexOf(m as Chapter);
-    const [c, b] = [m as Chapter, m as Bookmark];
     const [lo, hi] = [chapters[i - 1]?.end ?? 0, chapters[i + 1]?.start ?? Infinity];
-    /** How far it can go, from where it started. */
-    const [dtMin, dtMax] = i < 0 ? [-b.time, Infinity]
-      : sides.length === 2 ? [lo - c.start, hi - c.end]
-      : sides[0] === "start" ? [lo - c.start, c.end - 1 - c.start] : [c.start + 1 - c.end, hi - c.end];
-    const label = i < 0 ? "Move marker" : sides.length === 2 ? "Move chapter" : "Resize chapter";
+    /** How far they can go, from where they started. */
+    const [dtMin, dtMax] = !isChapter(m) ? [-Math.min(...group.map(timeOf)), Infinity] : [
+      sides.includes("start") ? lo - m.start : m.start + 1 - m.end,
+      sides.includes("end") ? hi - m.end : m.end - 1 - m.start,
+    ];
+    const label = group.length > 1 ? `Move ${group.length} markers` : !isChapter(m) ? "Move marker" : sides.length === 1 ? "Resize chapter" : "Move chapter";
     const [origin, x0] = [pointerAt(e).at, e.clientX];
-    let current = m;
     let moved = false;
     dragging.current = true;
     const move = (p: globalThis.PointerEvent) => {
       moved ||= Math.abs(p.clientX - x0) > 3;
       if (!moved) return;
       const dt = clamp(pointerAt(p).at - origin, dtMin, dtMax);
-      const old = current;
+      // From where they started, so the lists from the press stay the ones to change.
+      const to = new Map<Marker, Marker>(group.map((g) => [g, isChapter(g)
+        ? { ...g, start: g.start + (sides.includes("start") ? dt : 0), end: g.end + (sides.includes("end") ? dt : 0) }
+        : { ...g, time: g.time + dt }]));
       editLabel.current = label;
-      if (i < 0) {
-        const next = (current = { ...b, time: b.time + dt });
-        setScript((s) => ({ ...s, bookmarks: [...s.bookmarks.filter((o) => o !== old), next].sort((a, z) => a.time - z.time) }));
-      } else {
-        const next = (current = { ...c, start: c.start + (sides.includes("start") ? dt : 0), end: c.end + (sides.includes("end") ? dt : 0) });
-        setScript((s) => ({ ...s, chapters: s.chapters.map((o) => (o === old ? next : o)) }));
-      }
-      setMarker(current);
+      setScript((s) => ({ ...s, chapters: swapped(chapters, to), bookmarks: swapped(bookmarks, to).sort((a, z) => a.time - z.time) }));
+      setMarked(new Set(to.values()));
+      markerAnchor.current = to.get(m)!;
     };
-    // Scrolling stops where it can go no further that way.
+    // Scrolling stops where they can go no further that way.
     const scrolls = (dir: number, p: globalThis.PointerEvent) => {
       const dt = pointerAt(p).at - origin;
       return dir > 0 ? dt < dtMax : dt > dtMin;
@@ -740,24 +764,29 @@ export default function EditorPage() {
     }, scrolls);
   };
 
-  /** Open the name field on marker `m`, to rename or delete it; a bookmark's accepted name is the next one's. */
-  const rename = (m: Chapter | Bookmark) => {
-    const isChapter = chapters.includes(m as Chapter);
-    const [from, to] = isChapter ? [(m as Chapter).start, (m as Chapter).end] : [(m as Bookmark).time, (m as Bookmark).time];
-    setNaming({ from, to, name: m.name, remove: () => removeMarker(m), done: (name) => {
-      if (name && !isChapter) setLastName(name);
-      if (!name || name === m.name) return;
-      const renamed = { ...m, name };
-      editLabel.current = isChapter ? "Rename chapter" : "Rename marker";
-      setScript((s) => ({ ...s, chapters: s.chapters.map((o) => (o === m ? renamed as Chapter : o)), bookmarks: s.bookmarks.map((o) => (o === m ? renamed as Bookmark : o)) }));
-      setMarker(renamed);
+  /**
+   * Open the name field on the markers `ms`, named as the first in time, to
+   * give them all one name or delete them; a bookmark's accepted name is the
+   * next one's.
+   */
+  const rename = (ms: Marker[]) => {
+    ms = [...ms].sort((a, b) => timeOf(a) - timeOf(b));
+    const times = ms.flatMap((m) => (isChapter(m) ? [m.start, m.end] : [m.time]));
+    const label = ms.length > 1 ? `Rename ${ms.length} markers` : isChapter(ms[0]) ? "Rename chapter" : "Rename marker";
+    setNaming({ from: Math.min(...times), to: Math.max(...times), name: ms[0].name, remove: () => removeMarkers(ms), done: (name) => {
+      if (name && !ms.every(isChapter)) setLastName(name);
+      if (!name || ms.every((m) => m.name === name)) return;
+      const to = new Map<Marker, Marker>(ms.map((m) => [m, { ...m, name }]));
+      editLabel.current = label;
+      setScript((s) => ({ ...s, chapters: swapped(s.chapters, to), bookmarks: swapped(s.bookmarks, to) }));
+      setMarked(new Set(to.values()));
     } });
   };
 
-  const removeMarker = (m: Chapter | Bookmark) => {
-    editLabel.current = chapters.includes(m as Chapter) ? "Delete chapter" : "Delete marker";
-    setScript((s) => ({ ...s, chapters: s.chapters.filter((c) => c !== m), bookmarks: s.bookmarks.filter((b) => b !== m) }));
-    setMarker(null);
+  const removeMarkers = (ms: Marker[]) => {
+    editLabel.current = ms.length > 1 ? `Delete ${ms.length} markers` : isChapter(ms[0]) ? "Delete chapter" : "Delete marker";
+    setScript((s) => ({ ...s, chapters: s.chapters.filter((c) => !ms.includes(c)), bookmarks: s.bookmarks.filter((b) => !ms.includes(b)) }));
+    setMarked(new Set());
   };
 
   /** Close the name field, accepting what was typed unless `accept` is false or it is empty. */
@@ -799,13 +828,13 @@ export default function EditorPage() {
         dragging.current = false;
         return addBookmark(at);
       }
-      selectMarker(chapter);
+      selectMarkers([chapter]);
       // The drag ends once named, so naming it is part of adding it.
       setNaming({ from: chapter.start, to: chapter.end, name: chapter.name, done: (name) => {
         if (name && name !== chapter.name) {
           const renamed = { ...chapter, name };
           setScript((s) => ({ ...s, chapters: s.chapters.map((c) => (c === chapter ? renamed : c)) }));
-          setMarker(renamed);
+          setMarked(new Set([renamed]));
         }
         dragging.current = false;
         setDragEnds((k) => k + 1);
@@ -819,8 +848,9 @@ export default function EditorPage() {
     setSelected(new Set());
   };
 
-  // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points, Escape none, Delete (or Backspace, the Mac's
-  // delete key) removes the selected ones or marker; F2 renames the marker, B adds a bookmark. Not while typing in a field.
+  // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points, or all bookmarks with markers selected or
+  // over the marker lane; Escape none, Delete (or Backspace, the Mac's delete key) removes the selected ones; F2 renames the selected
+  // markers, B adds a bookmark. Not while typing in a field.
   useWindowEvent("keydown", (e) => {
     if (e.target instanceof HTMLInputElement) return;
     const key = e.key.toLowerCase();
@@ -830,13 +860,14 @@ export default function EditorPage() {
       else undo();
     } else if ((e.ctrlKey || e.metaKey) && e.key === "a") {
       e.preventDefault();
-      setSelected(new Set(actions.keys()));
+      if (marked.size || overLane.current) selectMarkers(bookmarks);
+      else setSelected(new Set(actions.keys()));
     } else if (e.key === "Escape") {
       // Cancels placing points first.
       if (placing) cancelPlacing();
       else {
         setSelected(new Set());
-        setMarker(null);
+        setMarked(new Set());
         setBox(null);
       }
     } else if (e.key === "Enter" && ghost) {
@@ -851,12 +882,12 @@ export default function EditorPage() {
     } else if ((e.key === "Delete" || e.key === "Backspace") && selected.size) {
       e.preventDefault();
       removeSelected();
-    } else if ((e.key === "Delete" || e.key === "Backspace") && marker) {
+    } else if ((e.key === "Delete" || e.key === "Backspace") && marked.size) {
       e.preventDefault();
-      removeMarker(marker);
-    } else if (e.key === "F2" && marker) {
+      removeMarkers([...marked]);
+    } else if (e.key === "F2" && marked.size) {
       e.preventDefault();
-      rename(marker);
+      rename([...marked]);
     } else if (key === "b" && !e.ctrlKey && !e.metaKey) {
       // At the playhead, or without media under the pointer.
       const at = videoUrl ? Math.round(time) : hoverAt.current;
@@ -1069,7 +1100,7 @@ export default function EditorPage() {
       const { actions: _, ...rest } = JSON.parse(await file.text()) as Record<string, unknown>;
       setLifted(null);
       setSelected(new Set());
-      setMarker(null);
+      setMarked(new Set());
       editLabel.current = `Open ${file.name}`;
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
       const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, videoDuration));
@@ -1256,7 +1287,7 @@ export default function EditorPage() {
             if ((actions.length || chapters.length || bookmarks.length) && !confirm("Discard the current script?")) return;
             setLifted(null);
             setSelected(new Set());
-            setMarker(null);
+            setMarked(new Set());
             editLabel.current = "New script";
             setSaved(EMPTY);
             setScript(EMPTY);
@@ -1801,6 +1832,8 @@ export default function EditorPage() {
           flexShrink="0"
           height={`${LANE_HEIGHT}px`}
           onPointerDown={laneDown}
+          onPointerEnter={() => void (overLane.current = true)}
+          onPointerLeave={() => void (overLane.current = false)}
           style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair" }}
         >
           {chapters.map((c, i) => {
@@ -1813,8 +1846,8 @@ export default function EditorPage() {
                 key={i}
                 position="absolute"
                 height="100%"
-                onPointerDown={(e) => markerDown(e, c, ["start", "end"])}
-                style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)", cursor: "grab", ...(c === marker && SELECTED_MARKER) }}
+                onPointerDown={(e) => markerDown(e, c)}
+                style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)", cursor: "grab", ...(marked.has(c) && SELECTED_MARKER) }}
               >
                 <Text as="div" size="1" truncate style={{ maxWidth: flag && x(flag.time) - left, boxSizing: "border-box", lineHeight: `${LANE_HEIGHT}px`, padding: "0 4px" }}>
                   {c.name}
@@ -1853,7 +1886,7 @@ export default function EditorPage() {
                 // Opaque, so it hides what it covers.
                 background: `linear-gradient(var(--${markerColor(b.name)}-a4), var(--${markerColor(b.name)}-a4)), var(--color-panel-solid)`,
                 cursor: "grab",
-                ...(b === marker && SELECTED_MARKER),
+                ...(marked.has(b) && SELECTED_MARKER),
               }}
             >
               {b.name}
