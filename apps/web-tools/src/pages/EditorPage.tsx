@@ -74,6 +74,8 @@ const extended = (area: Area, a: Action): Area => ({
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
+/** How the selection box and the tools' boxes in the graph fill and outline. */
+const TOOL_BOX = { fill: "var(--accent-a3)", stroke: "var(--accent-9)" };
 /** Size of the selection box's grips, in px. */
 const GRIP = 8;
 /** Size of the buttons in the selection box that extend it, in px. */
@@ -189,6 +191,12 @@ function scaled(actions: Action[], picked: number[], time: number, low: number, 
 function scaleParams(fields: { time: string; low: string; high: string }) {
   const [time, low, high] = [typed(fields.time), typed(fields.low), typed(fields.high)];
   return time > 0 && low >= 0 && low <= 100 && high >= 0 && high <= 100 ? { time, low, high } : null;
+}
+
+/** Shift depth's fields as numbers; null while one is refused: limits outside the depths, rather than quietly clamped, or Min above Max. */
+function shiftParams(fields: { offset: string; min: string; max: string }) {
+  const [offset, min, max] = [typed(fields.offset), typed(fields.min), typed(fields.max)];
+  return Number.isFinite(offset) && min >= 0 && max <= 100 && min <= max ? { offset, min, max } : null;
 }
 
 /** Shift the depth of the points `picked` of `actions` by `offset`, then keep it within `min`–`max`. */
@@ -999,36 +1007,50 @@ export default function EditorPage() {
       return params && scaled(actions, picked, params.time, params.low, params.high);
     }
     if (kind === "shift") {
-      const [offset, min, max] = [typed(shift.offset), typed(shift.min), typed(shift.max)];
-      // Limits outside the depths are refused rather than quietly clamped.
-      return Number.isFinite(offset) && min >= 0 && max <= 100 && min <= max ? shifted(actions, picked, offset, min, max) : null;
+      const params = shiftParams(shift);
+      return params && shifted(actions, picked, params.offset, params.min, params.max);
     }
     const limit = typed(maxSpeed);
     return limit > 0 ? speedLimited(actions, picked, limit, speedAnchor === "out") : null;
   }, [tool, scale, shift, maxSpeed, speedAnchor]);
 
-  /** Scale's box while it is open: the result's bounding box, from the first affected point `t0` and the last `t1` it was opened on; null while a field is refused. */
+  /** The open tool's affected points as it was opened on them: the first's time `t0`, the last's `t1`, their lowest depth `lo` and highest `hi`. */
+  const toolSpan = useMemo(() => {
+    if (!tool) return null;
+    const { actions, picked } = tool;
+    const depths = picked.map((i) => actions[i].pos);
+    return { t0: actions[picked[0]].at, t1: actions[picked[picked.length - 1]].at, lo: Math.min(...depths), hi: Math.max(...depths) };
+  }, [tool]);
+  /** Scale's box while it is open: the result's bounding box; null while a field is refused. */
   const scaleBox = (() => {
-    const params = tool?.kind === "scale" && scaleParams(scale);
-    if (!params) return null;
-    const [t0, t1] = [tool!.actions[tool!.picked[0]].at, tool!.actions[tool!.picked[tool!.picked.length - 1]].at];
-    return { ...params, t0, t1, to: t0 + ((t1 - t0) * params.time) / 100 };
+    const params = tool?.kind === "scale" && toolSpan && scaleParams(scale);
+    return params ? { ...params, ...toolSpan!, to: toolSpan!.t0 + ((toolSpan!.t1 - toolSpan!.t0) * params.time) / 100 } : null;
   })();
+  /** Shift depth's fields while it is open; null while one is refused. */
+  const shiftBox = tool?.kind === "shift" ? shiftParams(shift) : null;
 
-  /** Drag Scale's box by `sides`: its right edge sets Time %, its top and bottom High and Low, which may pass each other; its body both, within 0–100. */
-  const dragScale = (e: PointerEvent<SVGRectElement>, sides: ("to" | "low" | "high")[]) => {
+  /**
+   * Drag one of a tool's handles in the graph; `move` gets how far the pointer
+   * has gone in time and depth since the press, the depth in whole steps and
+   * past the graph's top and bottom too.
+   */
+  const dragHandle = (e: PointerEvent<SVGRectElement>, move: (dt: number, dp: number) => void) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    const [origin, y0] = [pointerAt(e).at, e.clientY];
+    track(e.currentTarget.ownerSVGElement!, e, (m) => move(pointerAt(m).at - origin, Math.round(((y0 - m.clientY) / (plotHeight - 2 * PAD)) * 100)));
+  };
+
+  /** Drag Scale's box by `sides`: its right edge sets Time %, its top and bottom High and Low, which may pass each other; its body both, within 0–100. */
+  const dragScale = (e: PointerEvent<SVGRectElement>, sides: ("to" | "low" | "high")[]) => {
     const start = scaleBox!;
-    const origin = pointerAt(e);
-    track(e.currentTarget.ownerSVGElement!, e, (m) => {
-      const p = pointerAt(m);
-      const time = Math.max(Number((((start.to + p.at - origin.at - start.t0) / (start.t1 - start.t0)) * 100).toFixed(2)), 0.01);
-      // Stops where any side dragged would leave 0–100, so the body keeps its height.
-      const dragged = (["low", "high"] as const).filter((side) => sides.includes(side));
-      const dp = clamp(p.pos - origin.pos, Math.max(...dragged.map((side) => -start[side])), Math.min(...dragged.map((side) => 100 - start[side])));
-      const depth = (side: "low" | "high") => String(start[side] + dp);
+    // Stops where any side dragged would leave 0–100, so the body keeps its height.
+    const dragged = (["low", "high"] as const).filter((side) => sides.includes(side));
+    const [dpMin, dpMax] = [Math.max(...dragged.map((side) => -start[side])), Math.min(...dragged.map((side) => 100 - start[side]))];
+    dragHandle(e, (dt, dp) => {
+      const time = Math.max(Number((((start.to + dt - start.t0) / (start.t1 - start.t0)) * 100).toFixed(2)), 0.01);
+      const depth = (side: "low" | "high") => String(start[side] + clamp(dp, dpMin, dpMax));
       setScale((f) => ({
         time: sides.includes("to") ? String(time) : f.time,
         low: sides.includes("low") ? depth("low") : f.low,
@@ -1036,6 +1058,28 @@ export default function EditorPage() {
       }));
     });
   };
+
+  /** Drag Shift depth's `side`: the box sets Offset, −100–100; Min and Max stay within 0–100 and stop at each other. */
+  const dragShift = (e: PointerEvent<SVGRectElement>, side: "offset" | "min" | "max") => {
+    const { offset, min, max } = shiftBox!;
+    dragHandle(e, (_, dp) => {
+      const value = side === "offset" ? clamp(Math.round(offset + dp), -100, 100) : side === "min" ? clamp(min + dp, 0, max) : clamp(max + dp, min, 100);
+      setShift((f) => ({ ...f, [side]: String(value) }));
+    });
+  };
+
+  /** A grip of a tool's handle in the graph, at `x`, `y` and as wide and high as given; `square` shows it, as the selection box's corners. */
+  const grip = (key: string, [gx, gy, gw, gh]: number[], cursor: string, down: (e: PointerEvent<SVGRectElement>) => void, square = false) => (
+    <rect
+      key={key}
+      x={gx}
+      y={gy}
+      width={gw}
+      height={gh}
+      style={square ? { fill: "var(--color-panel-solid)", stroke: "var(--accent-9)", cursor } : { fill: "transparent", cursor }}
+      onPointerDown={down}
+    />
+  );
 
   /** Apply the open tool's result as one edit, unless it leaves the points as they are, and go back to the tools. */
   const applyTool = () => {
@@ -2171,7 +2215,7 @@ export default function EditorPage() {
                   width={edges.to - edges.from}
                   height={edges.low - edges.high}
                   strokeDasharray="4 2"
-                  style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", cursor: "move", pointerEvents: boxMode && !placing ? undefined : "none" }}
+                  style={{ ...TOOL_BOX, cursor: "move", pointerEvents: boxMode && !placing ? undefined : "none" }}
                   onPointerDown={(e) => editBox(e, ["from", "to", "low", "high"])}
                 />
                 {/* Selecting by time, only the edges in time can be dragged. */}
@@ -2198,21 +2242,31 @@ export default function EditorPage() {
               const w = Math.max(right - left, 2 * GRIP);
               return (
                 <g>
-                  <rect x={left} y={top} width={right - left} height={bottom - top} strokeDasharray="4 2" style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", cursor: "ns-resize" }} onPointerDown={(e) => dragScale(e, ["low", "high"])} />
-                  {(["low", "high"] as const).map((v) => (
-                    <rect key={v} x={(left + right - w) / 2} width={w} y={y(scaleBox[v]) - GRIP / 2} height={GRIP} style={{ fill: "transparent", cursor: "ns-resize" }} onPointerDown={(e) => dragScale(e, [v])} />
-                  ))}
-                  {stretches && <rect x={right - GRIP / 2} width={GRIP} y={top} height={bottom - top} style={{ fill: "transparent", cursor: "ew-resize" }} onPointerDown={(e) => dragScale(e, ["to"])} />}
+                  <rect x={left} y={top} width={right - left} height={bottom - top} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "ns-resize" }} onPointerDown={(e) => dragScale(e, ["low", "high"])} />
+                  {(["low", "high"] as const).map((v) => grip(v, [(left + right - w) / 2, y(scaleBox[v]) - GRIP / 2, w, GRIP], "ns-resize", (e) => dragScale(e, [v])))}
+                  {stretches && grip("to", [right - GRIP / 2, top, GRIP, bottom - top], "ew-resize", (e) => dragScale(e, ["to"]))}
                   {stretches && (["low", "high"] as const).map((v) => (
-                    <rect
-                      key={`to-${v}`}
-                      x={right - GRIP / 2}
-                      width={GRIP}
-                      y={y(scaleBox[v]) - GRIP / 2}
-                      height={GRIP}
-                      style={{ fill: "var(--color-panel-solid)", stroke: "var(--accent-9)", cursor: y(scaleBox[v]) === top ? "nesw-resize" : "nwse-resize" }}
-                      onPointerDown={(e) => dragScale(e, ["to", v])}
-                    />
+                    grip(`to-${v}`, [right - GRIP / 2, y(scaleBox[v]) - GRIP / 2, GRIP, GRIP], y(scaleBox[v]) === top ? "nesw-resize" : "nwse-resize", (e) => dragScale(e, ["to", v]), true)
+                  ))}
+                </g>
+              );
+            })()}
+            {/* Shift depth's box, where the points go before Min and Max clamp them, past 0 or 100 too; its body drags up and down. Min and Max as dashed lines over it, with grips. */}
+            {shiftBox && toolSpan && (() => {
+              // At least a grip wide and high, for a single point or flat ones.
+              const w = Math.max(x(toolSpan.t1) - x(toolSpan.t0), 2 * GRIP);
+              const left = (x(toolSpan.t0) + x(toolSpan.t1) - w) / 2;
+              const [top, bottom] = [y(toolSpan.hi + shiftBox.offset), y(toolSpan.lo + shiftBox.offset)];
+              const h = Math.max(bottom - top, GRIP);
+              return (
+                <g>
+                  <rect x={left} y={(top + bottom - h) / 2} width={w} height={h} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "ns-resize" }} onPointerDown={(e) => dragShift(e, "offset")} />
+                  {(["min", "max"] as const).map((v) => (
+                    <g key={v}>
+                      <line x1={left} x2={left + w} y1={y(shiftBox[v])} y2={y(shiftBox[v])} strokeDasharray="6 4" strokeWidth={1.5} style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
+                      {grip(`${v}-line`, [left, y(shiftBox[v]) - GRIP / 2, w, GRIP], "ns-resize", (e) => dragShift(e, v))}
+                      {grip(`${v}-grip`, [left + w - GRIP / 2, y(shiftBox[v]) - GRIP / 2, GRIP, GRIP], "ns-resize", (e) => dragShift(e, v), true)}
+                    </g>
                   ))}
                 </g>
               );
