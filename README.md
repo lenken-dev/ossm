@@ -70,9 +70,9 @@ On boards with a configured RGB status LED, such as the OSSM Alt Edition, the LE
 | Green | Ready, moving, or playing a pattern. |
 | Yellow | Paused |
 | Red | An error has stopped the machine. Restart it to try again. |
-| Blinking red | A known problem has stopped the machine. Count the blinks, then restart it. |
+| Blinking red (green on WaveShare) | A known problem has stopped the machine. Count the blinks, then restart it. |
 
-Blinking red repeats a group of blinks separated by a longer pause:
+Blinking red (green on WaveShare) LED repeats a group of blinks separated by a longer pause:
 
 | Blinks | Meaning |
 | --- | --- |

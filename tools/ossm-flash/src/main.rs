@@ -81,7 +81,7 @@ impl Variant {
                 bin: "waveshare",
                 target: "xtensa-esp32s3-none-elf",
                 motor: Motor::Rs485,
-                indicator: Indicator::None,
+                indicator: Indicator::Led,
             },
             Variant::SeeedXiao => VariantSpec {
                 workspace: "ossm/firmware/esp32s3",
