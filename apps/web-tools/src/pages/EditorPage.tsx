@@ -107,6 +107,8 @@ const MINIMAP_HEIGHT = 40;
 
 /** Height of the marker lane below the graph, in px. */
 const LANE_HEIGHT = 24;
+/** How the selected marker shows in the lane. */
+const SELECTED_MARKER = { outline: "2px solid var(--accent-9)", outlineOffset: -2 };
 /** Bookmark colours, Radix scales; a bookmark's name picks one, so bookmarks named alike match. */
 const MARKER_COLORS = ["blue", "green", "orange", "purple", "cyan", "crimson", "amber", "teal"];
 const markerColor = (name: string) => MARKER_COLORS[Math.abs([...name].reduce((h, c) => (h * 31 + c.codePointAt(0)!) | 0, 0)) % MARKER_COLORS.length];
@@ -172,6 +174,17 @@ export default function EditorPage() {
   const [error, setError] = useState<string | null>(null);
   /** Indices of the selected points, moved together and deleted with the Delete key. */
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  /** The selected marker, deleted with the Delete key; one or the other, selecting points clears it. */
+  const [marker, setMarker] = useState<Chapter | Bookmark | null>(null);
+  useEffect(() => {
+    if (selected.size) setMarker(null);
+  }, [selected]);
+  /** What a new bookmark is called: the name last given to one, for this visit to the page. */
+  const [lastName] = useState("Marker");
+  /** The name field open over the time from `from` to `to` in the marker lane; `done` gets the accepted name, or null to keep the old one. */
+  const [naming, setNaming] = useState<{ from: number; to: number; name: string; done: (name: string | null) => void } | null>(null);
+  /** The time under the pointer over the graph or the marker lane, where B adds a bookmark without media. */
+  const hoverAt = useRef<number | null>(null);
   /**
    * Selection mode: dragging on empty space draws a box that selects points
    * instead of adding one, and the box stays to be resized or moved; only the
@@ -352,6 +365,7 @@ export default function EditorPage() {
     setTimeline((tl) => ({ ...tl, index }));
     setScript((s) => ({ ...s, actions, chapters, bookmarks }));
     setSelected(new Set());
+    setMarker(null);
     setBox(null);
     setPlacing(null);
     setLifted(null);
@@ -650,6 +664,87 @@ export default function EditorPage() {
     target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
   };
 
+  /** Select marker `m`, clearing the point selection. */
+  const selectMarker = (m: Chapter | Bookmark) => {
+    setMarker(m);
+    setSelected(new Set());
+    setBox(null);
+  };
+
+  /** Add a bookmark at `time` ms, with the last used name, and select it. */
+  const addBookmark = (time: number) => {
+    const added = { name: lastName, time };
+    editLabel.current = "Add marker";
+    setScript((s) => ({ ...s, bookmarks: [...s.bookmarks, added].sort((a, b) => a.time - b.time) }));
+    selectMarker(added);
+  };
+
+  /** A press on a marker selects it; it never draws a chapter. */
+  const markerDown = (e: PointerEvent<HTMLElement>, m: Chapter | Bookmark) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    selectMarker(m);
+  };
+
+  const removeMarker = () => {
+    editLabel.current = chapters.includes(marker as Chapter) ? "Delete chapter" : "Delete marker";
+    setScript((s) => ({ ...s, chapters: s.chapters.filter((c) => c !== marker), bookmarks: s.bookmarks.filter((b) => b !== marker) }));
+    setMarker(null);
+  };
+
+  /** Close the name field, accepting what was typed unless `accept` is false or it is empty. */
+  const closeNaming = (accept: boolean) => {
+    const name = accept ? naming!.name.trim() : "";
+    naming!.done(name || null);
+    setNaming(null);
+  };
+
+  /**
+   * A press on empty lane: a drag draws a chapter, within the gap between the
+   * chapters around it, and opens its name field; a click adds a bookmark.
+   */
+  const laneDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const at = Math.max(pointerAt(e).at, 0);
+    const n = chapters.filter((c) => c.start <= at).length;
+    const [lo, hi] = [chapters[n - 1]?.end ?? 0, chapters[n]?.start ?? Infinity];
+    // On the edge of a chapter, where its band ends a pixel short.
+    if (at < lo) return;
+    const x0 = e.clientX;
+    let drawn: Chapter | null = null;
+    dragging.current = true;
+    const move = (m: globalThis.PointerEvent) => {
+      if (!drawn && Math.abs(m.clientX - x0) <= 3) return;
+      const t = clamp(pointerAt(m).at, lo, hi);
+      if (t === at) return;
+      const [old, chapter] = [drawn, { name: `Chapter ${n + 1}`, start: Math.min(at, t), end: Math.max(at, t) }];
+      drawn = chapter;
+      editLabel.current = "Add chapter";
+      setScript((s) => ({ ...s, chapters: [...s.chapters.filter((c) => c !== old), chapter].sort((a, b) => a.start - b.start) }));
+    };
+    // Scrolling stops at the gap's ends.
+    const scrolls = (dir: number, m: globalThis.PointerEvent) => (dir > 0 ? pointerAt(m).at < hi : pointerAt(m).at > lo);
+    track(e.currentTarget, e, move, () => {
+      const chapter = drawn;
+      if (!chapter) {
+        dragging.current = false;
+        return addBookmark(at);
+      }
+      selectMarker(chapter);
+      // The drag ends once named, so naming it is part of adding it.
+      setNaming({ from: chapter.start, to: chapter.end, name: chapter.name, done: (name) => {
+        if (name && name !== chapter.name) {
+          const renamed = { ...chapter, name };
+          setScript((s) => ({ ...s, chapters: s.chapters.map((c) => (c === chapter ? renamed : c)) }));
+          setMarker(renamed);
+        }
+        dragging.current = false;
+        setDragEnds((k) => k + 1);
+      } });
+    }, scrolls);
+  };
+
   const removeSelected = (verb = "Delete") => {
     editLabel.current = `${verb} ${points(selected.size)}`;
     setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => !selected.has(j)) }));
@@ -657,7 +752,7 @@ export default function EditorPage() {
   };
 
   // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points, Escape none, Delete (or Backspace, the Mac's
-  // delete key) removes the selected ones; not while typing in a field.
+  // delete key) removes the selected ones or marker; B adds a bookmark. Not while typing in a field.
   useWindowEvent("keydown", (e) => {
     if (e.target instanceof HTMLInputElement) return;
     const key = e.key.toLowerCase();
@@ -673,6 +768,7 @@ export default function EditorPage() {
       if (placing) cancelPlacing();
       else {
         setSelected(new Set());
+        setMarker(null);
         setBox(null);
       }
     } else if (e.key === "Enter" && ghost) {
@@ -687,6 +783,13 @@ export default function EditorPage() {
     } else if ((e.key === "Delete" || e.key === "Backspace") && selected.size) {
       e.preventDefault();
       removeSelected();
+    } else if ((e.key === "Delete" || e.key === "Backspace") && marker) {
+      e.preventDefault();
+      removeMarker();
+    } else if (key === "b" && !e.ctrlKey && !e.metaKey) {
+      // At the playhead, or without media under the pointer.
+      const at = videoUrl ? Math.round(time) : hoverAt.current;
+      if (at !== null) addBookmark(at);
     }
   });
 
@@ -895,6 +998,7 @@ export default function EditorPage() {
       const { actions: _, ...rest } = JSON.parse(await file.text()) as Record<string, unknown>;
       setLifted(null);
       setSelected(new Set());
+      setMarker(null);
       editLabel.current = `Open ${file.name}`;
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
       const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, videoDuration));
@@ -1081,6 +1185,7 @@ export default function EditorPage() {
             if ((actions.length || chapters.length || bookmarks.length) && !confirm("Discard the current script?")) return;
             setLifted(null);
             setSelected(new Set());
+            setMarker(null);
             editLabel.current = "New script";
             setSaved(EMPTY);
             setScript(EMPTY);
@@ -1484,6 +1589,8 @@ export default function EditorPage() {
         flexGrow="1"
         // Its own least height, so it shrinks with the graph instead of keeping the graph's measured one.
         minHeight={`${120 + LANE_HEIGHT}px`}
+        onPointerMove={(e) => void (hoverAt.current = Math.max(pointerAt(e).at, 0))}
+        onPointerLeave={() => void (hoverAt.current = null)}
       >
         <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: "6px 6px 0 0", background: "var(--gray-a2)", overflow: "hidden" }}>
           <svg
@@ -1615,14 +1722,27 @@ export default function EditorPage() {
           <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
         </Box>
         {/* The marker lane, in the graph's time: chapters as bands, touching ones in alternating shades, bookmarks as flags over them; names cut off where there is no room. */}
-        <Box position="relative" flexShrink="0" height={`${LANE_HEIGHT}px`} style={{ borderRadius: "0 0 6px 6px", background: "var(--gray-a2)", overflow: "hidden", userSelect: "none" }}>
+        {/* A press on a marker selects it; on empty lane, a click adds a bookmark and a drag draws a chapter. */}
+        <Box
+          position="relative"
+          flexShrink="0"
+          height={`${LANE_HEIGHT}px`}
+          onPointerDown={laneDown}
+          style={{ borderRadius: "0 0 6px 6px", background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair" }}
+        >
           {chapters.map((c, i) => {
             if (!inView(c.start, c.end)) return null;
             // Kept in view, so the name of a chapter that starts before it still shows; it ends at the first flag on it, which goes over it.
             const left = Math.max(x(c.start), 0);
             const flag = bookmarks.find((b) => x(b.time) >= left && b.time < c.end);
             return (
-              <Box key={i} position="absolute" height="100%" style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)" }}>
+              <Box
+                key={i}
+                position="absolute"
+                height="100%"
+                onPointerDown={(e) => markerDown(e, c)}
+                style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)", cursor: "default", ...(c === marker && SELECTED_MARKER) }}
+              >
                 <Text as="div" size="1" truncate style={{ maxWidth: flag && x(flag.time) - left, boxSizing: "border-box", lineHeight: `${LANE_HEIGHT}px`, padding: "0 4px" }}>
                   {c.name}
                 </Text>
@@ -1636,22 +1756,52 @@ export default function EditorPage() {
               as="div"
               size="1"
               truncate
+              onPointerDown={(e) => markerDown(e, b)}
               style={{
                 position: "absolute",
                 left: x(b.time),
                 maxWidth: bookmarks[i + 1] && x(bookmarks[i + 1].time) - x(b.time),
-              boxSizing: "border-box",
+                boxSizing: "border-box",
                 height: "100%",
                 lineHeight: `${LANE_HEIGHT}px`,
                 padding: "0 4px",
                 borderLeft: `2px solid var(--${markerColor(b.name)}-9)`,
                 // Opaque, so it hides what it covers.
-              background: `linear-gradient(var(--${markerColor(b.name)}-a4), var(--${markerColor(b.name)}-a4)), var(--color-panel-solid)`,
+                background: `linear-gradient(var(--${markerColor(b.name)}-a4), var(--${markerColor(b.name)}-a4)), var(--color-panel-solid)`,
+                cursor: "default",
+                ...(b === marker && SELECTED_MARKER),
               }}
             >
               {b.name}
             </Text>
           ))}
+          {/* Accepted with Enter or by clicking away; Escape keeps the old name. Suggests the names in the script. */}
+          {naming && (
+            <Popover.Root open modal onOpenChange={(open) => !open && closeNaming(true)}>
+              <Popover.Anchor style={{ position: "absolute", left: Math.max(x(naming.from), 0), width: Math.min(x(naming.to), width) - Math.max(x(naming.from), 0), height: "100%", pointerEvents: "none" }} />
+              <Popover.Content
+                size="1"
+                width="200px"
+                onEscapeKeyDown={(e) => {
+                  e.preventDefault();
+                  closeNaming(false);
+                }}
+              >
+                <TextField.Root
+                  size="1"
+                  aria-label="Name"
+                  list="marker-names"
+                  value={naming.name}
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => setNaming({ ...naming, name: e.target.value })}
+                  onKeyDown={(e) => e.key === "Enter" && closeNaming(true)}
+                />
+                <datalist id="marker-names">
+                  {[...new Set([...chapters, ...bookmarks].map((m) => m.name))].map((name) => <option key={name} value={name} />)}
+                </datalist>
+              </Popover.Content>
+            </Popover.Root>
+          )}
         </Box>
       </Flex>
       {minimap ? (
