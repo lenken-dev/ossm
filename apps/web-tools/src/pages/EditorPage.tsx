@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ClipboardIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
+import { ArrowLeftIcon, ClipboardIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -232,39 +232,88 @@ function fastestOf(actions: Action[], picked: number[]) {
   return touched.length ? Math.max(...touched.map((i) => speed(actions[i - 1], actions[i]))) : null;
 }
 
+/** The shapes a Generate function can take, their names, small graphs (32×16) and fields, in the order shown. */
+const SHAPES = {
+  constant: { name: "Constant", graph: "2,8 30,8", fields: ["value"] },
+  ramp: { name: "Ramp", graph: "2,14 30,2", fields: ["start", "end"] },
+  sine: { name: "Sine", graph: "2,8 5.5,3.8 9,2 12.5,3.8 16,8 19.5,12.2 23,14 26.5,12.2 30,8", fields: ["min", "max", "period", "phase"] },
+  triangle: { name: "Triangle", graph: "2,8 9,2 23,14 30,8", fields: ["min", "max", "period", "phase"] },
+  square: { name: "Square", graph: "2,2 9,2 9,14 16,14 16,2 23,2 23,14 30,14", fields: ["min", "max", "period", "phase"] },
+  pulse: { name: "Pulse", graph: "2,2 5,2 5,14 16,14 16,2 19,2 19,14 30,14", fields: ["min", "max", "period", "phase", "width"] },
+  noise: { name: "Noise", graph: "2,9 6,6 10,7 14,3 18,8 22,11 26,6 30,8", fields: ["min", "max", "period", "seed"] },
+} as const;
+type Shape = keyof typeof SHAPES;
+type ShapeField = "value" | "start" | "end" | "min" | "max" | "period" | "phase" | "width" | "seed";
+
+/** A Generate function, its fields as typed: its shape and that shape's fields. */
+type Func = { shape: Shape } & Partial<Record<ShapeField, string>>;
+
+/** A new noise seed. */
+const newSeed = () => String(Math.floor(Math.random() * 1_000_000));
+
 /**
- * An entry of a Generate function chain, its fields as typed: its shape, and
- * how it combines with what the entries before it give; the first has no op.
- * Only Constant, alone, so far.
+ * `func` as `shape`, keeping the fields the two share, the rest from what it
+ * spanned so the curve stays about where it was: a constant's value, a ramp's
+ * Start and End or a wave's Min and Max become the new ones, their middle a
+ * constant's value.
  */
-interface Entry {
-  op?: "add" | "sub" | "mul" | "min" | "max";
-  shape: "constant";
-  value: string;
+function reshaped(func: Func, shape: Shape): Func {
+  const [lo, hi] = func.shape === "constant" ? [func.value, func.value] : func.shape === "ramp" ? [func.start, func.end] : [func.min, func.max];
+  const mid = (typed(lo ?? "") + typed(hi ?? "")) / 2;
+  const all: Func = { value: Number.isFinite(mid) ? String(mid) : lo, start: lo, end: hi, min: lo, max: hi, period: "1", phase: "0", width: "50", seed: newSeed(), ...func };
+  return { shape, ...Object.fromEntries(SHAPES[shape].fields.map((f) => [f, all[f]])) };
 }
 
 /**
  * Generate's setup: how the next point's time is found, whether the first
- * point goes on Low (In) or High (Out), and a function chain for each of
+ * point goes on Low (In) or High (Out), and a function for each of
  * Interval (ms), Speed, and High and Low (in % of the box). Only Interval
  * timing so far.
  */
 interface GenerateSetup {
   timing: "interval" | "speed";
   first: "in" | "out";
-  interval: Entry[];
-  speed: Entry[];
-  high: Entry[];
-  low: Entry[];
+  interval: Func;
+  speed: Func;
+  high: Func;
+  low: Func;
 }
 
-const constant = (value: string): Entry[] => [{ shape: "constant", value }];
+const constant = (value: string): Func => ({ shape: "constant", value });
 const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("500"), speed: constant("200"), high: constant("100"), low: constant("0") };
 
-/** A function chain's value `t` ms into the range; NaN while a field is refused. Only its first entry so far. */
-const chainAt = (chain: Entry[], t: number) => entryAt(chain[0], t);
-/** An entry's own value `t` ms into the range. */
-const entryAt = (entry: Entry, _t: number) => typed(entry.value);
+/** A random value, 0–1, for `seed` and `k`. */
+function hashed(seed: number, k: number) {
+  let h = Math.imul(k ^ Math.imul(seed, 0x27d4eb2d), 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  return ((h ^ (h >>> 13)) >>> 0) / 2 ** 32;
+}
+
+/**
+ * A function's value `t` ms into a range `span` ms long; NaN while a field
+ * is refused, or a period is not above 0. A ramp runs across the range; waves
+ * start with it, Sine and Triangle halfway up and rising, Square and Pulse on
+ * Max; Noise eases between random values one Period apart.
+ */
+function funcAt(func: Func, t: number, span: number) {
+  const f = (field: ShapeField) => typed(func[field] ?? "");
+  if (func.shape === "constant") return f("value");
+  if (func.shape === "ramp") return f("start") + (f("end") - f("start")) * (span ? t / span : 0);
+  const [min, max, period] = [f("min"), f("max"), f("period") * 1000];
+  if (!(period > 0)) return NaN;
+  const along = (w: number) => min + (max - min) * w;
+  if (func.shape === "noise") {
+    const [seed, k] = [f("seed"), Math.floor(t / period)];
+    if (!Number.isInteger(seed)) return NaN;
+    const u = t / period - k;
+    return along(hashed(seed, k) + (hashed(seed, k + 1) - hashed(seed, k)) * u * u * (3 - 2 * u));
+  }
+  const u = (((t / period + f("phase") / 100) % 1) + 1) % 1;
+  if (func.shape === "sine") return along((1 + Math.sin(2 * Math.PI * u)) / 2);
+  if (func.shape === "triangle") return along(Math.abs(2 * ((u + 0.75) % 1) - 1));
+  const edge = func.shape === "square" ? 0.5 : f("width") / 100;
+  return Number.isNaN(u + edge) ? NaN : along(u < edge ? 1 : 0);
+}
 
 /**
  * Generate's points in `range`: reversals alternating between High and Low,
@@ -275,8 +324,8 @@ function generated(setup: GenerateSetup, range: Area): Action[] | null {
   const out: Action[] = [];
   for (let at = range.from, high = setup.first === "out"; at <= range.to; high = !high) {
     const t = at - range.from;
-    const depth = chainAt(high ? setup.high : setup.low, t);
-    const interval = chainAt(setup.interval, t);
+    const depth = funcAt(high ? setup.high : setup.low, t, range.to - range.from);
+    const interval = funcAt(setup.interval, t, range.to - range.from);
     if (Number.isNaN(depth) || Number.isNaN(interval)) return null;
     out.push({ at, pos: Math.round(range.low + (clamp(depth, 0, 100) * (range.high - range.low)) / 100) });
     at += Math.max(Math.round(interval), 1);
@@ -1050,6 +1099,8 @@ export default function EditorPage() {
   const [speedAnchor, setSpeedAnchor] = usePersistedState<"in" | "out">("ossm:editorSpeedAnchor", "in", localStorage);
   /** Generate's setup, remembered unlike the other tools' fields. */
   const [genSetup, setGenSetup] = usePersistedState<GenerateSetup>("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage);
+  // Setups kept while the functions were chains hold each in an array of one; unwrapped on the loaded object, once.
+  for (const k of ["interval", "speed", "high", "low"] as const) if (Array.isArray(genSetup[k])) genSetup[k] = (genSetup[k] as unknown as Func[])[0];
   /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
   const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
 
@@ -1909,19 +1960,56 @@ export default function EditorPage() {
                 <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
               </SegmentedControl.Root>
             </Flex>
-            {([["interval", "Interval", "ms"], ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([chain, label, unit]) => (
-              <TextField.Root
-                key={chain}
-                type="number"
-                step="any"
-                aria-label={label}
-                value={genSetup[chain][0].value}
-                onChange={(e) => setGenSetup({ ...genSetup, [chain]: [{ ...genSetup[chain][0], value: e.target.value }] })}
-              >
-                <TextField.Slot side="left">{label}</TextField.Slot>
-                <TextField.Slot side="right">{unit}</TextField.Slot>
-              </TextField.Root>
-            ))}
+            {/* Each function: its shape, then its fields, two to a row; values in the function's unit. */}
+            {([["interval", "Interval", "ms"], ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([key, label, unit]) => {
+              const func = genSetup[key];
+              const set = (next: Func) => setGenSetup({ ...genSetup, [key]: next });
+              return (
+                <Flex key={key} direction="column" gap="2">
+                  <Flex gap="2" align="center" justify="between">
+                    <Text size="2">{label}</Text>
+                    <Select.Root size="1" value={func.shape} onValueChange={(v) => set(reshaped(func, v as Shape))}>
+                      <Select.Trigger aria-label={`${label} shape`} />
+                      <Select.Content>
+                        {/* Each with a small graph, which the trigger shows too. */}
+                        {Object.entries(SHAPES).map(([shape, { name, graph }]) => (
+                          <Select.Item key={shape} value={shape}>
+                            <Flex gap="2" align="center">
+                              <svg width="32" height="16" viewBox="0 0 32 16" fill="none" strokeWidth={1.5} strokeLinejoin="round">
+                                <polyline points={graph} stroke={LINE_COLOR} />
+                              </svg>
+                              {name}
+                            </Flex>
+                          </Select.Item>
+                        ))}
+                      </Select.Content>
+                    </Select.Root>
+                  </Flex>
+                  <Flex gap="2" wrap="wrap">
+                    {SHAPES[func.shape].fields.map((field) => (
+                      <TextField.Root
+                        key={field}
+                        type="number"
+                        step="any"
+                        aria-label={`${label} ${field}`}
+                        value={func[field] ?? ""}
+                        onChange={(e) => set({ ...func, [field]: e.target.value })}
+                        style={{ flex: "1 1 40%", minWidth: 0 }}
+                      >
+                        <TextField.Slot side="left">{{ value: "Value", start: "Start", end: "End", min: "Min", max: "Max", period: "Period", phase: "Phase", width: "Width", seed: "Seed" }[field]}</TextField.Slot>
+                        <TextField.Slot side="right">
+                          {field === "seed" ? (
+                            <IconButton size="1" variant="ghost" color="gray" aria-label="Reroll" title="Reroll" onClick={() => set({ ...func, seed: newSeed() })}>
+                              <ShuffleIcon />
+                            </IconButton>
+                          ) : { period: "s", phase: "%", width: "%" }[field as string] ?? unit}
+                        </TextField.Slot>
+                      </TextField.Root>
+                    ))}
+                  </Flex>
+                </Flex>
+              );
+            })}
             <Flex gap="2" align="center" justify="between">
               {/* Of the generated points: their fastest segment and the shortest time between two. */}
               {(() => {
@@ -2427,12 +2515,22 @@ export default function EditorPage() {
                 </g>
               );
             })()}
-            {/* Generate's range box, like the selection box: its edges and corners resize it, its body moves it. */}
+            {/* Generate's range box, like the selection box: its edges and corners resize it, its body moves it. High and Low's curves dashed in it, every 2 px of its part in view. */}
             {genBox && (() => {
               const b = { from: x(genBox.from), to: x(genBox.to), low: y(genBox.low), high: y(genBox.high) };
+              const [t0, t1, step] = [Math.max(genBox.from, view.from), Math.min(genBox.to, view.from + view.span), (2 / width) * view.span];
+              const curve = (func: Func) => {
+                const at = Array.from({ length: Math.max(Math.ceil((t1 - t0) / step), 0) + 1 }, (_, i) => Math.min(t0 + i * step, t1));
+                // Refused fields draw nothing.
+                const depths = at.map((t) => genBox.low + (clamp(funcAt(func, t - genBox.from, genBox.to - genBox.from), 0, 100) * (genBox.high - genBox.low)) / 100);
+                return depths.some(Number.isNaN) ? "" : at.map((t, i) => `${x(t)},${y(depths[i])}`).join(" ");
+              };
               return (
                 <g>
                   <rect x={b.from} y={b.high} width={b.to - b.from} height={b.low - b.high} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "move" }} onPointerDown={(e) => dragGenerate(e, ["from", "to", "low", "high"])} />
+                  {t1 >= t0 && width > 0 && [genSetup.high, genSetup.low].map((func, i) => (
+                    <polyline key={i} points={curve(func)} fill="none" strokeWidth={1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
+                  ))}
                   {GRIPS.map(([h, v]) => grip(
                     `${h}-${v}`,
                     [h ? b[h] - GRIP / 2 : b.from, v ? b[v] - GRIP / 2 : b.high, h ? GRIP : b.to - b.from, v ? GRIP : b.low - b.high],
