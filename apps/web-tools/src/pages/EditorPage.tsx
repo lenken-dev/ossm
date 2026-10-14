@@ -232,13 +232,76 @@ function fastestOf(actions: Action[], picked: number[]) {
   return touched.length ? Math.max(...touched.map((i) => speed(actions[i - 1], actions[i]))) : null;
 }
 
-type ToolKind = "scale" | "shift" | "speed";
+/**
+ * An entry of a Generate function chain, its fields as typed: its shape, and
+ * how it combines with what the entries before it give; the first has no op.
+ * Only Constant, alone, so far.
+ */
+interface Entry {
+  op?: "add" | "sub" | "mul" | "min" | "max";
+  shape: "constant";
+  value: string;
+}
+
+/**
+ * Generate's setup: how the next point's time is found, whether the first
+ * point goes on Low (In) or High (Out), and a function chain for each of
+ * Interval (ms), Speed, and High and Low (in % of the box). Only Interval
+ * timing so far.
+ */
+interface GenerateSetup {
+  timing: "interval" | "speed";
+  first: "in" | "out";
+  interval: Entry[];
+  speed: Entry[];
+  high: Entry[];
+  low: Entry[];
+}
+
+const constant = (value: string): Entry[] => [{ shape: "constant", value }];
+const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("500"), speed: constant("200"), high: constant("100"), low: constant("0") };
+
+/** A function chain's value `t` ms into the range; NaN while a field is refused. Only its first entry so far. */
+const chainAt = (chain: Entry[], t: number) => entryAt(chain[0], t);
+/** An entry's own value `t` ms into the range. */
+const entryAt = (entry: Entry, _t: number) => typed(entry.value);
+
+/**
+ * Generate's points in `range`: reversals alternating between High and Low,
+ * from its start, each the Interval after the one before, at least 1 ms, the
+ * last at or before its end; null while a field is refused.
+ */
+function generated(setup: GenerateSetup, range: Area): Action[] | null {
+  const out: Action[] = [];
+  for (let at = range.from, high = setup.first === "out"; at <= range.to; high = !high) {
+    const t = at - range.from;
+    const depth = chainAt(high ? setup.high : setup.low, t);
+    const interval = chainAt(setup.interval, t);
+    if (Number.isNaN(depth) || Number.isNaN(interval)) return null;
+    out.push({ at, pos: Math.round(range.low + (clamp(depth, 0, 100) * (range.high - range.low)) / 100) });
+    at += Math.max(Math.round(interval), 1);
+  }
+  return out;
+}
+
+/** Generate's range fields as numbers, its times in ms from shown seconds; null while one is refused: times before 0, To before From, or depths outside 0–100 or Bottom above Top. */
+function rangeParams(fields: { from: string; to: string; low: string; high: string }, zero: number): Area | null {
+  const [from, to] = [Math.round(typed(fields.from) * 1000) + zero, Math.round(typed(fields.to) * 1000) + zero];
+  const [low, high] = [typed(fields.low), typed(fields.high)];
+  return from >= 0 && to >= from && low >= 0 && low <= high && high <= 100 ? { from, to, low, high } : null;
+}
+
+/** Generate's range fields for `area`, its times in seconds from `zero`. */
+const rangeFields = (area: Area, zero: number) => ({ from: String((area.from - zero) / 1000), to: String((area.to - zero) / 1000), low: String(area.low), high: String(area.high) });
+
+type ToolKind = "scale" | "shift" | "speed" | "generate";
 
 /** The advanced editor's tools: their names, undo labels, and the before and after strokes of their small graphs, 56×24. */
 const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after: string }[] = [
   { kind: "scale", name: "Scale", verb: "Scale", before: "4,16 12,8 20,16 28,8", after: "4,20 20,4 36,20 52,4" },
   { kind: "shift", name: "Shift depth", verb: "Shift depth of", before: "4,20 14,12 24,20 34,12 44,20 52,12", after: "4,12 14,4 24,12 34,4 44,12 52,4" },
   { kind: "speed", name: "Max speed", verb: "Limit speed of", before: "4,20 12,4 20,20 28,4 36,20 44,4 52,20", after: "4,20 12,12 20,20 28,12 36,20 44,12 52,20" },
+  { kind: "generate", name: "Generate", verb: "Generate", before: "4,12 52,12", after: "4,20 10,4 16,20 22,4 28,20 34,4 40,20 46,4 52,20" },
 ];
 
 /** A marker time from a file, in ms: ms as a number or `"HH:MM:SS.mmm"`; null when unusable. */
@@ -985,6 +1048,10 @@ export default function EditorPage() {
   const [maxSpeed, setMaxSpeed] = useState("");
   /** Which end Max speed keeps: In only lowers points, keeping the low reversals; Out only raises them. */
   const [speedAnchor, setSpeedAnchor] = usePersistedState<"in" | "out">("ossm:editorSpeedAnchor", "in", localStorage);
+  /** Generate's setup, remembered unlike the other tools' fields. */
+  const [genSetup, setGenSetup] = usePersistedState<GenerateSetup>("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage);
+  /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
+  const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
 
   /** Open a tool on the selected points, or all, from their defaults. */
   const openTool = (kind: ToolKind) => {
@@ -995,6 +1062,9 @@ export default function EditorPage() {
     setScale({ time: "100", low: String(Math.min(...depths)), high: String(Math.max(...depths)) });
     setShift({ offset: "0", min: "0", max: "100" });
     setMaxSpeed(fastest === null ? "" : String(Math.ceil(fastest)));
+    // Over the selected points' time, or the view's.
+    const [from, to] = selected.size ? [actions[picked[0]].at, actions[picked[picked.length - 1]].at] : [Math.round(view.from), Math.round(view.from + view.span)];
+    setGenRange(rangeFields({ from, to, low: 0, high: 100 }, zero));
     setBox(null);
   };
 
@@ -1010,13 +1080,21 @@ export default function EditorPage() {
       const params = shiftParams(shift);
       return params && shifted(actions, picked, params.offset, params.min, params.max);
     }
+    if (kind === "generate") {
+      // Every point in the range's time goes, whatever its depth.
+      const range = rangeParams(genRange, zero);
+      const made = range && generated(genSetup, range);
+      if (!range || !made) return null;
+      const [before, after] = [actions.slice(0, byTime(actions, range.from)), actions.slice(afterTime(actions, range.to))];
+      return { actions: [...before, ...made, ...after], selected: new Set(made.map((_, i) => before.length + i)) };
+    }
     const limit = typed(maxSpeed);
     return limit > 0 ? speedLimited(actions, picked, limit, speedAnchor === "out") : null;
-  }, [tool, scale, shift, maxSpeed, speedAnchor]);
+  }, [tool, scale, shift, maxSpeed, speedAnchor, genSetup, genRange, zero]);
 
-  /** The open tool's affected points as it was opened on them: the first's time `t0`, the last's `t1`, their lowest depth `lo` and highest `hi`. */
+  /** The open tool's affected points as it was opened on them: the first's time `t0`, the last's `t1`, their lowest depth `lo` and highest `hi`; null without any. */
   const toolSpan = useMemo(() => {
-    if (!tool) return null;
+    if (!tool?.picked.length) return null;
     const { actions, picked } = tool;
     const depths = picked.map((i) => actions[i].pos);
     return { t0: actions[picked[0]].at, t1: actions[picked[picked.length - 1]].at, lo: Math.min(...depths), hi: Math.max(...depths) };
@@ -1028,6 +1106,8 @@ export default function EditorPage() {
   })();
   /** Shift depth's fields while it is open; null while one is refused. */
   const shiftBox = tool?.kind === "shift" ? shiftParams(shift) : null;
+  /** Generate's range box while it is open; null while a field is refused. */
+  const genBox = tool?.kind === "generate" ? rangeParams(genRange, zero) : null;
 
   /**
    * Drag one of a tool's handles in the graph; `move` gets how far the pointer
@@ -1068,6 +1148,19 @@ export default function EditorPage() {
     });
   };
 
+  /** Drag the `sides` of Generate's box, as the selection box's: an edge or corner resizes it, all four move it; from 0 on and within 0–100. */
+  const dragGenerate = (e: PointerEvent<SVGRectElement>, sides: (keyof Area)[]) => {
+    const start = genBox!;
+    dragHandle(e, (dt, dp) => {
+      // Moved, it keeps its size.
+      dt = Math.max(dt, sides.includes("from") ? -start.from : -Infinity);
+      dp = clamp(dp, sides.includes("low") ? -start.low : -100, sides.includes("high") ? 100 - start.high : 100);
+      const b = { ...start };
+      for (const side of sides) b[side] = side === "from" || side === "to" ? Math.max(b[side] + dt, 0) : clamp(b[side] + dp, 0, 100);
+      setGenRange(rangeFields(spanned({ at: b.from, pos: b.low }, { at: b.to, pos: b.high }), zero));
+    });
+  };
+
   /** A grip of a tool's handle in the graph, at `x`, `y` and as wide and high as given; `square` shows it, as the selection box's corners. */
   const grip = (key: string, [gx, gy, gw, gh]: number[], cursor: string, down: (e: PointerEvent<SVGRectElement>) => void, square = false) => (
     <rect
@@ -1087,7 +1180,7 @@ export default function EditorPage() {
     const next = preview!;
     setTool(null);
     if (next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos)) return;
-    editLabel.current = `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(picked.length)}`;
+    editLabel.current = `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(kind === "generate" ? next.selected.size : picked.length)}`;
     setScript((s) => ({ ...s, actions: next.actions }));
     setSelected(next.selected);
   };
@@ -1697,15 +1790,22 @@ export default function EditorPage() {
       {advanced && <>
         <Text as="label" size="2">
           <Flex gap="2" align="center">
-            <Switch checked={fromZero} onCheckedChange={setFromZero} /> Time from 0
+            <Switch
+              checked={fromZero}
+              onCheckedChange={(on) => {
+                setFromZero(on);
+                // Generate's From and To follow, so its box stays.
+                if (genBox) setGenRange(rangeFields(genBox, on ? advanced.zero : 0));
+              }}
+            /> Time from 0
           </Flex>
         </Text>
         <Separator size="4" />
         {!tool ? <>
-          {/* The tools, on the selected points or all, each with a small graph of what it does. */}
+          {/* The tools, on the selected points or all, each with a small graph of what it does; Generate needs none. */}
           <Text size="2" weight="medium">Tools</Text>
           {TOOLS.map(({ kind, name, before, after }) => (
-            <Button key={kind} variant="soft" color="gray" disabled={!actions.length || !!placing} onClick={() => openTool(kind)} style={{ justifyContent: "flex-start" }}>
+            <Button key={kind} variant="soft" color="gray" disabled={(!actions.length && kind !== "generate") || !!placing} onClick={() => openTool(kind)} style={{ justifyContent: "flex-start" }}>
               <svg width="56" height="24" viewBox="0 0 56 24" fill="none" strokeWidth={1.5} strokeLinejoin="round">
                 <polyline points={before} style={{ stroke: "var(--gray-8)" }} />
                 <polyline points={after} stroke={LINE_COLOR} />
@@ -1780,6 +1880,62 @@ export default function EditorPage() {
                 <SegmentedControl.Item value="in">In</SegmentedControl.Item>
                 <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
               </SegmentedControl.Root>
+            </Flex>
+          </>}
+          {/* The range box's fields, then the setup: only Interval timing and constants so far. */}
+          {tool.kind === "generate" && <>
+            {([["from", "to"], ["low", "high"]] as const).map((row) => (
+              <Flex key={row[0]} gap="2">
+                {row.map((field) => (
+                  <TextField.Root
+                    key={field}
+                    type="number"
+                    step="any"
+                    aria-label={{ from: "Range start", to: "Range end", low: "Range bottom", high: "Range top" }[field]}
+                    value={genRange[field]}
+                    onChange={(e) => setGenRange({ ...genRange, [field]: e.target.value })}
+                    style={{ flex: 1, minWidth: 0 }}
+                  >
+                    <TextField.Slot side="left">{{ from: "From", to: "To", low: "Bottom", high: "Top" }[field]}</TextField.Slot>
+                    {(field === "from" || field === "to") && <TextField.Slot side="right">s</TextField.Slot>}
+                  </TextField.Root>
+                ))}
+              </Flex>
+            ))}
+            <Flex gap="2" align="center" justify="between">
+              <Text size="2">First</Text>
+              <SegmentedControl.Root size="1" value={genSetup.first} onValueChange={(v) => setGenSetup({ ...genSetup, first: v as "in" | "out" })} title="Start on Low (In) or High (Out)">
+                <SegmentedControl.Item value="in">In</SegmentedControl.Item>
+                <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
+              </SegmentedControl.Root>
+            </Flex>
+            {([["interval", "Interval", "ms"], ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([chain, label, unit]) => (
+              <TextField.Root
+                key={chain}
+                type="number"
+                step="any"
+                aria-label={label}
+                value={genSetup[chain][0].value}
+                onChange={(e) => setGenSetup({ ...genSetup, [chain]: [{ ...genSetup[chain][0], value: e.target.value }] })}
+              >
+                <TextField.Slot side="left">{label}</TextField.Slot>
+                <TextField.Slot side="right">{unit}</TextField.Slot>
+              </TextField.Root>
+            ))}
+            <Flex gap="2" align="center" justify="between">
+              {/* Of the generated points: their fastest segment and the shortest time between two. */}
+              {(() => {
+                const made = preview ? [...preview.selected].map((i) => preview.actions[i]) : [];
+                const gaps = made.slice(1).map((a, i) => [speed(made[i], a), a.at - made[i].at]);
+                return (
+                  <Text size="1" color="gray">
+                    Fastest: {gaps.length ? Math.ceil(Math.max(...gaps.map(([s]) => s))) : "—"} · Shortest: {gaps.length ? `${Math.min(...gaps.map(([, dt]) => dt))} ms` : "—"}
+                  </Text>
+                );
+              })()}
+              <Button size="1" variant="soft" color="gray" onClick={() => setGenSetup(GENERATE_DEFAULTS)}>
+                <ResetIcon /> Reset
+              </Button>
             </Flex>
           </>}
           <Flex gap="2">
@@ -2267,6 +2423,22 @@ export default function EditorPage() {
                       {grip(`${v}-line`, [left, y(shiftBox[v]) - GRIP / 2, w, GRIP], "ns-resize", (e) => dragShift(e, v))}
                       {grip(`${v}-grip`, [left + w - GRIP / 2, y(shiftBox[v]) - GRIP / 2, GRIP, GRIP], "ns-resize", (e) => dragShift(e, v), true)}
                     </g>
+                  ))}
+                </g>
+              );
+            })()}
+            {/* Generate's range box, like the selection box: its edges and corners resize it, its body moves it. */}
+            {genBox && (() => {
+              const b = { from: x(genBox.from), to: x(genBox.to), low: y(genBox.low), high: y(genBox.high) };
+              return (
+                <g>
+                  <rect x={b.from} y={b.high} width={b.to - b.from} height={b.low - b.high} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "move" }} onPointerDown={(e) => dragGenerate(e, ["from", "to", "low", "high"])} />
+                  {GRIPS.map(([h, v]) => grip(
+                    `${h}-${v}`,
+                    [h ? b[h] - GRIP / 2 : b.from, v ? b[v] - GRIP / 2 : b.high, h ? GRIP : b.to - b.from, v ? GRIP : b.low - b.high],
+                    h && v ? ((h === "from") === (v === "high") ? "nwse-resize" : "nesw-resize") : h ? "ew-resize" : "ns-resize",
+                    (e) => dragGenerate(e, [h, v].filter((s) => s !== null)),
+                    !!(h && v),
                   ))}
                 </g>
               );
