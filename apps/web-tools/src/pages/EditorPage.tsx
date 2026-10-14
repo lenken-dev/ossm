@@ -877,6 +877,8 @@ export default function EditorPage() {
 
   /** The fields of the advanced editor's Scale, in %, as typed. */
   const [scale, setScale] = useState({ time: "100", depth: "100" });
+  /** The fields of the advanced editor's Move, in depth, as typed. */
+  const [shift, setShift] = useState({ offset: "0", min: "0", max: "100" });
   /** A typed number; NaN when empty. */
   const typed = (v: string) => (v.trim() ? Number(v) : NaN);
   /** The points the advanced editor's transforms act on: the selected ones, or all. */
@@ -923,6 +925,12 @@ export default function EditorPage() {
       next.push({ at, pos: hit.has(i) ? Math.round(clamp(mid + ((a.pos - mid) * depth) / 100, 0, 100)) : a.pos });
     });
     return { actions: next, selected: moved };
+  });
+
+  /** Move the affected points' depth by `offset`, then keep it within `min`–`max`; they stay selected. */
+  const applyMove = (offset: number, min: number, max: number) => transform("Move depth of", (picked) => {
+    const hit = new Set(picked);
+    return { actions: actions.map((a, i) => (hit.has(i) ? { at: a.at, pos: Math.round(clamp(a.pos + offset, min, max)) } : a)), selected: hit };
   });
 
   const removeSelected = (verb = "Delete") => {
@@ -1542,6 +1550,34 @@ export default function EditorPage() {
           const valid = time > 0 && Number.isFinite(depth) && (time !== 100 || depth !== 100);
           return (
             <Button variant="soft" disabled={!actions.length || !!placing || !valid} onClick={() => applyScale(time, depth)}>
+              Apply
+            </Button>
+          );
+        })()}
+        <Text size="2" weight="medium">Move</Text>
+        {([["offset"], ["min", "max"]] as const).map((row) => (
+          <Flex key={row[0]} gap="2">
+            {row.map((field) => (
+              <TextField.Root
+                key={field}
+                type="number"
+                step="any"
+                aria-label={{ offset: "Depth offset", min: "Lowest depth", max: "Highest depth" }[field]}
+                value={shift[field]}
+                onChange={(e) => setShift({ ...shift, [field]: e.target.value })}
+                style={{ flex: 1, minWidth: 0 }}
+              >
+                <TextField.Slot side="left">{{ offset: "Offset", min: "Min", max: "Max" }[field]}</TextField.Slot>
+              </TextField.Root>
+            ))}
+          </Flex>
+        ))}
+        {(() => {
+          const [offset, min, max] = [typed(shift.offset), typed(shift.min), typed(shift.max)];
+          // Limits outside the depths are refused rather than quietly clamped.
+          const valid = Number.isFinite(offset) && min >= 0 && max <= 100 && min <= max;
+          return (
+            <Button variant="soft" disabled={!actions.length || !!placing || !valid} onClick={() => applyMove(offset, min, max)}>
               Apply
             </Button>
           );
