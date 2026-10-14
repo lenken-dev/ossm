@@ -105,6 +105,12 @@ const EDGE_SPEED = 1.5;
 /** Height of the minimap that shows the whole script below the graph, in px. */
 const MINIMAP_HEIGHT = 40;
 
+/** Height of the marker lane below the graph, in px. */
+const LANE_HEIGHT = 24;
+/** Bookmark colours, Radix scales; a bookmark's name picks one, so bookmarks named alike match. */
+const MARKER_COLORS = ["blue", "green", "orange", "purple", "cyan", "crimson", "amber", "teal"];
+const markerColor = (name: string) => MARKER_COLORS[Math.abs([...name].reduce((h, c) => (h * 31 + c.codePointAt(0)!) | 0, 0)) % MARKER_COLORS.length];
+
 /** Default and smallest height of the reference video, in px. */
 const VIDEO_HEIGHT = 300;
 const VIDEO_MIN_HEIGHT = 80;
@@ -200,6 +206,8 @@ export default function EditorPage() {
   const anchor = useRef<number | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  /** The graph and the marker lane, which scroll and zoom alike. */
+  const timeRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Re-rendered on a theme change, so the canvas picks up its colours. Radix's own context, as the theme's colours change a render after the app's appearance does.
   useThemeContext();
@@ -289,7 +297,7 @@ export default function EditorPage() {
 
   // The wheel scrolls through time, with Ctrl it zooms around the pointer. Not passive, to keep the page from scrolling.
   useEffect(() => {
-    const el = boxRef.current!;
+    const el = timeRef.current!;
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = el.getBoundingClientRect();
@@ -1185,6 +1193,13 @@ export default function EditorPage() {
     [kept, selected, width, total],
   );
 
+  /** Whether the time from `from` to `to` is in view, to draw only the markers there. */
+  const inView = (from: number, to: number) => to >= view.from && from <= view.from + view.span;
+
+  /** Which chapters are drawn light: those touching a dark one before them, so only a run of touching chapters alternates. */
+  let lightBefore = false;
+  const light = chapters.map((c, i) => (lightBefore = i > 0 && chapters[i - 1].end === c.start && !lightBefore));
+
   /** The selected point when there is just one, labelled with its time and position. */
   const only = selected.size === 1 ? [...selected][0] : null;
 
@@ -1462,128 +1477,183 @@ export default function EditorPage() {
           </Button>
         )}
       </Flex>
-      <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
-        <svg
-          width={width}
-          height={height}
-          onPointerDown={add}
-          onPointerMove={(e) => {
-            // Points are drawn on the canvas, so the cursor shows when one can be grabbed; placing, a click places instead.
-            if (!placing) {
-              e.currentTarget.style.cursor = pointUnder(e) === null ? "crosshair" : "grab";
-              return;
-            }
-            // Pasted points follow the pointer; moved ones stay where their box is dragged.
-            if (!lifted) setPlaceAt(pointerAt(e));
-            setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
-          }}
-          onPointerLeave={() => !lifted && setPlaceAt(null)}
-          style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
-        >
-          {[0, 50, 100].map((pos) => (
-            <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
-          ))}
-          {timeTicks(view.from / 1000, (view.from + view.span) / 1000).map((t) => (
-            <g key={t}>
-              <line x1={x(t * 1000)} x2={x(t * 1000)} y1={0} y2={plotHeight} style={{ stroke: "var(--gray-a4)" }} />
-              <text x={x(t * 1000)} y={height - 6} textAnchor="middle" fontSize={11} style={{ fill: "var(--gray-11)" }}>
-                {formatTimeTick(t)}
-              </text>
-            </g>
-          ))}
-          {videoUrl && (
-            <g onPointerDown={dragPlayhead} style={{ cursor: "ew-resize" }}>
-              {/* A wider, invisible line to grab. */}
-              <line x1={x(time)} x2={x(time)} y1={0} y2={plotHeight} strokeWidth={12} stroke="transparent" />
-              <line x1={x(time)} x2={x(time)} y1={0} y2={plotHeight} strokeWidth={2} style={{ stroke: "var(--gray-12)" }} />
-              <path d={`M${x(time) - 6},0 h12 l-6,8 z`} style={{ fill: "var(--gray-12)" }} />
-            </g>
-          )}
-          {/* The time the pasted points cover: replacing, its points go and show red; inserting, the later points move past it. */}
-          {ghost && (
-            <rect
-              x={x(ghost[0].at)}
-              width={Math.max(x(ghost[ghost.length - 1].at) - x(ghost[0].at), 1)}
-              y={0}
-              height={plotHeight}
-              style={{ fill: inserting ? "var(--green-a3)" : "var(--red-a3)", pointerEvents: "none" }}
-            />
-          )}
-          {/* Kept in the SVG, so the line and points stay between what is drawn under and over them. */}
-          <foreignObject width={width} height={height} style={{ pointerEvents: "none" }}>
-            <canvas ref={canvasRef} style={{ display: "block", width, height }} />
-          </foreignObject>
-          {/* The copied points' original lowest and highest depth, what Ctrl keeps them at. */}
-          {ghost && placing && [Math.min(...placing.map((a) => a.pos)), Math.max(...placing.map((a) => a.pos))].map((pos, i) => (
-            <line key={i} x1={0} x2={width} y1={y(pos)} y2={y(pos)} strokeDasharray="6 4" style={{ stroke: LINE_COLOR, opacity: 0.6, pointerEvents: "none" }} />
-          ))}
-          {/* While placing, a click anywhere places, over points and the playhead alike; moving, outside the time they cover. */}
-          {placing && (
-            // No menu for Ctrl+click, which is a right-click on a Mac.
-            <rect width={width} height={height} fill="transparent" style={{ cursor: lifted ? "default" : "copy" }} onPointerDown={place} onContextMenu={(e) => e.preventDefault()} />
-          )}
-          {/* Moving, the time the points cover is dragged; at least a grip wide, for a single point. */}
-          {lifted && ghost && (() => {
-            const [from, to] = [x(ghost[0].at), x(ghost[ghost.length - 1].at)];
-            const w = Math.max(to - from, 2 * GRIP);
-            return <rect x={(from + to - w) / 2} width={w} height={plotHeight} fill="transparent" style={{ cursor: "move" }} onPointerDown={dragLifted} />;
-          })()}
-          {edges && (
-            <g>
-              <rect
-                x={edges.from}
-                y={edges.high}
-                width={edges.to - edges.from}
-                height={edges.low - edges.high}
-                strokeDasharray="4 2"
-                style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", cursor: "move", pointerEvents: boxMode && !placing ? undefined : "none" }}
-                onPointerDown={(e) => editBox(e, ["from", "to", "low", "high"])}
-              />
-              {/* Selecting by time, only the edges in time can be dragged. */}
-              {boxMode && !placing && GRIPS.filter(([, v]) => !selectByTime || !v).map(([h, v]) => (
-                <rect
-                  key={`${h}-${v}`}
-                  x={h ? edges[h] - GRIP / 2 : edges.from}
-                  width={h ? GRIP : edges.to - edges.from}
-                  y={v ? edges[v] - GRIP / 2 : edges.high}
-                  height={v ? GRIP : edges.low - edges.high}
-                  style={h && v
-                    ? { fill: "var(--color-panel-solid)", stroke: "var(--accent-9)", cursor: (h === "from") === (v === "high") ? "nwse-resize" : "nesw-resize" }
-                    : { fill: "transparent", cursor: h ? "ew-resize" : "ns-resize" }}
-                  onPointerDown={(e) => editBox(e, [h, v].filter((s) => s !== null))}
-                />
-              ))}
-            </g>
-          )}
-          {only !== null && shown[only] && (
-            <text
-              x={x(shown[only].at)}
-              y={y(shown[only].pos) + (shown[only].pos > 80 ? 22 : -12)}
-              textAnchor="middle"
-              fontSize={12}
-              style={{ fill: "var(--gray-12)" }}
-            >
-              {formatScriptTime(shown[only].at / 1000, 2)} · {Math.round(shown[only].pos)}
-            </text>
-          )}
-        </svg>
-        {extenders.map(([label, Icon, sides, , left, top]) => (
-          <IconButton
-            key={label}
-            size="1"
-            variant="surface"
-            aria-label={label}
-            title={label}
-            style={{ position: "absolute", left, top }}
-            onClick={() => selectIn({ ...box!, ...sides })}
+      {/* The graph with the marker lane under it, touching, so the markers' lines meet their flags; the wheel works on both. */}
+      <Flex
+        ref={timeRef}
+        direction="column"
+        flexGrow="1"
+        // Its own least height, so it shrinks with the graph instead of keeping the graph's measured one.
+        minHeight={`${120 + LANE_HEIGHT}px`}
+      >
+        <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: "6px 6px 0 0", background: "var(--gray-a2)", overflow: "hidden" }}>
+          <svg
+            width={width}
+            height={height}
+            onPointerDown={add}
+            onPointerMove={(e) => {
+              // Points are drawn on the canvas, so the cursor shows when one can be grabbed; placing, a click places instead.
+              if (!placing) {
+                e.currentTarget.style.cursor = pointUnder(e) === null ? "crosshair" : "grab";
+                return;
+              }
+              // Pasted points follow the pointer; moved ones stay where their box is dragged.
+              if (!lifted) setPlaceAt(pointerAt(e));
+              setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
+            }}
+            onPointerLeave={() => !lifted && setPlaceAt(null)}
+            style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
           >
-            <Icon />
-          </IconButton>
-        ))}
-        {/* As in the player: 100 (top) is the shallow end, out towards home. */}
-        <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
-        <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
-      </Box>
+            {[0, 50, 100].map((pos) => (
+              <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
+            ))}
+            {timeTicks(view.from / 1000, (view.from + view.span) / 1000).map((t) => (
+              <g key={t}>
+                <line x1={x(t * 1000)} x2={x(t * 1000)} y1={0} y2={plotHeight} style={{ stroke: "var(--gray-a4)" }} />
+                <text x={x(t * 1000)} y={height - 6} textAnchor="middle" fontSize={11} style={{ fill: "var(--gray-11)" }}>
+                  {formatTimeTick(t)}
+                </text>
+              </g>
+            ))}
+            {/* Faint lines from the markers in the lane up through the graph. */}
+            {chapters.flatMap((c) => [c.start, c.end]).filter((at) => inView(at, at)).map((at, i) => (
+              <line key={`c${i}`} x1={x(at)} x2={x(at)} y1={0} y2={height} style={{ stroke: "var(--gray-a6)" }} />
+            ))}
+            {bookmarks.filter((b) => inView(b.time, b.time)).map((b, i) => (
+              <line key={`b${i}`} x1={x(b.time)} x2={x(b.time)} y1={0} y2={height} style={{ stroke: `var(--${markerColor(b.name)}-a6)` }} />
+            ))}
+            {videoUrl && (
+              <g onPointerDown={dragPlayhead} style={{ cursor: "ew-resize" }}>
+                {/* A wider, invisible line to grab. */}
+                <line x1={x(time)} x2={x(time)} y1={0} y2={plotHeight} strokeWidth={12} stroke="transparent" />
+                <line x1={x(time)} x2={x(time)} y1={0} y2={plotHeight} strokeWidth={2} style={{ stroke: "var(--gray-12)" }} />
+                <path d={`M${x(time) - 6},0 h12 l-6,8 z`} style={{ fill: "var(--gray-12)" }} />
+              </g>
+            )}
+            {/* The time the pasted points cover: replacing, its points go and show red; inserting, the later points move past it. */}
+            {ghost && (
+              <rect
+                x={x(ghost[0].at)}
+                width={Math.max(x(ghost[ghost.length - 1].at) - x(ghost[0].at), 1)}
+                y={0}
+                height={plotHeight}
+                style={{ fill: inserting ? "var(--green-a3)" : "var(--red-a3)", pointerEvents: "none" }}
+              />
+            )}
+            {/* Kept in the SVG, so the line and points stay between what is drawn under and over them. */}
+            <foreignObject width={width} height={height} style={{ pointerEvents: "none" }}>
+              <canvas ref={canvasRef} style={{ display: "block", width, height }} />
+            </foreignObject>
+            {/* The copied points' original lowest and highest depth, what Ctrl keeps them at. */}
+            {ghost && placing && [Math.min(...placing.map((a) => a.pos)), Math.max(...placing.map((a) => a.pos))].map((pos, i) => (
+              <line key={i} x1={0} x2={width} y1={y(pos)} y2={y(pos)} strokeDasharray="6 4" style={{ stroke: LINE_COLOR, opacity: 0.6, pointerEvents: "none" }} />
+            ))}
+            {/* While placing, a click anywhere places, over points and the playhead alike; moving, outside the time they cover. */}
+            {placing && (
+              // No menu for Ctrl+click, which is a right-click on a Mac.
+              <rect width={width} height={height} fill="transparent" style={{ cursor: lifted ? "default" : "copy" }} onPointerDown={place} onContextMenu={(e) => e.preventDefault()} />
+            )}
+            {/* Moving, the time the points cover is dragged; at least a grip wide, for a single point. */}
+            {lifted && ghost && (() => {
+              const [from, to] = [x(ghost[0].at), x(ghost[ghost.length - 1].at)];
+              const w = Math.max(to - from, 2 * GRIP);
+              return <rect x={(from + to - w) / 2} width={w} height={plotHeight} fill="transparent" style={{ cursor: "move" }} onPointerDown={dragLifted} />;
+            })()}
+            {edges && (
+              <g>
+                <rect
+                  x={edges.from}
+                  y={edges.high}
+                  width={edges.to - edges.from}
+                  height={edges.low - edges.high}
+                  strokeDasharray="4 2"
+                  style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", cursor: "move", pointerEvents: boxMode && !placing ? undefined : "none" }}
+                  onPointerDown={(e) => editBox(e, ["from", "to", "low", "high"])}
+                />
+                {/* Selecting by time, only the edges in time can be dragged. */}
+                {boxMode && !placing && GRIPS.filter(([, v]) => !selectByTime || !v).map(([h, v]) => (
+                  <rect
+                    key={`${h}-${v}`}
+                    x={h ? edges[h] - GRIP / 2 : edges.from}
+                    width={h ? GRIP : edges.to - edges.from}
+                    y={v ? edges[v] - GRIP / 2 : edges.high}
+                    height={v ? GRIP : edges.low - edges.high}
+                    style={h && v
+                      ? { fill: "var(--color-panel-solid)", stroke: "var(--accent-9)", cursor: (h === "from") === (v === "high") ? "nwse-resize" : "nesw-resize" }
+                      : { fill: "transparent", cursor: h ? "ew-resize" : "ns-resize" }}
+                    onPointerDown={(e) => editBox(e, [h, v].filter((s) => s !== null))}
+                  />
+                ))}
+              </g>
+            )}
+            {only !== null && shown[only] && (
+              <text
+                x={x(shown[only].at)}
+                y={y(shown[only].pos) + (shown[only].pos > 80 ? 22 : -12)}
+                textAnchor="middle"
+                fontSize={12}
+                style={{ fill: "var(--gray-12)" }}
+              >
+                {formatScriptTime(shown[only].at / 1000, 2)} · {Math.round(shown[only].pos)}
+              </text>
+            )}
+          </svg>
+          {extenders.map(([label, Icon, sides, , left, top]) => (
+            <IconButton
+              key={label}
+              size="1"
+              variant="surface"
+              aria-label={label}
+              title={label}
+              style={{ position: "absolute", left, top }}
+              onClick={() => selectIn({ ...box!, ...sides })}
+            >
+              <Icon />
+            </IconButton>
+          ))}
+          {/* As in the player: 100 (top) is the shallow end, out towards home. */}
+          <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
+          <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
+        </Box>
+        {/* The marker lane, in the graph's time: chapters as bands, touching ones in alternating shades, bookmarks as flags over them; names cut off where there is no room. */}
+        <Box position="relative" flexShrink="0" height={`${LANE_HEIGHT}px`} style={{ borderRadius: "0 0 6px 6px", background: "var(--gray-a2)", overflow: "hidden", userSelect: "none" }}>
+          {chapters.map((c, i) => {
+            if (!inView(c.start, c.end)) return null;
+            // Kept in view, so the name of a chapter that starts before it still shows; it ends at the first flag on it, which goes over it.
+            const left = Math.max(x(c.start), 0);
+            const flag = bookmarks.find((b) => x(b.time) >= left && b.time < c.end);
+            return (
+              <Box key={i} position="absolute" height="100%" style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)" }}>
+                <Text as="div" size="1" truncate style={{ maxWidth: flag && x(flag.time) - left, boxSizing: "border-box", lineHeight: `${LANE_HEIGHT}px`, padding: "0 4px" }}>
+                  {c.name}
+                </Text>
+              </Box>
+            );
+          })}
+          {/* Each flag's name runs up to the next one; they are sorted by time. */}
+          {bookmarks.map((b, i) => inView(b.time, b.time) && (
+            <Text
+              key={i}
+              as="div"
+              size="1"
+              truncate
+              style={{
+                position: "absolute",
+                left: x(b.time),
+                maxWidth: bookmarks[i + 1] && x(bookmarks[i + 1].time) - x(b.time),
+              boxSizing: "border-box",
+                height: "100%",
+                lineHeight: `${LANE_HEIGHT}px`,
+                padding: "0 4px",
+                borderLeft: `2px solid var(--${markerColor(b.name)}-9)`,
+                // Opaque, so it hides what it covers.
+              background: `linear-gradient(var(--${markerColor(b.name)}-a4), var(--${markerColor(b.name)}-a4)), var(--color-panel-solid)`,
+              }}
+            >
+              {b.name}
+            </Text>
+          ))}
+        </Box>
+      </Flex>
       {minimap ? (
         <svg
           width={width}
@@ -1592,6 +1662,9 @@ export default function EditorPage() {
           onPointerDown={dragMinimap}
           style={{ display: "block", flexShrink: 0, borderRadius: 6, background: "var(--gray-a2)", touchAction: "none", userSelect: "none" }}
         >
+          {chapters.map((c, i) => (
+            <rect key={i} x={minimapX(c.start)} width={minimapX(c.end) - minimapX(c.start)} height={MINIMAP_HEIGHT} style={{ fill: light[i] ? "var(--gray-a3)" : "var(--gray-a4)" }} />
+          ))}
           {/* ponytail: the whole script as one polyline; fine for thousands of points, thin it out if a long script lags. */}
           <polyline
             points={minimapLine}
@@ -1608,6 +1681,9 @@ export default function EditorPage() {
             strokeLinejoin="round"
             style={{ stroke: "var(--gray-12)", pointerEvents: "none" }}
           />
+          {bookmarks.map((b, i) => (
+            <line key={i} x1={minimapX(b.time)} x2={minimapX(b.time)} y1={0} y2={6} strokeWidth={2} style={{ stroke: `var(--${markerColor(b.name)}-9)` }} />
+          ))}
           {videoUrl && <line x1={minimapX(time)} x2={minimapX(time)} y1={0} y2={MINIMAP_HEIGHT} style={{ stroke: "var(--gray-12)" }} />}
           <rect
             x={minimapX(view.from)}
