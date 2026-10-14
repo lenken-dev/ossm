@@ -820,7 +820,7 @@ export default function EditorPage() {
   };
 
   // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points, Escape none, Delete (or Backspace, the Mac's
-  // delete key) removes the selected ones or marker; B adds a bookmark. Not while typing in a field.
+  // delete key) removes the selected ones or marker; F2 renames the marker, B adds a bookmark. Not while typing in a field.
   useWindowEvent("keydown", (e) => {
     if (e.target instanceof HTMLInputElement) return;
     const key = e.key.toLowerCase();
@@ -854,6 +854,9 @@ export default function EditorPage() {
     } else if ((e.key === "Delete" || e.key === "Backspace") && marker) {
       e.preventDefault();
       removeMarker(marker);
+    } else if (e.key === "F2" && marker) {
+      e.preventDefault();
+      rename(marker);
     } else if (key === "b" && !e.ctrlKey && !e.metaKey) {
       // At the playhead, or without media under the pointer.
       const at = videoUrl ? Math.round(time) : hoverAt.current;
