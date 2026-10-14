@@ -20,9 +20,13 @@ interface Script {
   actions: Action[];
   /** The opened file without its actions, saved with them so keys the editor does not know stay; missing in scripts kept before markers. */
   file?: Record<string, unknown>;
-  chapters?: Chapter[];
-  bookmarks?: Bookmark[];
+  chapters: Chapter[];
+  bookmarks: Bookmark[];
 }
+
+/** What an edit changes, undo restores and saving keeps: the points and markers. */
+type Content = Pick<Script, "actions" | "chapters" | "bookmarks">;
+const sameContent = (a: Content, b: Content) => a.actions === b.actions && a.chapters === b.chapters && a.bookmarks === b.bookmarks;
 
 /** A named time range, in ms, from `metadata.chapters`; other properties of the loaded one are kept. */
 interface Chapter {
@@ -70,7 +74,7 @@ const GRIP = 8;
 /** Size of the buttons in the selection box that extend it, in px. */
 const EXTEND = 24;
 
-const EMPTY: Script = { name: "untitled", actions: [] };
+const EMPTY: Script = { name: "untitled", actions: [], chapters: [], bookmarks: [] };
 
 /** Copies kept in the clipboard history. */
 const HISTORY_SIZE = 10;
@@ -152,6 +156,9 @@ function readMarkers(file: Record<string, unknown>, end: number) {
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
   const [script, setScript] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
+  // Scripts kept before markers have none; filled in on the loaded object, once, so they keep their identity.
+  script.chapters ??= [];
+  script.bookmarks ??= [];
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
   /** The view for drags, which read it between renders as they scroll it. */
   const viewRef = useRef(view);
@@ -297,7 +304,7 @@ export default function EditorPage() {
     return () => el.removeEventListener("wheel", wheel);
   }, [setView, maxSpan]);
 
-  const { actions } = script;
+  const { actions, chapters, bookmarks } = script;
   /**
    * The points that stay while placing. Closing the gap, the time from the
    * first to the last lifted point goes, with any other points in it, and the
@@ -311,41 +318,43 @@ export default function EditorPage() {
     return [...actions.slice(0, lo), ...actions.slice(hi + 1).map((a) => ({ at: a.at - span, pos: a.pos }))];
   }, [actions, lifted, closeGap]);
 
-  /** Undo history: the points after each edit, the first as loaded; `index` is the current one. */
-  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, label: "Start" }], index: 0 }));
+  /** Undo history: the points and markers after each edit, the first as loaded; `index` is the current one. */
+  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, chapters, bookmarks, label: "Start" }], index: 0 }));
   /** Set while a drag runs, so the whole drag becomes one edit when it ends. */
   const dragging = useRef(false);
   const [dragEnds, setDragEnds] = useState(0);
   /** What the next edit is called in the undo history. */
   const editLabel = useRef<string | null>(null);
 
-  // Every change of the points, except by undo and redo, is an edit.
+  // Every change of the points or markers, except by undo and redo, is an edit.
   useEffect(() => {
     if (dragging.current) return;
     const label = editLabel.current ?? "Edit";
     editLabel.current = null;
     setTimeline((tl) => {
-      if (tl.states[tl.index].actions === actions) return tl;
-      const states = [...tl.states.slice(0, tl.index + 1), { actions, label }].slice(-UNDO_SIZE - 1);
+      if (sameContent(tl.states[tl.index], script)) return tl;
+      const states = [...tl.states.slice(0, tl.index + 1), { actions, chapters, bookmarks, label }].slice(-UNDO_SIZE - 1);
       return { states, index: states.length - 1 };
     });
-  }, [actions, dragEnds]);
+  }, [actions, chapters, bookmarks, dragEnds]);
 
-  /** Go to the points after edit `index` of the undo history. */
+  /** Go to the points and markers after edit `index` of the undo history. */
   const jump = (index: number) => {
+    const { actions, chapters, bookmarks } = timeline.states[index];
     setTimeline((tl) => ({ ...tl, index }));
-    setScript((s) => ({ ...s, actions: timeline.states[index].actions }));
+    setScript((s) => ({ ...s, actions, chapters, bookmarks }));
     setSelected(new Set());
     setBox(null);
     setPlacing(null);
     setLifted(null);
   };
-  /** The points as last saved, opened or started anew; unknown after a reload with unsaved changes. */
+  /** The points and markers as last saved, opened or started anew; unknown after a reload with unsaved changes. */
   const [unsaved, setUnsaved] = usePersistedState("ossm:editorUnsaved", false, localStorage);
-  const [saved, setSaved] = useState<Action[] | null>(() => (unsaved ? null : actions));
-  useEffect(() => setUnsaved(actions !== saved), [actions, saved, setUnsaved]);
+  const [saved, setSaved] = useState<Content | null>(() => (unsaved ? null : script));
+  const changed = !saved || !sameContent(saved, script);
+  useEffect(() => setUnsaved(changed), [changed, setUnsaved]);
   useWindowEvent("beforeunload", (e) => {
-    if (actions !== saved) e.preventDefault();
+    if (changed) e.preventDefault();
   });
   const canUndo = timeline.index > 0;
   const canRedo = timeline.index < timeline.states.length - 1;
@@ -880,9 +889,10 @@ export default function EditorPage() {
       setSelected(new Set());
       editLabel.current = `Open ${file.name}`;
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
-      setSaved(opened);
       const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, videoDuration));
-      setScript({ name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers });
+      const next = { name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers };
+      setSaved(next);
+      setScript(next);
       setView((v) => ({ ...v, from: 0 }));
       setError(null);
     } catch (e) {
@@ -891,7 +901,7 @@ export default function EditorPage() {
   };
 
   const save = () => {
-    const { file = {}, chapters = [], bookmarks = [] } = script;
+    const { file = {} } = script;
     // Into the opened file's metadata; the lists only when there are markers or the file had them.
     const metadata = { ...(file.metadata as Record<string, unknown> | undefined) };
     if (chapters.length || "chapters" in metadata) {
@@ -907,7 +917,7 @@ export default function EditorPage() {
     });
     a.click();
     URL.revokeObjectURL(a.href);
-    setSaved(actions);
+    setSaved(script);
   };
 
   /** The points being placed where they would go. */
@@ -1060,11 +1070,11 @@ export default function EditorPage() {
           variant="soft"
           style={{ flex: 1 }}
           onClick={() => {
-            if (actions.length && !confirm("Discard the current script?")) return;
+            if ((actions.length || chapters.length || bookmarks.length) && !confirm("Discard the current script?")) return;
             setLifted(null);
             setSelected(new Set());
             editLabel.current = "New script";
-            setSaved(EMPTY.actions);
+            setSaved(EMPTY);
             setScript(EMPTY);
             setView((v) => ({ ...v, from: 0 }));
           }}
@@ -1323,7 +1333,9 @@ export default function EditorPage() {
                     <HoverCard.Content side="right" size="1" maxWidth="232px">
                       <Flex direction="column" gap="1">
                         <Text size="1">{state.label}</Text>
-                        {k > 0 && <PreviewGraph pieces={diffPieces(timeline.states[k - 1].actions, state.actions)} />}
+                        {k > 0 && (timeline.states[k - 1].actions === state.actions
+                          ? <Text size="1" color="gray">Markers changed</Text>
+                          : <PreviewGraph pieces={diffPieces(timeline.states[k - 1].actions, state.actions)} />)}
                       </Flex>
                     </HoverCard.Content>
                   </HoverCard.Root>
