@@ -32,8 +32,8 @@ path = "src/bin/seeed-xiao.rs"
 
 [dependencies]
 status-indicator = { path = "../../crates/status-indicator", optional = true }
-ossm = { path = "../../ossm" }
-ossm-esp = { path = "../../ossm-esp", features = ["esp32s3"] }
+ossm = { path = "../../core" }
+ossm-esp = { path = "../../esp", features = ["esp32s3"] }
 pattern-engine = { path = "../../crates/pattern-engine" }
 ossm-m5-remote = { path = "../../crates/ossm-m5-remote", features = [
     "esp32s3",
@@ -82,7 +82,7 @@ portable-atomic = { version = "1", default-features = false }
 static_cell = "2.1.1"
 
 [build-dependencies]
-ossm-esp-build-support = { path = "../../ossm-esp/build-support" }
+ossm-esp-build-support = { path = "../../esp/build-support" }
 
 [profile.dev]
 opt-level = "s"

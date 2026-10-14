@@ -17,9 +17,9 @@ function wasmHotReload(): Plugin {
       const rustDirs = [
         "bindings/web-simulator/src",
         "bindings/trajectory-recorder/src",
-        "ossm/src",
-        "drivers/sim-motor/src",
-        "crates/pattern-engine/src",
+        "ossm/core/src",
+        "ossm/drivers/sim-motor/src",
+        "ossm/crates/pattern-engine/src",
       ].map((d) => path.resolve(workspaceRoot, d));
 
       for (const dir of rustDirs) {

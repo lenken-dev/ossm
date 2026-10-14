@@ -69,28 +69,28 @@ impl Variant {
     fn spec(self) -> VariantSpec {
         match self {
             Variant::OssmAlt => VariantSpec {
-                workspace: "firmware/esp32s3",
+                workspace: "ossm/firmware/esp32s3",
                 bin: "ossm-alt",
                 target: "xtensa-esp32s3-none-elf",
                 motor: Motor::Rs485,
                 indicator: Indicator::Ws2812b,
             },
             Variant::Waveshare => VariantSpec {
-                workspace: "firmware/esp32s3",
+                workspace: "ossm/firmware/esp32s3",
                 bin: "waveshare",
                 target: "xtensa-esp32s3-none-elf",
                 motor: Motor::Rs485,
                 indicator: Indicator::None,
             },
             Variant::SeeedXiao => VariantSpec {
-                workspace: "firmware/esp32s3",
+                workspace: "ossm/firmware/esp32s3",
                 bin: "seeed-xiao",
                 target: "xtensa-esp32s3-none-elf",
                 motor: Motor::Rs485,
                 indicator: Indicator::None,
             },
             Variant::OssmReference => VariantSpec {
-                workspace: "firmware/esp32",
+                workspace: "ossm/firmware/esp32",
                 bin: "ossm-reference",
                 target: "xtensa-esp32-none-elf",
                 motor: Motor::Stepdir,
@@ -146,7 +146,7 @@ impl VariantSpec {
 }
 
 fn workspace_root() -> Result<PathBuf> {
-    // ossm-flash lives at <root>/crates/ossm-flash; CARGO_MANIFEST_DIR points there.
+    // ossm-flash lives at <root>/tools/ossm-flash; CARGO_MANIFEST_DIR points there.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest
         .ancestors()
