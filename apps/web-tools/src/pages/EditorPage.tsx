@@ -1653,17 +1653,18 @@ export default function EditorPage() {
           </Button>
         )}
       </Flex>
-      {/* The graph with the marker lane under it, touching, so the markers' lines meet their flags; the wheel works on both. */}
+      {/* The graph with the marker lane under it; the wheel works on both. */}
       <Flex
         ref={timeRef}
         direction="column"
+        gap="3"
         flexGrow="1"
         // Its own least height, so it shrinks with the graph instead of keeping the graph's measured one.
-        minHeight={`${120 + LANE_HEIGHT}px`}
+        minHeight={`${120 + 12 + LANE_HEIGHT}px`}
         onPointerMove={(e) => void (hoverAt.current = Math.max(pointerAt(e).at, 0))}
         onPointerLeave={() => void (hoverAt.current = null)}
       >
-        <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: "6px 6px 0 0", background: "var(--gray-a2)", overflow: "hidden" }}>
+        <Box ref={boxRef} position="relative" flexGrow="1" minHeight="120px" style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
           <svg
             width={width}
             height={height}
@@ -1681,6 +1682,10 @@ export default function EditorPage() {
             onPointerLeave={() => !lifted && setPlaceAt(null)}
             style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
           >
+            {/* The chapters shaded behind the plot, as in the minimap. */}
+            {chapters.map((c, i) => inView(c.start, c.end) && (
+              <rect key={i} x={x(c.start)} width={x(c.end) - x(c.start)} height={plotHeight} style={{ fill: light[i] ? "var(--gray-a3)" : "var(--gray-a4)" }} />
+            ))}
             {[0, 50, 100].map((pos) => (
               <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
             ))}
@@ -1692,10 +1697,7 @@ export default function EditorPage() {
                 </text>
               </g>
             ))}
-            {/* Faint lines from the markers in the lane up through the graph. */}
-            {chapters.flatMap((c) => [c.start, c.end]).filter((at) => inView(at, at)).map((at, i) => (
-              <line key={`c${i}`} x1={x(at)} x2={x(at)} y1={0} y2={height} style={{ stroke: "var(--gray-a6)" }} />
-            ))}
+            {/* Faint lines from the bookmarks in the lane up through the graph. */}
             {bookmarks.filter((b) => inView(b.time, b.time)).map((b, i) => (
               <line key={`b${i}`} x1={x(b.time)} x2={x(b.time)} y1={0} y2={height} style={{ stroke: `var(--${markerColor(b.name)}-a6)` }} />
             ))}
@@ -1799,7 +1801,7 @@ export default function EditorPage() {
           flexShrink="0"
           height={`${LANE_HEIGHT}px`}
           onPointerDown={laneDown}
-          style={{ borderRadius: "0 0 6px 6px", background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair" }}
+          style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair" }}
         >
           {chapters.map((c, i) => {
             if (!inView(c.start, c.end)) return null;
