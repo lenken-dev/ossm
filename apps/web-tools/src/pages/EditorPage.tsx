@@ -1675,6 +1675,21 @@ export default function EditorPage() {
           ))}
           {/* Speeds without a unit, as depth per second means little to most. */}
           {tool.kind === "speed" && <>
+            {/* From 1 to the fastest, mirrored by the field; a typed value past its top leaves it there. Without a segment to slow, only the readout. */}
+            {(() => {
+              const top = Math.ceil(tool.fastest ?? 0);
+              if (top < 1) return <Text size="1" color="gray">Fastest: {tool.fastest === null ? "—" : 0}</Text>;
+              const typedLimit = typed(maxSpeed);
+              return (
+                <Box>
+                  <Slider aria-label="Max speed" min={1} max={top} step={1} value={[Number.isFinite(typedLimit) ? clamp(typedLimit, 1, top) : top]} onValueChange={([v]) => setMaxSpeed(String(v))} />
+                  <Flex justify="between" mt="1">
+                    <Text size="1" color="gray">1</Text>
+                    <Text size="1" color="gray">Fastest: {top}</Text>
+                  </Flex>
+                </Box>
+              );
+            })()}
             <Flex gap="2" align="center">
               <TextField.Root type="number" min={0} step="any" aria-label="Max speed" value={maxSpeed} onChange={(e) => setMaxSpeed(e.target.value)} style={{ flex: 1, minWidth: 0 }}>
                 <TextField.Slot side="left">Max</TextField.Slot>
@@ -1684,7 +1699,6 @@ export default function EditorPage() {
                 <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
               </SegmentedControl.Root>
             </Flex>
-            <Text size="1" color="gray">Fastest: {tool.fastest === null ? "—" : Math.round(tool.fastest)}</Text>
           </>}
           <Flex gap="2">
             <Button disabled={!preview} onClick={applyTool} style={{ flex: 1 }}>Apply</Button>
