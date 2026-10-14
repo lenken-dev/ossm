@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ClipboardIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ClipboardIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -145,6 +145,85 @@ const afterTime = bisector((a: Action) => a.at).right;
 /** The speed from `a` to `b`, in depth per second. */
 const speed = (a: Action, b: Action) => (Math.abs(b.pos - a.pos) / (b.at - a.at)) * 1000;
 const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
+/** A typed number; NaN when empty. */
+const typed = (v: string) => (v.trim() ? Number(v) : NaN);
+
+/** A transform's result: the new points, and the indices of the affected ones among them. */
+interface Transformed {
+  actions: Action[];
+  selected: Set<number>;
+}
+
+/**
+ * Scale the points `picked` of `actions` by `time` and `depth` %. In time from
+ * the first, which stays: the points up to the last stretch along, those in
+ * between too so the order stays, and later ones move by the change in length;
+ * points landing on the same ms merge, the later kept. In depth around the
+ * middle of their range, within 0–100; negative flips.
+ */
+function scaled(actions: Action[], picked: number[], time: number, depth: number): Transformed {
+  const hit = new Set(picked);
+  const [i0, i1] = [picked[0], picked[picked.length - 1]];
+  const t0 = actions[i0].at;
+  const stretched = (at: number) => Math.round(t0 + ((at - t0) * time) / 100);
+  const shift = stretched(actions[i1].at) - actions[i1].at;
+  const depths = picked.map((i) => actions[i].pos);
+  const mid = (Math.min(...depths) + Math.max(...depths)) / 2;
+  const next: Action[] = [];
+  const moved = new Set<number>();
+  actions.forEach((a, i) => {
+    const at = i < i0 ? a.at : i <= i1 ? stretched(a.at) : a.at + shift;
+    if (next[next.length - 1]?.at === at) {
+      next.pop();
+      moved.delete(next.length);
+    }
+    if (hit.has(i)) moved.add(next.length);
+    next.push({ at, pos: hit.has(i) ? Math.round(clamp(mid + ((a.pos - mid) * depth) / 100, 0, 100)) : a.pos });
+  });
+  return { actions: next, selected: moved };
+}
+
+/** Shift the depth of the points `picked` of `actions` by `offset`, then keep it within `min`–`max`. */
+function shifted(actions: Action[], picked: number[], offset: number, min: number, max: number): Transformed {
+  const hit = new Set(picked);
+  return { actions: actions.map((a, i) => (hit.has(i) ? { at: a.at, pos: Math.round(clamp(a.pos + offset, min, max)) } : a)), selected: hit };
+}
+
+/**
+ * Slow the segments of `actions` touching the points `picked` to `limit`,
+ * moving only those points and only one way: with `out` up, else down, each as
+ * little as it takes. A pass forward against the point before, then back
+ * against the one after; times stay.
+ */
+function speedLimited(actions: Action[], picked: number[], limit: number, out: boolean): Transformed {
+  const hit = new Set(picked);
+  const pos = actions.map((a) => a.pos);
+  const fix = (i: number, j: number) => {
+    if (!hit.has(i)) return;
+    const reach = (limit * Math.abs(actions[i].at - actions[j].at)) / 1000;
+    if (out && pos[i] < pos[j] - reach) pos[i] = Math.max(Math.ceil(pos[j] - reach), 0);
+    if (!out && pos[i] > pos[j] + reach) pos[i] = Math.min(Math.floor(pos[j] + reach), 100);
+  };
+  for (let i = 1; i < pos.length; i++) fix(i, i - 1);
+  for (let i = pos.length - 2; i >= 0; i--) fix(i, i + 1);
+  return { actions: actions.map((a, i) => (pos[i] === a.pos ? a : { at: a.at, pos: pos[i] })), selected: hit };
+}
+
+/** The fastest segment of `actions` touching the points `picked`; null without any. */
+function fastestOf(actions: Action[], picked: number[]) {
+  const hit = new Set(picked);
+  const touched = [...actions.keys()].filter((i) => i > 0 && (hit.has(i) || hit.has(i - 1)));
+  return touched.length ? Math.max(...touched.map((i) => speed(actions[i - 1], actions[i]))) : null;
+}
+
+type ToolKind = "scale" | "shift" | "speed";
+
+/** The advanced editor's tools: their names, undo labels, and the before and after strokes of their small graphs, 56×24. */
+const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after: string }[] = [
+  { kind: "scale", name: "Scale", verb: "Scale", before: "4,16 12,8 20,16 28,8", after: "4,20 20,4 36,20 52,4" },
+  { kind: "shift", name: "Shift depth", verb: "Shift depth of", before: "4,20 14,12 24,20 34,12 44,20 52,12", after: "4,12 14,4 24,12 34,4 44,12 52,4" },
+  { kind: "speed", name: "Max speed", verb: "Limit speed of", before: "4,20 12,4 20,20 28,4 36,20 44,4 52,20", after: "4,20 12,12 20,20 28,12 36,20 44,12 52,20" },
+];
 
 /** A marker time from a file, in ms: ms as a number or `"HH:MM:SS.mmm"`; null when unusable. */
 function readTime(t: unknown) {
@@ -195,6 +274,8 @@ export default function EditorPage() {
     if (!advanced) return setMain(next);
     setAdvanced((d) => d && { ...d, actions: (next instanceof Function ? next({ ...main, actions: d.actions }) : next).actions });
   };
+  /** The advanced editor's open tool, with the points and affected indices it was opened on, and their fastest segment; its result shows until applied. */
+  const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null } | null>(null);
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
   /** The view for drags, which read it between renders as they scroll it. */
   const viewRef = useRef(view);
@@ -415,6 +496,7 @@ export default function EditorPage() {
   const jump = (index: number) => {
     const { actions, chapters, bookmarks } = timeline.states[index];
     setTimeline((tl) => ({ ...tl, index }));
+    setTool(null);
     setScript((s) => ({ ...s, actions, chapters, bookmarks }));
     setSelected(new Set());
     setMarked(new Set());
@@ -432,8 +514,9 @@ export default function EditorPage() {
   });
   const canUndo = timeline.index > 0;
   const canRedo = timeline.index < timeline.states.length - 1;
-  const undo = () => canUndo && jump(timeline.index - 1);
-  const redo = () => canRedo && jump(timeline.index + 1);
+  // With a tool open, they discard it first.
+  const undo = () => (tool ? setTool(null) : canUndo && jump(timeline.index - 1));
+  const redo = () => (tool ? setTool(null) : canRedo && jump(timeline.index + 1));
   const plotHeight = height - AXIS;
   const x = (at: number) => ((at - view.from) / view.span) * width;
   const y = (pos: number) => PAD + (1 - pos / 100) * (plotHeight - 2 * PAD);
@@ -608,6 +691,7 @@ export default function EditorPage() {
 
   /** Add a point under the pointer and keep dragging it; with several points selected, only clear the selection. */
   const add = (e: PointerEvent<SVGSVGElement>) => {
+    if (tool) return;
     const hit = pointUnder(e);
     if (hit !== null) return pointDown(e, hit);
     if (e.button !== 0) return;
@@ -637,7 +721,7 @@ export default function EditorPage() {
    * Shift+click grows the box to take in the point.
    */
   const pointDown = (e: PointerEvent<Element>, i: number) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || tool) return;
     if (e.ctrlKey || e.metaKey || e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
@@ -879,92 +963,52 @@ export default function EditorPage() {
 
   /** The fields of the advanced editor's Scale, in %, as typed. */
   const [scale, setScale] = useState({ time: "100", depth: "100" });
-  /** The fields of the advanced editor's Move, in depth, as typed. */
+  /** The fields of the advanced editor's Shift depth, as typed. */
   const [shift, setShift] = useState({ offset: "0", min: "0", max: "100" });
   /** The field of the advanced editor's Max speed, as typed. */
-  const [maxSpeed, setMaxSpeed] = useState("400");
+  const [maxSpeed, setMaxSpeed] = useState("");
   /** Which end Max speed keeps: In only lowers points, keeping the low reversals; Out only raises them. */
   const [speedAnchor, setSpeedAnchor] = usePersistedState<"in" | "out">("ossm:editorSpeedAnchor", "in", localStorage);
-  /** A typed number; NaN when empty. */
-  const typed = (v: string) => (v.trim() ? Number(v) : NaN);
-  /** The points the advanced editor's transforms act on: the selected ones, or all. */
-  const affected = () => (selected.size ? [...selected].sort((a, b) => a - b) : [...actions.keys()]);
 
-  /**
-   * Apply a transform, `fn` of the affected points' indices giving the new
-   * points and selection, as one edit called `verb` and how many; nothing when
-   * it leaves the points as they are.
-   */
-  const transform = (verb: string, fn: (picked: number[]) => { actions: Action[]; selected: Set<number> }) => {
-    const picked = affected();
-    const next = fn(picked);
+  /** Open a tool on the selected points, or all, from their defaults. */
+  const openTool = (kind: ToolKind) => {
+    const picked = selected.size ? [...selected].sort((a, b) => a - b) : [...actions.keys()];
+    const fastest = fastestOf(actions, picked);
+    setTool({ kind, actions, picked, fastest });
+    setScale({ time: "100", depth: "100" });
+    setShift({ offset: "0", min: "0", max: "100" });
+    setMaxSpeed(fastest === null ? "" : String(Math.ceil(fastest)));
+    setBox(null);
+  };
+
+  /** The open tool's result, from the points it was opened on, as its fields stand; null while one is invalid. */
+  const preview = useMemo(() => {
+    if (!tool) return null;
+    const { kind, actions, picked } = tool;
+    if (kind === "scale") {
+      const [time, depth] = [typed(scale.time), typed(scale.depth)];
+      // A time of 0 or less would fold the points onto each other.
+      return time > 0 && Number.isFinite(depth) ? scaled(actions, picked, time, depth) : null;
+    }
+    if (kind === "shift") {
+      const [offset, min, max] = [typed(shift.offset), typed(shift.min), typed(shift.max)];
+      // Limits outside the depths are refused rather than quietly clamped.
+      return Number.isFinite(offset) && min >= 0 && max <= 100 && min <= max ? shifted(actions, picked, offset, min, max) : null;
+    }
+    const limit = typed(maxSpeed);
+    return limit > 0 ? speedLimited(actions, picked, limit, speedAnchor === "out") : null;
+  }, [tool, scale, shift, maxSpeed, speedAnchor]);
+
+  /** Apply the open tool's result as one edit, unless it leaves the points as they are, and go back to the tools. */
+  const applyTool = () => {
+    const { kind, picked } = tool!;
+    const next = preview!;
+    setTool(null);
     if (next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos)) return;
-    editLabel.current = `${verb} ${points(picked.length)}`;
+    editLabel.current = `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(picked.length)}`;
     setScript((s) => ({ ...s, actions: next.actions }));
     setSelected(next.selected);
   };
-
-  /**
-   * Scale the affected points by `time` and `depth` %. In time from the first,
-   * which stays: the points up to the last stretch along, those in between
-   * too so the order stays, and later ones move by the change in length; points
-   * landing on the same ms merge, the later kept. In depth around the middle of
-   * their range, within 0–100; negative flips. They stay selected.
-   */
-  const applyScale = (time: number, depth: number) => transform("Scale", (picked) => {
-    const hit = new Set(picked);
-    const [i0, i1] = [picked[0], picked[picked.length - 1]];
-    const t0 = actions[i0].at;
-    const stretched = (at: number) => Math.round(t0 + ((at - t0) * time) / 100);
-    const shift = stretched(actions[i1].at) - actions[i1].at;
-    const depths = picked.map((i) => actions[i].pos);
-    const mid = (Math.min(...depths) + Math.max(...depths)) / 2;
-    const next: Action[] = [];
-    const moved = new Set<number>();
-    actions.forEach((a, i) => {
-      const at = i < i0 ? a.at : i <= i1 ? stretched(a.at) : a.at + shift;
-      if (next[next.length - 1]?.at === at) {
-        next.pop();
-        moved.delete(next.length);
-      }
-      if (hit.has(i)) moved.add(next.length);
-      next.push({ at, pos: hit.has(i) ? Math.round(clamp(mid + ((a.pos - mid) * depth) / 100, 0, 100)) : a.pos });
-    });
-    return { actions: next, selected: moved };
-  });
-
-  /** Move the affected points' depth by `offset`, then keep it within `min`–`max`; they stay selected. */
-  const applyMove = (offset: number, min: number, max: number) => transform("Move depth of", (picked) => {
-    const hit = new Set(picked);
-    return { actions: actions.map((a, i) => (hit.has(i) ? { at: a.at, pos: Math.round(clamp(a.pos + offset, min, max)) } : a)), selected: hit };
-  });
-
-  /** The fastest segment touching an affected point, for Max speed to show; null without any. */
-  const fastest = useMemo(() => {
-    if (!advanced) return null;
-    const touched = [...actions.keys()].filter((i) => i > 0 && (!selected.size || selected.has(i) || selected.has(i - 1)));
-    return touched.length ? Math.max(...touched.map((i) => speed(actions[i - 1], actions[i]))) : null;
-  }, [advanced, actions, selected]);
-
-  /**
-   * Slow the segments touching the affected points to `limit`, moving only the
-   * affected points and only one way: with `out` up, else down, each as little
-   * as it takes. A pass forward against the point before, then back against
-   * the one after; times stay.
-   */
-  const applyMaxSpeed = (limit: number, out: boolean) => transform("Limit speed of", (picked) => {
-    const hit = new Set(picked);
-    const pos = actions.map((a) => a.pos);
-    const fix = (i: number, j: number) => {
-      if (!hit.has(i)) return;
-      const reach = (limit * Math.abs(actions[i].at - actions[j].at)) / 1000;
-      if (out && pos[i] < pos[j] - reach) pos[i] = Math.max(Math.ceil(pos[j] - reach), 0);
-      if (!out && pos[i] > pos[j] + reach) pos[i] = Math.min(Math.floor(pos[j] + reach), 100);
-    };
-    for (let i = 1; i < pos.length; i++) fix(i, i - 1);
-    for (let i = pos.length - 2; i >= 0; i--) fix(i, i + 1);
-    return { actions: actions.map((a, i) => (pos[i] === a.pos ? a : { at: a.at, pos: pos[i] })), selected: hit };
-  });
 
   const removeSelected = (verb = "Delete") => {
     editLabel.current = `${verb} ${points(selected.size)}`;
@@ -975,9 +1019,12 @@ export default function EditorPage() {
   // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points, or all bookmarks with markers selected or
   // over the marker lane; Escape none, Delete (or Backspace, the Mac's delete key) removes the selected ones; F2 renames the selected
   // markers, B adds a bookmark. Not while typing in a field.
+  // With a tool open, Escape (also in its fields) discards it, and only undo and redo do the same; other keys do nothing.
   useWindowEvent("keydown", (e) => {
+    if (tool && e.key === "Escape") return setTool(null);
     if (e.target instanceof HTMLInputElement) return;
     const key = e.key.toLowerCase();
+    if (tool && !((e.ctrlKey || e.metaKey) && (key === "z" || key === "y"))) return;
     if ((e.ctrlKey || e.metaKey) && (key === "z" || key === "y")) {
       e.preventDefault();
       if (key === "y" || e.shiftKey) redo();
@@ -1246,7 +1293,7 @@ export default function EditorPage() {
 
   // Ctrl+C, Ctrl+X and Ctrl+V on the system clipboard; not while typing in a field.
   const copy = (e: ClipboardEvent) => {
-    if (e.target instanceof HTMLInputElement || !selected.size) return;
+    if (e.target instanceof HTMLInputElement || !selected.size || (tool && e.type === "cut")) return;
     e.preventDefault();
     e.clipboardData!.setData("text/plain", selectionJson());
     if (e.type === "cut") removeSelected("Cut");
@@ -1254,7 +1301,7 @@ export default function EditorPage() {
   useWindowEvent("copy", copy);
   useWindowEvent("cut", copy);
   useWindowEvent("paste", (e) => {
-    if (e.target instanceof HTMLInputElement) return;
+    if (e.target instanceof HTMLInputElement || tool) return;
     if (pasteJson(e.clipboardData!.getData("text/plain"))) e.preventDefault();
   });
 
@@ -1305,7 +1352,9 @@ export default function EditorPage() {
   const replaced = (at: number) => !!ghost && !inserting && at >= ghost[0].at && at <= ghost[ghost.length - 1].at;
   /** The points as drawn: while inserting, the later ones where they would move. Same order and indices as `kept`. */
   const moved = ghost && inserting ? around(ghost, true) : null;
-  const shown = moved ? [...moved.before, ...moved.after] : kept;
+  const shown = moved ? [...moved.before, ...moved.after] : preview?.actions ?? kept;
+  /** The selected points as drawn: with a tool open, the affected ones in its result. */
+  const marks = preview?.selected ?? selected;
   /** The points being placed joined to the existing points they would sit between. */
   const neighbours = ghost && (moved ?? around(ghost, false));
   const ghostLine = ghost && [neighbours!.before[neighbours!.before.length - 1], ...ghost, neighbours!.after[0]].filter((a) => a !== undefined);
@@ -1348,6 +1397,17 @@ export default function EditorPage() {
       for (const a of run.slice(Math.max(byTime(run, view.from) - 1, 0), byTime(run, view.from + view.span) + 1)) ctx.lineTo(x(a.at), y(a.pos));
       ctx.stroke();
     }
+    // With a tool open, the points it was opened on, faint and dashed behind its result.
+    if (tool) {
+      ctx.save();
+      Object.assign(ctx, { lineWidth: 1.5, strokeStyle: css.getPropertyValue("--gray-a9") });
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      const a = tool.actions;
+      for (const p of a.slice(Math.max(byTime(a, view.from) - 1, 0), byTime(a, view.from + view.span) + 1)) ctx.lineTo(x(p.at), y(p.pos));
+      ctx.stroke();
+      ctx.restore();
+    }
     Object.assign(ctx, { strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
     for (const segment of segments) {
       ctx.beginPath();
@@ -1358,14 +1418,14 @@ export default function EditorPage() {
     const long = new Array<boolean>(visible.length).fill(false);
     for (let j = 0; j < visible.length; ) {
       let end = j;
-      while (end < visible.length && selected.has(first + end)) end++;
+      while (end < visible.length && marks.has(first + end)) end++;
       if (end - j > RING_LIMIT) long.fill(true, j, end);
       j = Math.max(end, j + 1);
     }
     const line = new Path2D();
     for (let j = 1; j < visible.length; j++) {
       const [a, b] = [visible[j - 1], visible[j]];
-      if (!selected.has(first + j - 1) || !selected.has(first + j) || replaced(a.at) || replaced(b.at)) continue;
+      if (!marks.has(first + j - 1) || !marks.has(first + j) || replaced(a.at) || replaced(b.at)) continue;
       line.moveTo(x(a.at), y(a.pos));
       line.lineTo(x(b.at), y(b.pos));
     }
@@ -1384,7 +1444,7 @@ export default function EditorPage() {
         crosses.lineTo(cx - 3, cy + 3);
         return;
       }
-      const ring = selected.has(first + j) && !long[j];
+      const ring = marks.has(first + j) && !long[j];
       if (!ring && !showDots) return;
       const path = ring ? ringed : dots;
       const r = ring ? 7 : 5;
@@ -1558,78 +1618,79 @@ export default function EditorPage() {
             <Switch checked={fromZero} onCheckedChange={setFromZero} /> Time from 0
           </Flex>
         </Text>
-        {/* The transforms, on the selected points or all; each Apply is one edit. */}
         <Separator size="4" />
-        <Text size="2" weight="medium">Scale</Text>
-        <Flex gap="2">
-          {(["time", "depth"] as const).map((field) => (
-            <TextField.Root
-              key={field}
-              type="number"
-              step="any"
-              aria-label={field === "time" ? "Time scale" : "Depth scale"}
-              value={scale[field]}
-              onChange={(e) => setScale({ ...scale, [field]: e.target.value })}
-              style={{ flex: 1, minWidth: 0 }}
-            >
-              <TextField.Slot side="left">{field === "time" ? "Time" : "Depth"}</TextField.Slot>
-              <TextField.Slot side="right">%</TextField.Slot>
-            </TextField.Root>
+        {!tool ? <>
+          {/* The tools, on the selected points or all, each with a small graph of what it does. */}
+          <Text size="2" weight="medium">Tools</Text>
+          {TOOLS.map(({ kind, name, before, after }) => (
+            <Button key={kind} variant="soft" color="gray" disabled={!actions.length || !!placing} onClick={() => openTool(kind)} style={{ justifyContent: "flex-start" }}>
+              <svg width="56" height="24" viewBox="0 0 56 24" fill="none" strokeWidth={1.5} strokeLinejoin="round">
+                <polyline points={before} style={{ stroke: "var(--gray-8)" }} />
+                <polyline points={after} stroke={LINE_COLOR} />
+              </svg>
+              {name}
+            </Button>
           ))}
-        </Flex>
-        {(() => {
-          const [time, depth] = [typed(scale.time), typed(scale.depth)];
-          // A time of 0 or less would fold the points onto each other.
-          const valid = time > 0 && Number.isFinite(depth) && (time !== 100 || depth !== 100);
-          return (
-            <Button variant="soft" disabled={!actions.length || !!placing || !valid} onClick={() => applyScale(time, depth)}>
-              Apply
-            </Button>
-          );
-        })()}
-        <Text size="2" weight="medium">Move</Text>
-        {([["offset"], ["min", "max"]] as const).map((row) => (
-          <Flex key={row[0]} gap="2">
-            {row.map((field) => (
-              <TextField.Root
-                key={field}
-                type="number"
-                step="any"
-                aria-label={{ offset: "Depth offset", min: "Lowest depth", max: "Highest depth" }[field]}
-                value={shift[field]}
-                onChange={(e) => setShift({ ...shift, [field]: e.target.value })}
-                style={{ flex: 1, minWidth: 0 }}
-              >
-                <TextField.Slot side="left">{{ offset: "Offset", min: "Min", max: "Max" }[field]}</TextField.Slot>
-              </TextField.Root>
-            ))}
+        </> : <>
+          <Flex gap="2" align="center">
+            <IconButton size="1" variant="ghost" color="gray" aria-label="Back to the tools" title="Back to the tools (Escape)" onClick={() => setTool(null)}>
+              <ArrowLeftIcon />
+            </IconButton>
+            <Text size="2" weight="medium">{TOOLS.find((t) => t.kind === tool.kind)!.name}</Text>
           </Flex>
-        ))}
-        {(() => {
-          const [offset, min, max] = [typed(shift.offset), typed(shift.min), typed(shift.max)];
-          // Limits outside the depths are refused rather than quietly clamped.
-          const valid = Number.isFinite(offset) && min >= 0 && max <= 100 && min <= max;
-          return (
-            <Button variant="soft" disabled={!actions.length || !!placing || !valid} onClick={() => applyMove(offset, min, max)}>
-              Apply
-            </Button>
-          );
-        })()}
-        {/* Speeds without a unit, as depth per second means little to most. */}
-        <Text size="2" weight="medium">Max speed</Text>
-        <Flex gap="2" align="center">
-          <TextField.Root type="number" min={0} step="any" aria-label="Max speed" value={maxSpeed} onChange={(e) => setMaxSpeed(e.target.value)} style={{ flex: 1, minWidth: 0 }}>
-            <TextField.Slot side="left">Max</TextField.Slot>
-          </TextField.Root>
-          <SegmentedControl.Root size="1" value={speedAnchor} onValueChange={(v) => setSpeedAnchor(v as "in" | "out")} title="Keep the In or the Out reversals">
-            <SegmentedControl.Item value="in">In</SegmentedControl.Item>
-            <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
-          </SegmentedControl.Root>
-        </Flex>
-        <Text size="1" color="gray">Fastest: {fastest === null ? "—" : Math.round(fastest)}</Text>
-        <Button variant="soft" disabled={!actions.length || !!placing || !(typed(maxSpeed) > 0)} onClick={() => applyMaxSpeed(typed(maxSpeed), speedAnchor === "out")}>
-          Apply
-        </Button>
+          {tool.kind === "scale" && (
+            <Flex gap="2">
+              {(["time", "depth"] as const).map((field) => (
+                <TextField.Root
+                  key={field}
+                  type="number"
+                  step="any"
+                  aria-label={field === "time" ? "Time scale" : "Depth scale"}
+                  value={scale[field]}
+                  onChange={(e) => setScale({ ...scale, [field]: e.target.value })}
+                  style={{ flex: 1, minWidth: 0 }}
+                >
+                  <TextField.Slot side="left">{field === "time" ? "Time" : "Depth"}</TextField.Slot>
+                  <TextField.Slot side="right">%</TextField.Slot>
+                </TextField.Root>
+              ))}
+            </Flex>
+          )}
+          {tool.kind === "shift" && ([["offset"], ["min", "max"]] as const).map((row) => (
+            <Flex key={row[0]} gap="2">
+              {row.map((field) => (
+                <TextField.Root
+                  key={field}
+                  type="number"
+                  step="any"
+                  aria-label={{ offset: "Depth offset", min: "Lowest depth", max: "Highest depth" }[field]}
+                  value={shift[field]}
+                  onChange={(e) => setShift({ ...shift, [field]: e.target.value })}
+                  style={{ flex: 1, minWidth: 0 }}
+                >
+                  <TextField.Slot side="left">{{ offset: "Offset", min: "Min", max: "Max" }[field]}</TextField.Slot>
+                </TextField.Root>
+              ))}
+            </Flex>
+          ))}
+          {/* Speeds without a unit, as depth per second means little to most. */}
+          {tool.kind === "speed" && <>
+            <Flex gap="2" align="center">
+              <TextField.Root type="number" min={0} step="any" aria-label="Max speed" value={maxSpeed} onChange={(e) => setMaxSpeed(e.target.value)} style={{ flex: 1, minWidth: 0 }}>
+                <TextField.Slot side="left">Max</TextField.Slot>
+              </TextField.Root>
+              <SegmentedControl.Root size="1" value={speedAnchor} onValueChange={(v) => setSpeedAnchor(v as "in" | "out")} title="Keep the In or the Out reversals">
+                <SegmentedControl.Item value="in">In</SegmentedControl.Item>
+                <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
+              </SegmentedControl.Root>
+            </Flex>
+            <Text size="1" color="gray">Fastest: {tool.fastest === null ? "—" : Math.round(tool.fastest)}</Text>
+          </>}
+          <Flex gap="2">
+            <Button disabled={!preview} onClick={applyTool} style={{ flex: 1 }}>Apply</Button>
+            <Button variant="soft" color="gray" onClick={() => setTool(null)} style={{ flex: 1 }}>Discard</Button>
+          </Flex>
+        </>}
       </>}
     </Flex>
   );
@@ -1662,7 +1723,7 @@ export default function EditorPage() {
   const light = chapters.map((c, i) => (lightBefore = i > 0 && chapters[i - 1].end === c.start && !lightBefore));
 
   /** The selected point when there is just one, labelled with its time and position. */
-  const only = selected.size === 1 ? [...selected][0] : null;
+  const only = marks.size === 1 ? [...marks][0] : null;
 
   const content = (
     <Flex direction="column" gap="3" p="3" height="100%">
@@ -1765,8 +1826,8 @@ export default function EditorPage() {
       {advanced && (
         <Flex gap="2" align="center" flexShrink="0" px="3" py="2" style={{ borderRadius: 6, background: "var(--accent-a3)" }}>
           <Text size="2" weight="medium" style={{ flexGrow: 1 }}>Advanced editor · {points(actions.length)}</Text>
-          <Button size="1" disabled={!actions.length} onClick={() => closeAdvanced(true)}>Done</Button>
-          <Button size="1" variant="soft" color="gray" onClick={() => closeAdvanced(false)}>Cancel</Button>
+          <Button size="1" disabled={!actions.length || !!tool} onClick={() => closeAdvanced(true)}>Done</Button>
+          <Button size="1" variant="soft" color="gray" disabled={!!tool} onClick={() => closeAdvanced(false)}>Cancel</Button>
         </Flex>
       )}
       {/* Toolbox: convenience buttons for what the keyboard also does. */}
@@ -1840,7 +1901,7 @@ export default function EditorPage() {
         <IconButton variant="soft" color="gray" disabled={!selected.size} aria-label="Copy" title="Copy (Ctrl+C)" onClick={() => void copyButton(false)}>
           <CopyIcon />
         </IconButton>
-        <IconButton variant="soft" color="gray" disabled={!selected.size} aria-label="Cut" title="Cut (Ctrl+X)" onClick={() => void copyButton(true)}>
+        <IconButton variant="soft" color="gray" disabled={!selected.size || !!tool} aria-label="Cut" title="Cut (Ctrl+X)" onClick={() => void copyButton(true)}>
           <ScissorsIcon />
         </IconButton>
         {/* With a history, its button docks to the paste button. */}
@@ -1848,6 +1909,7 @@ export default function EditorPage() {
           <IconButton
             variant="soft"
             color="gray"
+            disabled={!!tool}
             aria-label="Paste"
             title="Paste (Ctrl+V)"
             onClick={() => void pasteButton()}
@@ -1860,6 +1922,7 @@ export default function EditorPage() {
               <IconButton
                 variant="soft"
                 color="gray"
+                disabled={!!tool}
                 aria-label="Clipboard history"
                 title="Clipboard history"
                 style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeft: "1px solid var(--gray-a5)" }}
@@ -1893,6 +1956,7 @@ export default function EditorPage() {
           variant={boxMode ? "solid" : "soft"}
           color={boxMode ? undefined : "gray"}
           aria-pressed={boxMode}
+          disabled={!!tool}
           title="Select points with a box (S)"
           onClick={toggleBoxMode}
         >
@@ -1921,7 +1985,7 @@ export default function EditorPage() {
           variant={lifted ? "solid" : "soft"}
           color={lifted ? undefined : "gray"}
           aria-pressed={!!lifted}
-          disabled={!lifted && !selected.size}
+          disabled={(!lifted && !selected.size) || !!tool}
           title="Move the selected points by dragging them; again places them (M)"
           onClick={toggleMove}
         >
@@ -1954,7 +2018,7 @@ export default function EditorPage() {
           variant={advanced ? "solid" : "soft"}
           color={advanced ? undefined : "gray"}
           aria-pressed={!!advanced}
-          disabled={!!placing || !!advanced}
+          disabled={!!placing || !!advanced || !!tool}
           title="Edit the selected points, or new ones, in the advanced editor (E)"
           onClick={openAdvanced}
         >
@@ -1980,7 +2044,7 @@ export default function EditorPage() {
             onPointerMove={(e) => {
               // Points are drawn on the canvas, so the cursor shows when one can be grabbed; placing, a click places instead.
               if (!placing) {
-                e.currentTarget.style.cursor = pointUnder(e) === null ? "crosshair" : "grab";
+                e.currentTarget.style.cursor = tool ? "default" : pointUnder(e) === null ? "crosshair" : "grab";
                 return;
               }
               // Pasted points follow the pointer; moved ones stay where their box is dragged.
