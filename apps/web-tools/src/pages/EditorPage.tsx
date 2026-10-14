@@ -276,6 +276,10 @@ export default function EditorPage() {
   const [videoHeight, setVideoHeight] = pip ? [pipHeight, setPipHeight] : [normalHeight, setNormalHeight];
   /** A minimap of the whole script to scroll with, instead of the slider. */
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
+  /** The advanced editor shows times from its 0, earlier ones negative; only as shown, the points keep the main script's times. */
+  const [fromZero, setFromZero] = usePersistedState("ossm:editorFromZero", false, localStorage);
+  /** The time shown as 0. */
+  const zero = advanced && fromZero ? advanced.zero : 0;
   const [steps, setSteps] = usePersistedState("ossm:editorSteps", DEFAULT_STEPS, localStorage);
   /** The steps in use; a first step that is not a positive number falls back to the default. */
   const shownSteps = steps.map(Number).map((v, i) => (v > 0 ? v : i === 0 ? Number(DEFAULT_STEPS[0]) : null)).filter((v) => v !== null);
@@ -1441,7 +1445,7 @@ export default function EditorPage() {
         </Callout.Root>
       )}
       <Text size="2" color="gray">
-        {actions.length} points{selected.size > 1 && ` · ${selected.size} selected`} · {formatScriptTime(end / 1000)}
+        {actions.length} points{selected.size > 1 && ` · ${selected.size} selected`} · {formatScriptTime((actions.length ? end - zero : 0) / 1000)}
       </Text>
       <LabeledSlider
         label="Visible time"
@@ -1457,6 +1461,13 @@ export default function EditorPage() {
           <Switch checked={minimap} onCheckedChange={setMinimap} /> Minimap
         </Flex>
       </Text>
+      {advanced && (
+        <Text as="label" size="2">
+          <Flex gap="2" align="center">
+            <Switch checked={fromZero} onCheckedChange={setFromZero} /> Time from 0
+          </Flex>
+        </Text>
+      )}
     </Flex>
   );
 
@@ -1823,10 +1834,11 @@ export default function EditorPage() {
             {[0, 50, 100].map((pos) => (
               <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
             ))}
-            {timeTicks(view.from / 1000, (view.from + view.span) / 1000).map((t) => (
+            {/* Round in the time shown. */}
+            {timeTicks((view.from - zero) / 1000, (view.from + view.span - zero) / 1000).map((t) => (
               <g key={t}>
-                <line x1={x(t * 1000)} x2={x(t * 1000)} y1={0} y2={plotHeight} style={{ stroke: "var(--gray-a4)" }} />
-                <text x={x(t * 1000)} y={height - 6} textAnchor="middle" fontSize={11} style={{ fill: "var(--gray-11)" }}>
+                <line x1={x(t * 1000 + zero)} x2={x(t * 1000 + zero)} y1={0} y2={plotHeight} style={{ stroke: "var(--gray-a4)" }} />
+                <text x={x(t * 1000 + zero)} y={height - 6} textAnchor="middle" fontSize={11} style={{ fill: "var(--gray-11)" }}>
                   {formatTimeTick(t)}
                 </text>
               </g>
@@ -1907,7 +1919,7 @@ export default function EditorPage() {
                 fontSize={12}
                 style={{ fill: "var(--gray-12)" }}
               >
-                {formatScriptTime(shown[only].at / 1000, 2)} · {Math.round(shown[only].pos)}
+                {formatScriptTime((shown[only].at - zero) / 1000, 2)} · {Math.round(shown[only].pos)}
               </text>
             )}
           </svg>
