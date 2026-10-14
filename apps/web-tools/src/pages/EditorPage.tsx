@@ -1555,9 +1555,14 @@ export default function EditorPage() {
                     <HoverCard.Content side="right" size="1" maxWidth="232px">
                       <Flex direction="column" gap="1">
                         <Text size="1">{state.label}</Text>
-                        {k > 0 && (timeline.states[k - 1].actions === state.actions
-                          ? <Text size="1" color="gray">Markers changed</Text>
-                          : <PreviewGraph pieces={diffPieces(timeline.states[k - 1].actions, state.actions)} />)}
+                        {k > 0 && (() => {
+                          const before = timeline.states[k - 1];
+                          const markersChanged = before.chapters !== state.chapters || before.bookmarks !== state.bookmarks;
+                          return <>
+                            {(before.actions !== state.actions || !markersChanged) && <PreviewGraph pieces={diffPieces(before.actions, state.actions)} />}
+                            {markersChanged && <MarkerPreview before={before} after={state} />}
+                          </>;
+                        })()}
                       </Flex>
                     </HoverCard.Content>
                   </HoverCard.Root>
@@ -2191,6 +2196,84 @@ function PreviewGraph({ pieces }: { pieces: Piece[] }) {
         : <circle key={`${l}-${k}`} cx={xs[i](a.at)} cy={y(a.pos)} r={kind === "added" ? 2.5 : 2} style={{ fill: PIECE_STYLES[kind].color }} />))}
       {pieces.flatMap((p, i) => [p.from, p.to].map((a, k) => a && <circle key={`${i}~${k}`} cx={xs[i](a.at)} cy={y(a.pos)} r={2} style={{ fill: "var(--gray-9)" }} />))}
     </svg>
+  );
+}
+
+/** Changes a marker diff lists, past which it says how many more. */
+const MARKER_DIFF_LINES = 4;
+
+/**
+ * A diff of two scripts' markers, like the points' one: a small lane over the
+ * time they changed in, the markers as they were in red and dashed, as they
+ * are in green, unchanged ones in grey, each moved one joined to where it
+ * went; then the changes in words.
+ */
+function MarkerPreview({ before, after }: { before: Content; after: Content }) {
+  // Edits keep the markers they leave alone, so the changed ones are those only one side has.
+  const only = <T extends Marker>(a: T[], b: T[]) => {
+    const kept = new Set(b);
+    return a.filter((m) => !kept.has(m));
+  };
+  const lists = [[before.chapters, after.chapters], [before.bookmarks, after.bookmarks]] as const;
+  const changes = lists.flatMap(([a, b]) => {
+    const [gone, come] = [only<Marker>(a, b), only<Marker>(b, a)];
+    // As many on each side, as a move or rename leaves, they pair up in time order.
+    if (gone.length === come.length) return gone.map((old, i) => ({ old, now: come[i] as Marker | undefined, chapter: a === before.chapters }));
+    return [...gone.map((old) => ({ old, now: undefined, chapter: a === before.chapters })), ...come.map((now) => ({ old: undefined as Marker | undefined, now, chapter: a === before.chapters }))];
+  });
+  const chapters = new Set([...before.chapters, ...after.chapters]);
+  const span = (m: Marker) => (chapters.has(m as Chapter) ? [(m as Chapter).start, (m as Chapter).end] : [(m as Bookmark).time]);
+  const times = changes.flatMap(({ old, now }) => [old, now].flatMap((m) => (m ? span(m) : [])));
+  const [lo, hi] = [Math.min(...times), Math.max(...times)];
+  const pad = Math.max((hi - lo) * 0.15, 2000);
+  const [from, to] = [Math.max(lo - pad, 0), hi + pad];
+  const [width, height, inset] = [200, 28, 4];
+  const x = (at: number) => inset + ((at - from) / (to - from)) * (width - 2 * inset);
+  const inRange = (m: Marker) => span(m).some((t) => t >= from && t <= to) || (span(m)[0] < from && span(m)[1] > to);
+  const changed = new Set(changes.flatMap(({ old, now }) => [old, now]));
+  const unchanged = [...after.chapters, ...after.bookmarks].filter((m) => !changed.has(m) && inRange(m));
+  const when = (m: Marker) => span(m).map((t) => formatScriptTime(t / 1000, 2)).join("–");
+  /** A marker drawn in `color`: a chapter as a band, a bookmark as a line. */
+  const draw = (m: Marker, key: string, color: string, dashed: boolean, band?: string) => {
+    const [a, b] = span(m);
+    const stroke = { stroke: color, strokeWidth: 1.5, strokeDasharray: dashed ? "3 2" : undefined };
+    return b === undefined
+      ? <line key={key} x1={x(a)} x2={x(a)} y1={0} y2={height} {...stroke} />
+      : <rect key={key} x={x(a)} width={Math.max(x(b) - x(a), 1)} y={height / 2} height={height / 2} style={{ fill: band ?? "none" }} {...stroke} />;
+  };
+  const ticks = timeTicks(from / 1000, to / 1000, 3);
+  const lines = changes.map(({ old, now, chapter }) => {
+    const kind = chapter ? "chapter" : "marker";
+    if (!old) return `Added ${kind} ${now!.name} at ${when(now!)}`;
+    if (!now) return `Deleted ${kind} ${old.name} at ${when(old)}`;
+    const named = old.name === now.name ? old.name : `${old.name} → ${now.name}`;
+    if (when(old) === when(now)) return `Renamed ${kind} ${named} at ${when(now)}`;
+    const [a, b] = [span(old), span(now)];
+    return `${chapter && a[1] - a[0] !== b[1] - b[0] ? "Resized" : "Moved"} ${kind} ${named} from ${when(old)} to ${when(now)}`;
+  });
+  return (
+    <Flex direction="column" gap="1">
+      <svg width={width} height={height + PREVIEW_AXIS} style={{ display: "block" }}>
+        <rect width={width} height={height} rx={3} style={{ fill: "var(--gray-a2)" }} />
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={x(t * 1000)} x2={x(t * 1000)} y1={0} y2={height} style={{ stroke: "var(--gray-a4)" }} />
+            <text x={x(t * 1000)} y={height + PREVIEW_AXIS - 2} textAnchor="middle" fontSize={9} style={{ fill: "var(--gray-11)" }}>
+              {formatTimeTick(t)}
+            </text>
+          </g>
+        ))}
+        {unchanged.map((m, i) => draw(m, `u${i}`, "var(--gray-8)", false, "var(--gray-a3)"))}
+        {changes.map(({ old }, i) => old && draw(old, `o${i}`, PIECE_STYLES.removed.color, true, PIECE_STYLES.removed.band))}
+        {changes.map(({ now }, i) => now && draw(now, `n${i}`, PIECE_STYLES.added.color, false, PIECE_STYLES.added.band))}
+        {/* Each moved one joined to where it went, halfway up. */}
+        {changes.map(({ old, now }, i) => old && now && span(old)[0] !== span(now)[0] && (
+          <line key={`m${i}`} x1={x(span(old)[0])} x2={x(span(now)[0])} y1={height / 4} y2={height / 4} strokeWidth={1} style={{ stroke: PIECE_STYLES.moved.color }} />
+        ))}
+      </svg>
+      {lines.slice(0, MARKER_DIFF_LINES).map((line, i) => <Text key={i} size="1" color="gray">{line}</Text>)}
+      {lines.length > MARKER_DIFF_LINES && <Text size="1" color="gray">and {lines.length - MARKER_DIFF_LINES} more</Text>}
+    </Flex>
   );
 }
 
