@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ClipboardIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ClipboardIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -78,6 +78,17 @@ const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["fr
 const GRIP = 8;
 /** Size of the buttons in the selection box that extend it, in px. */
 const EXTEND = 24;
+
+/**
+ * The advanced editor's document, which the page edits instead of the main
+ * script while it is open: its points, in the main script's times, its 0, and
+ * the indices of the main script's points it was opened from, null when opened empty.
+ */
+interface Advanced {
+  actions: Action[];
+  zero: number;
+  from: number[] | null;
+}
 
 const EMPTY: Script = { name: "untitled", actions: [], chapters: [], bookmarks: [] };
 
@@ -170,10 +181,18 @@ function readMarkers(file: Record<string, unknown>, end: number) {
 
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
-  const [script, setScript] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
+  const [main, setMain] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
   // Scripts kept before markers have none; filled in on the loaded object, once, so they keep their identity.
-  script.chapters ??= [];
-  script.bookmarks ??= [];
+  main.chapters ??= [];
+  main.bookmarks ??= [];
+  /** The advanced editor's document while it is open; kept across reloads too. */
+  const [advanced, setAdvanced] = usePersistedState<Advanced | null>("ossm:editorAdvanced", null, localStorage);
+  /** The script the page shows and edits: the main one, or with the advanced editor's points while it is open, which take only point changes. */
+  const script = advanced ? { ...main, actions: advanced.actions } : main;
+  const setScript: typeof setMain = (next) => {
+    if (!advanced) return setMain(next);
+    setAdvanced((d) => d && { ...d, actions: (next instanceof Function ? next({ ...main, actions: d.actions }) : next).actions });
+  };
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
   /** The view for drags, which read it between renders as they scroll it. */
   const viewRef = useRef(view);
@@ -357,7 +376,9 @@ export default function EditorPage() {
   }, [actions, lifted, closeGap]);
 
   /** Undo history: the points and markers after each edit, the first as loaded; `index` is the current one. */
-  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, chapters, bookmarks, label: "Start" }], index: 0 }));
+  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, chapters, bookmarks, label: advanced ? "Open" : "Start" }], index: 0 }));
+  /** The main script's undo history, put aside while the advanced editor is open; lost on a reload, when it starts over. */
+  const mainTimeline = useRef<typeof timeline | null>(null);
   /** Set while a drag runs, so the whole drag becomes one edit when it ends. */
   const dragging = useRef(false);
   const [dragEnds, setDragEnds] = useState(0);
@@ -389,8 +410,8 @@ export default function EditorPage() {
   };
   /** The points and markers as last saved, opened or started anew; unknown after a reload with unsaved changes. */
   const [unsaved, setUnsaved] = usePersistedState("ossm:editorUnsaved", false, localStorage);
-  const [saved, setSaved] = useState<Content | null>(() => (unsaved ? null : script));
-  const changed = !saved || !sameContent(saved, script);
+  const [saved, setSaved] = useState<Content | null>(() => (unsaved ? null : main));
+  const changed = !saved || !sameContent(saved, main);
   useEffect(() => setUnsaved(changed), [changed, setUnsaved]);
   useWindowEvent("beforeunload", (e) => {
     if (changed) e.preventDefault();
@@ -888,7 +909,9 @@ export default function EditorPage() {
     } else if (e.key === "F2" && marked.size) {
       e.preventDefault();
       rename([...marked]);
-    } else if (key === "b" && !e.ctrlKey && !e.metaKey) {
+    } else if (e.key === "e" && !e.ctrlKey && !e.metaKey) {
+      openAdvanced();
+    } else if (key === "b" && !e.ctrlKey && !e.metaKey && !advanced) {
       // At the playhead, or without media under the pointer.
       const at = videoUrl ? Math.round(time) : hoverAt.current;
       if (at !== null) addBookmark(at);
@@ -938,6 +961,45 @@ export default function EditorPage() {
     setSelected(new Set());
     setBoxMode(false);
     setBox(null);
+  };
+
+  /** Open the selected points in the advanced editor, or start it empty; its undo history starts anew. */
+  const openAdvanced = () => {
+    if (placing || advanced) return;
+    const from = selected.size ? [...selected].sort((a, b) => a - b) : null;
+    const doc = from ? from.map((i) => actions[i]) : [];
+    mainTimeline.current = timeline;
+    setTimeline({ states: [{ actions: doc, chapters, bookmarks, label: "Open" }], index: 0 });
+    setAdvanced({ actions: doc, zero: doc[0]?.at ?? view.from, from });
+    setSelected(new Set());
+    setMarked(new Set());
+    setBox(null);
+  };
+
+  /**
+   * Leave the advanced editor for the main script and its undo history. Done
+   * places the result as in Move mode, where it was edited, with the points it
+   * was opened from lifted, or as a paste when opened empty, and adds it to the
+   * clipboard history; Cancel drops it, the points it was opened from selected
+   * again.
+   */
+  const closeAdvanced = (done: boolean) => {
+    const { actions: result, from } = advanced!;
+    const original = from?.map((i) => main.actions[i]) ?? [];
+    if (!done && JSON.stringify(result) !== JSON.stringify(original) && !confirm("Discard the advanced editor's changes?")) return;
+    setTimeline(mainTimeline.current ?? { states: [{ actions: main.actions, chapters, bookmarks, label: "Start" }], index: 0 });
+    mainTimeline.current = null;
+    setAdvanced(null);
+    setBox(null);
+    setSelected(new Set(done ? [] : from));
+    setLifted(done && from ? new Set(from) : null);
+    const shape = done ? result.map((a) => ({ at: a.at - result[0].at, pos: a.pos })) : null;
+    if (shape) remember(shape);
+    setPlacing(shape);
+    if (done && from) {
+      setPlaceAt(result[0]);
+      setBoxMode(false);
+    }
   };
 
   /**
@@ -1279,7 +1341,8 @@ export default function EditorPage() {
           e.target.value = "";
         }}
       />
-      <Flex gap="2">
+      {/* The advanced editor's document is not a file of its own. */}
+      {!advanced && <Flex gap="2">
         <Button
           variant="soft"
           style={{ flex: 1 }}
@@ -1299,7 +1362,7 @@ export default function EditorPage() {
         <Button variant="soft" style={{ flex: 1 }} onClick={() => input.current?.click()}>
           <UploadIcon /> Open
         </Button>
-      </Flex>
+      </Flex>}
       <input
         ref={videoInput}
         type="file"
@@ -1332,6 +1395,7 @@ export default function EditorPage() {
           </Button>
         )}
       </Flex>
+      {!advanced && <>
       <Box>
         <Text as="label" size="2" weight="medium" mb="1" style={{ display: "block" }} htmlFor="editor-name">Name</Text>
         <TextField.Root id="editor-name" value={script.name} onChange={(e) => setScript({ ...script, name: e.target.value })}>
@@ -1353,6 +1417,7 @@ export default function EditorPage() {
       <Button disabled={actions.length < 2} onClick={save}>
         <DownloadIcon /> Save
       </Button>
+      </>}
       {error && (
         <Callout.Root color="red" size="1">
           <Callout.Icon>
@@ -1506,6 +1571,13 @@ export default function EditorPage() {
               </Flex>
             </Popover.Content>
           </Popover.Root>
+        </Flex>
+      )}
+      {advanced && (
+        <Flex gap="2" align="center" flexShrink="0" px="3" py="2" style={{ borderRadius: 6, background: "var(--accent-a3)" }}>
+          <Text size="2" weight="medium" style={{ flexGrow: 1 }}>Advanced editor · {points(actions.length)}</Text>
+          <Button size="1" disabled={!actions.length} onClick={() => closeAdvanced(true)}>Done</Button>
+          <Button size="1" variant="soft" color="gray" onClick={() => closeAdvanced(false)}>Cancel</Button>
         </Flex>
       )}
       {/* Toolbox: convenience buttons for what the keyboard also does. */}
@@ -1688,6 +1760,17 @@ export default function EditorPage() {
             <PinLeftIcon /> Close gap
           </Button>
         )}
+        <Separator orientation="vertical" size="2" />
+        <Button
+          variant={advanced ? "solid" : "soft"}
+          color={advanced ? undefined : "gray"}
+          aria-pressed={!!advanced}
+          disabled={!!placing || !!advanced}
+          title="Edit the selected points, or new ones, in the advanced editor (E)"
+          onClick={openAdvanced}
+        >
+          <MixerHorizontalIcon /> Advanced
+        </Button>
       </Flex>
       {/* The graph with the marker lane under it; the wheel works on both. */}
       <Flex
@@ -1839,7 +1922,8 @@ export default function EditorPage() {
           onPointerDown={laneDown}
           onPointerEnter={() => void (overLane.current = true)}
           onPointerLeave={() => void (overLane.current = false)}
-          style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair" }}
+          // The advanced editor's document has no markers, so the lane takes no presses while it is open.
+          style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair", pointerEvents: advanced ? "none" : undefined }}
         >
           {chapters.map((c, i) => {
             if (!inView(c.start, c.end)) return null;
