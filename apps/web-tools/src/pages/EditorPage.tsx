@@ -1876,7 +1876,8 @@ export default function EditorPage() {
               onPointerDown={(e) => markerDown(e, b)}
               style={{
                 position: "absolute",
-                left: x(b.time),
+                // Its 2px edge centred on its time, like its line through the graph.
+                left: x(b.time) - 1,
                 maxWidth: bookmarks[i + 1] && x(bookmarks[i + 1].time) - x(b.time),
                 boxSizing: "border-box",
                 height: "100%",
