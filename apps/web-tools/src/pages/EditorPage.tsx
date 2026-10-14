@@ -18,6 +18,25 @@ interface Script {
   name: string;
   /** Sorted by time, no two at the same time. */
   actions: Action[];
+  /** The opened file without its actions, saved with them so keys the editor does not know stay; missing in scripts kept before markers. */
+  file?: Record<string, unknown>;
+  chapters?: Chapter[];
+  bookmarks?: Bookmark[];
+}
+
+/** A named time range, in ms, from `metadata.chapters`; other properties of the loaded one are kept. */
+interface Chapter {
+  name: string;
+  start: number;
+  end: number;
+  [other: string]: unknown;
+}
+
+/** A named time, in ms, from `metadata.bookmarks`; other properties of the loaded one are kept. */
+interface Bookmark {
+  name: string;
+  time: number;
+  [other: string]: unknown;
 }
 
 /** A time range, in ms, and depth range. */
@@ -94,6 +113,41 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), h
 const byTime = bisector((a: Action) => a.at).left;
 const afterTime = bisector((a: Action) => a.at).right;
 const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
+
+/** A marker time from a file, in ms: ms as a number or `"HH:MM:SS.mmm"`; null when unusable. */
+function readTime(t: unknown) {
+  const ms = typeof t === "number" ? t : typeof t === "string" && /^\d+(:\d+){0,2}(\.\d+)?$/.test(t) ? t.split(":").reduce((s, p) => s * 60 + Number(p), 0) * 1000 : NaN;
+  return Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : null;
+}
+
+/** `ms` as `"HH:MM:SS.mmm"`, as markers are saved; the hours go past 24. */
+const writeTime = (ms: number) => `${String(Math.floor(ms / 3_600_000)).padStart(2, "0")}:${new Date(ms).toISOString().slice(14, 23)}`;
+
+/**
+ * The chapters and bookmarks in `file`'s metadata, sorted. A chapter without an
+ * end runs to the next one's start, the last to `end`; overlapping chapters are
+ * cut where the later one starts.
+ */
+function readMarkers(file: Record<string, unknown>, end: number) {
+  const meta = (file.metadata ?? {}) as { chapters?: unknown; bookmarks?: unknown };
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((o): o is Record<string, unknown> => !!o && typeof o === "object") : []);
+  const starts = list(meta.chapters)
+    .map(({ startTime, endTime, ...rest }) => ({ rest, start: readTime(startTime), end: readTime(endTime) }))
+    .filter((c): c is typeof c & { start: number } => c.start !== null)
+    .sort((a, b) => a.start - b.start);
+  const chapters: Chapter[] = starts
+    .map((c, i) => {
+      const next = starts[i + 1]?.start;
+      const stop = c.end !== null && c.end > c.start ? c.end : next ?? Math.max(end, c.start + 1);
+      return { ...c.rest, name: typeof c.rest.name === "string" ? c.rest.name : `Chapter ${i + 1}`, start: c.start, end: Math.min(stop, next ?? Infinity) };
+    })
+    .filter((c) => c.end > c.start);
+  const bookmarks: Bookmark[] = list(meta.bookmarks)
+    .map(({ time, ...rest }) => ({ ...rest, name: (typeof rest.name === "string" && rest.name) || "Marker", time: readTime(time) }))
+    .filter((b): b is Bookmark => b.time !== null)
+    .sort((a, b) => a.time - b.time);
+  return { chapters, bookmarks };
+}
 
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
@@ -820,12 +874,15 @@ export default function EditorPage() {
   const open = async (file: File) => {
     try {
       const parsed = await readFunscript(file);
+      // Read again for the rest of the file, already known to be JSON.
+      const { actions: _, ...rest } = JSON.parse(await file.text()) as Record<string, unknown>;
       setLifted(null);
       setSelected(new Set());
       editLabel.current = `Open ${file.name}`;
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
       setSaved(opened);
-      setScript({ name: file.name.replace(/\.funscript$/, ""), actions: opened });
+      const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, videoDuration));
+      setScript({ name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers });
       setView((v) => ({ ...v, from: 0 }));
       setError(null);
     } catch (e) {
@@ -834,7 +891,16 @@ export default function EditorPage() {
   };
 
   const save = () => {
-    const json = JSON.stringify({ version: "1.0", inverted: false, range: 100, actions });
+    const { file = {}, chapters = [], bookmarks = [] } = script;
+    // Into the opened file's metadata; the lists only when there are markers or the file had them.
+    const metadata = { ...(file.metadata as Record<string, unknown> | undefined) };
+    if (chapters.length || "chapters" in metadata) {
+      metadata.chapters = [...chapters].sort((a, b) => a.start - b.start).map(({ start, end, ...rest }) => ({ ...rest, startTime: writeTime(start), endTime: writeTime(end) }));
+    }
+    if (bookmarks.length || "bookmarks" in metadata) {
+      metadata.bookmarks = [...bookmarks].sort((a, b) => a.time - b.time).map(({ time, ...rest }) => ({ ...rest, time: writeTime(time) }));
+    }
+    const json = JSON.stringify({ version: "1.0", inverted: false, range: 100, ...file, actions, ...(Object.keys(metadata).length || "metadata" in file ? { metadata } : {}) });
     const a = Object.assign(document.createElement("a"), {
       href: URL.createObjectURL(new Blob([json], { type: "application/json" })),
       download: `${script.name || "untitled"}.funscript`,
