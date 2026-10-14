@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
 import { ClipboardIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -142,6 +142,8 @@ const DEFAULT_STEPS = ["1", "", ""];
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 const byTime = bisector((a: Action) => a.at).left;
 const afterTime = bisector((a: Action) => a.at).right;
+/** The speed from `a` to `b`, in depth per second. */
+const speed = (a: Action, b: Action) => (Math.abs(b.pos - a.pos) / (b.at - a.at)) * 1000;
 const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
 
 /** A marker time from a file, in ms: ms as a number or `"HH:MM:SS.mmm"`; null when unusable. */
@@ -879,6 +881,10 @@ export default function EditorPage() {
   const [scale, setScale] = useState({ time: "100", depth: "100" });
   /** The fields of the advanced editor's Move, in depth, as typed. */
   const [shift, setShift] = useState({ offset: "0", min: "0", max: "100" });
+  /** The field of the advanced editor's Max speed, as typed. */
+  const [maxSpeed, setMaxSpeed] = useState("400");
+  /** Which end Max speed keeps: In only lowers points, keeping the low reversals; Out only raises them. */
+  const [speedAnchor, setSpeedAnchor] = usePersistedState<"in" | "out">("ossm:editorSpeedAnchor", "in", localStorage);
   /** A typed number; NaN when empty. */
   const typed = (v: string) => (v.trim() ? Number(v) : NaN);
   /** The points the advanced editor's transforms act on: the selected ones, or all. */
@@ -931,6 +937,33 @@ export default function EditorPage() {
   const applyMove = (offset: number, min: number, max: number) => transform("Move depth of", (picked) => {
     const hit = new Set(picked);
     return { actions: actions.map((a, i) => (hit.has(i) ? { at: a.at, pos: Math.round(clamp(a.pos + offset, min, max)) } : a)), selected: hit };
+  });
+
+  /** The fastest segment touching an affected point, for Max speed to show; null without any. */
+  const fastest = useMemo(() => {
+    if (!advanced) return null;
+    const touched = [...actions.keys()].filter((i) => i > 0 && (!selected.size || selected.has(i) || selected.has(i - 1)));
+    return touched.length ? Math.max(...touched.map((i) => speed(actions[i - 1], actions[i]))) : null;
+  }, [advanced, actions, selected]);
+
+  /**
+   * Slow the segments touching the affected points to `limit`, moving only the
+   * affected points and only one way: with `out` up, else down, each as little
+   * as it takes. A pass forward against the point before, then back against
+   * the one after; times stay.
+   */
+  const applyMaxSpeed = (limit: number, out: boolean) => transform("Limit speed of", (picked) => {
+    const hit = new Set(picked);
+    const pos = actions.map((a) => a.pos);
+    const fix = (i: number, j: number) => {
+      if (!hit.has(i)) return;
+      const reach = (limit * Math.abs(actions[i].at - actions[j].at)) / 1000;
+      if (out && pos[i] < pos[j] - reach) pos[i] = Math.max(Math.ceil(pos[j] - reach), 0);
+      if (!out && pos[i] > pos[j] + reach) pos[i] = Math.min(Math.floor(pos[j] + reach), 100);
+    };
+    for (let i = 1; i < pos.length; i++) fix(i, i - 1);
+    for (let i = pos.length - 2; i >= 0; i--) fix(i, i + 1);
+    return { actions: actions.map((a, i) => (pos[i] === a.pos ? a : { at: a.at, pos: pos[i] })), selected: hit };
   });
 
   const removeSelected = (verb = "Delete") => {
@@ -1582,6 +1615,21 @@ export default function EditorPage() {
             </Button>
           );
         })()}
+        {/* Speeds without a unit, as depth per second means little to most. */}
+        <Text size="2" weight="medium">Max speed</Text>
+        <Flex gap="2" align="center">
+          <TextField.Root type="number" min={0} step="any" aria-label="Max speed" value={maxSpeed} onChange={(e) => setMaxSpeed(e.target.value)} style={{ flex: 1, minWidth: 0 }}>
+            <TextField.Slot side="left">Max</TextField.Slot>
+          </TextField.Root>
+          <SegmentedControl.Root size="1" value={speedAnchor} onValueChange={(v) => setSpeedAnchor(v as "in" | "out")} title="Keep the In or the Out reversals">
+            <SegmentedControl.Item value="in">In</SegmentedControl.Item>
+            <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
+          </SegmentedControl.Root>
+        </Flex>
+        <Text size="1" color="gray">Fastest: {fastest === null ? "—" : Math.round(fastest)}</Text>
+        <Button variant="soft" disabled={!actions.length || !!placing || !(typed(maxSpeed) > 0)} onClick={() => applyMaxSpeed(typed(maxSpeed), speedAnchor === "out")}>
+          Apply
+        </Button>
       </>}
     </Flex>
   );
