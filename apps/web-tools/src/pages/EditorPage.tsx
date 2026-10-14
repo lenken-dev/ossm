@@ -875,6 +875,45 @@ export default function EditorPage() {
     }, scrolls);
   };
 
+  /** The fields of the advanced editor's Scale, in %, as typed. */
+  const [scale, setScale] = useState({ time: "100", depth: "100" });
+  /** A typed number; NaN when empty. */
+  const typed = (v: string) => (v.trim() ? Number(v) : NaN);
+  /** The points the advanced editor's transforms act on: the selected ones, or all. */
+  const affected = () => (selected.size ? [...selected].sort((a, b) => a - b) : [...actions.keys()]);
+
+  /**
+   * Scale the affected points by `time` and `depth` %. In time from the first,
+   * which stays: the points up to the last stretch along, those in between
+   * too so the order stays, and later ones move by the change in length; points
+   * landing on the same ms merge, the later kept. In depth around the middle of
+   * their range, within 0–100; negative flips. They stay selected.
+   */
+  const applyScale = (time: number, depth: number) => {
+    const picked = affected();
+    const hit = new Set(picked);
+    const [i0, i1] = [picked[0], picked[picked.length - 1]];
+    const t0 = actions[i0].at;
+    const stretched = (at: number) => Math.round(t0 + ((at - t0) * time) / 100);
+    const shift = stretched(actions[i1].at) - actions[i1].at;
+    const depths = picked.map((i) => actions[i].pos);
+    const mid = (Math.min(...depths) + Math.max(...depths)) / 2;
+    const next: Action[] = [];
+    const moved = new Set<number>();
+    actions.forEach((a, i) => {
+      const at = i < i0 ? a.at : i <= i1 ? stretched(a.at) : a.at + shift;
+      if (next[next.length - 1]?.at === at) {
+        next.pop();
+        moved.delete(next.length);
+      }
+      if (hit.has(i)) moved.add(next.length);
+      next.push({ at, pos: hit.has(i) ? Math.round(clamp(mid + ((a.pos - mid) * depth) / 100, 0, 100)) : a.pos });
+    });
+    editLabel.current = `Scale ${points(picked.length)}`;
+    setScript((s) => ({ ...s, actions: next }));
+    setSelected(moved);
+  };
+
   const removeSelected = (verb = "Delete") => {
     editLabel.current = `${verb} ${points(selected.size)}`;
     setScript((s) => ({ ...s, actions: s.actions.filter((_, j) => !selected.has(j)) }));
@@ -1461,13 +1500,42 @@ export default function EditorPage() {
           <Switch checked={minimap} onCheckedChange={setMinimap} /> Minimap
         </Flex>
       </Text>
-      {advanced && (
+      {advanced && <>
         <Text as="label" size="2">
           <Flex gap="2" align="center">
             <Switch checked={fromZero} onCheckedChange={setFromZero} /> Time from 0
           </Flex>
         </Text>
-      )}
+        {/* The transforms, on the selected points or all; each Apply is one edit. */}
+        <Separator size="4" />
+        <Text size="2" weight="medium">Scale</Text>
+        <Flex gap="2">
+          {(["time", "depth"] as const).map((field) => (
+            <TextField.Root
+              key={field}
+              type="number"
+              step="any"
+              aria-label={field === "time" ? "Time scale" : "Depth scale"}
+              value={scale[field]}
+              onChange={(e) => setScale({ ...scale, [field]: e.target.value })}
+              style={{ flex: 1, minWidth: 0 }}
+            >
+              <TextField.Slot side="left">{field === "time" ? "Time" : "Depth"}</TextField.Slot>
+              <TextField.Slot side="right">%</TextField.Slot>
+            </TextField.Root>
+          ))}
+        </Flex>
+        {(() => {
+          const [time, depth] = [typed(scale.time), typed(scale.depth)];
+          // A time of 0 or less would fold the points onto each other.
+          const valid = time > 0 && Number.isFinite(depth) && (time !== 100 || depth !== 100);
+          return (
+            <Button variant="soft" disabled={!actions.length || !!placing || !valid} onClick={() => applyScale(time, depth)}>
+              Apply
+            </Button>
+          );
+        })()}
+      </>}
     </Flex>
   );
 
