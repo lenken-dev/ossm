@@ -883,14 +883,27 @@ export default function EditorPage() {
   const affected = () => (selected.size ? [...selected].sort((a, b) => a - b) : [...actions.keys()]);
 
   /**
+   * Apply a transform, `fn` of the affected points' indices giving the new
+   * points and selection, as one edit called `verb` and how many; nothing when
+   * it leaves the points as they are.
+   */
+  const transform = (verb: string, fn: (picked: number[]) => { actions: Action[]; selected: Set<number> }) => {
+    const picked = affected();
+    const next = fn(picked);
+    if (next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos)) return;
+    editLabel.current = `${verb} ${points(picked.length)}`;
+    setScript((s) => ({ ...s, actions: next.actions }));
+    setSelected(next.selected);
+  };
+
+  /**
    * Scale the affected points by `time` and `depth` %. In time from the first,
    * which stays: the points up to the last stretch along, those in between
    * too so the order stays, and later ones move by the change in length; points
    * landing on the same ms merge, the later kept. In depth around the middle of
    * their range, within 0–100; negative flips. They stay selected.
    */
-  const applyScale = (time: number, depth: number) => {
-    const picked = affected();
+  const applyScale = (time: number, depth: number) => transform("Scale", (picked) => {
     const hit = new Set(picked);
     const [i0, i1] = [picked[0], picked[picked.length - 1]];
     const t0 = actions[i0].at;
@@ -909,10 +922,8 @@ export default function EditorPage() {
       if (hit.has(i)) moved.add(next.length);
       next.push({ at, pos: hit.has(i) ? Math.round(clamp(mid + ((a.pos - mid) * depth) / 100, 0, 100)) : a.pos });
     });
-    editLabel.current = `Scale ${points(picked.length)}`;
-    setScript((s) => ({ ...s, actions: next }));
-    setSelected(moved);
-  };
+    return { actions: next, selected: moved };
+  });
 
   const removeSelected = (verb = "Delete") => {
     editLabel.current = `${verb} ${points(selected.size)}`;
