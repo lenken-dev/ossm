@@ -362,6 +362,14 @@ export default function EditorPage() {
   }, [setView, maxSpan]);
 
   const { actions, chapters, bookmarks } = script;
+  /** While the advanced editor is open, the main script's other points, in runs broken where its points were taken out; drawn faintly behind them, never edited. */
+  const context = useMemo(() => {
+    if (!advanced) return [];
+    const from = new Set(advanced.from);
+    const runs: Action[][] = [[]];
+    main.actions.forEach((a, i) => (from.has(i) ? runs[runs.length - 1].length && runs.push([]) : runs[runs.length - 1].push(a)));
+    return runs.filter((run) => run.length);
+  }, [main.actions, advanced?.from]);
   /**
    * The points that stay while placing. Closing the gap, the time from the
    * first to the last lifted point goes, with any other points in it, and the
@@ -680,8 +688,8 @@ export default function EditorPage() {
     });
   };
 
-  /** The time the minimap shows: the script, the video and the visible time, whichever is longest. */
-  const total = Math.max(end, videoDuration, view.span);
+  /** The time the minimap shows: the script (the main one too, in the advanced editor), the video and the visible time, whichever is longest. */
+  const total = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, videoDuration, view.span);
   const minimapX = (at: number) => (at / total) * width;
   /**
    * Drag the visible time around in the minimap. Pressed outside it, it
@@ -1239,7 +1247,13 @@ export default function EditorPage() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
     const css = getComputedStyle(canvas);
-    Object.assign(ctx, { lineWidth: 2, lineJoin: "round", strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
+    Object.assign(ctx, { lineWidth: 2, lineJoin: "round", strokeStyle: css.getPropertyValue("--gray-a7") });
+    for (const run of context) {
+      ctx.beginPath();
+      for (const a of run.slice(Math.max(byTime(run, view.from) - 1, 0), byTime(run, view.from + view.span) + 1)) ctx.lineTo(x(a.at), y(a.pos));
+      ctx.stroke();
+    }
+    Object.assign(ctx, { strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
     for (const segment of segments) {
       ctx.beginPath();
       for (const a of segment) ctx.lineTo(x(a.at), y(a.pos));
@@ -1459,6 +1473,7 @@ export default function EditorPage() {
 
   // Built only when they change, not on every pointer move while placing.
   const minimapY = (pos: number) => 2 + (1 - pos / 100) * (MINIMAP_HEIGHT - 4);
+  const minimapContext = useMemo(() => context.map((run) => `M${run.map((a) => `${minimapX(a.at)},${minimapY(a.pos)}`).join("L")}`).join(""), [context, width, total]);
   const minimapLine = useMemo(() => actions.map((a) => `${minimapX(a.at)},${minimapY(a.pos)}`).join(" "), [actions, width, total]);
   const minimapSelected = useMemo(
     () => kept.map((a, i) => selected.has(i) ? `${selected.has(i - 1) ? "L" : "M"}${minimapX(a.at)},${minimapY(a.pos)}${selected.has(i - 1) ? "" : "l0,0"}` : "").join(""),
@@ -2040,6 +2055,8 @@ export default function EditorPage() {
           {chapters.map((c, i) => (
             <rect key={i} x={minimapX(c.start)} width={minimapX(c.end) - minimapX(c.start)} height={MINIMAP_HEIGHT} style={{ fill: light[i] ? "var(--gray-a3)" : "var(--gray-a4)" }} />
           ))}
+          {/* The main script's other points behind the advanced editor's. */}
+          {advanced && <path d={minimapContext} fill="none" strokeWidth={1} style={{ stroke: "var(--gray-a7)", pointerEvents: "none" }} />}
           {/* ponytail: the whole script as one polyline; fine for thousands of points, thin it out if a long script lags. */}
           <polyline
             points={minimapLine}
