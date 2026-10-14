@@ -155,20 +155,22 @@ interface Transformed {
 }
 
 /**
- * Scale the points `picked` of `actions` by `time` and `depth` %. In time from
- * the first, which stays: the points up to the last stretch along, those in
- * between too so the order stays, and later ones move by the change in length;
- * points landing on the same ms merge, the later kept. In depth around the
- * middle of their range, within 0–100; negative flips.
+ * Scale the points `picked` of `actions` by `time` % and onto `low`–`high`. In
+ * time from the first, which stays: the points up to the last stretch along,
+ * those in between too so the order stays, and later ones move by the change
+ * in length; points landing on the same ms merge, the later kept. In depth
+ * their range maps onto `low`–`high`, flipped when `low` is above; all at one
+ * depth, they go halfway between.
  */
-function scaled(actions: Action[], picked: number[], time: number, depth: number): Transformed {
+function scaled(actions: Action[], picked: number[], time: number, low: number, high: number): Transformed {
   const hit = new Set(picked);
   const [i0, i1] = [picked[0], picked[picked.length - 1]];
   const t0 = actions[i0].at;
   const stretched = (at: number) => Math.round(t0 + ((at - t0) * time) / 100);
   const shift = stretched(actions[i1].at) - actions[i1].at;
   const depths = picked.map((i) => actions[i].pos);
-  const mid = (Math.min(...depths) + Math.max(...depths)) / 2;
+  const [lo, hi] = [Math.min(...depths), Math.max(...depths)];
+  const mapped = (pos: number) => (hi > lo ? low + ((pos - lo) * (high - low)) / (hi - lo) : (low + high) / 2);
   const next: Action[] = [];
   const moved = new Set<number>();
   actions.forEach((a, i) => {
@@ -178,9 +180,15 @@ function scaled(actions: Action[], picked: number[], time: number, depth: number
       moved.delete(next.length);
     }
     if (hit.has(i)) moved.add(next.length);
-    next.push({ at, pos: hit.has(i) ? Math.round(clamp(mid + ((a.pos - mid) * depth) / 100, 0, 100)) : a.pos });
+    next.push({ at, pos: hit.has(i) ? Math.round(clamp(mapped(a.pos), 0, 100)) : a.pos });
   });
   return { actions: next, selected: moved };
+}
+
+/** Scale's fields as numbers; null while one is refused: a time of 0 or less would fold the points onto each other, and the depths are 0–100. */
+function scaleParams(fields: { time: string; low: string; high: string }) {
+  const [time, low, high] = [typed(fields.time), typed(fields.low), typed(fields.high)];
+  return time > 0 && low >= 0 && low <= 100 && high >= 0 && high <= 100 ? { time, low, high } : null;
 }
 
 /** Shift the depth of the points `picked` of `actions` by `offset`, then keep it within `min`–`max`. */
@@ -962,7 +970,7 @@ export default function EditorPage() {
   };
 
   /** The fields of the advanced editor's Scale, in %, as typed. */
-  const [scale, setScale] = useState({ time: "100", depth: "100" });
+  const [scale, setScale] = useState({ time: "100", low: "0", high: "100" });
   /** The fields of the advanced editor's Shift depth, as typed. */
   const [shift, setShift] = useState({ offset: "0", min: "0", max: "100" });
   /** The field of the advanced editor's Max speed, as typed. */
@@ -975,7 +983,8 @@ export default function EditorPage() {
     const picked = selected.size ? [...selected].sort((a, b) => a - b) : [...actions.keys()];
     const fastest = fastestOf(actions, picked);
     setTool({ kind, actions, picked, fastest });
-    setScale({ time: "100", depth: "100" });
+    const depths = picked.map((i) => actions[i].pos);
+    setScale({ time: "100", low: String(Math.min(...depths)), high: String(Math.max(...depths)) });
     setShift({ offset: "0", min: "0", max: "100" });
     setMaxSpeed(fastest === null ? "" : String(Math.ceil(fastest)));
     setBox(null);
@@ -986,9 +995,8 @@ export default function EditorPage() {
     if (!tool) return null;
     const { kind, actions, picked } = tool;
     if (kind === "scale") {
-      const [time, depth] = [typed(scale.time), typed(scale.depth)];
-      // A time of 0 or less would fold the points onto each other.
-      return time > 0 && Number.isFinite(depth) ? scaled(actions, picked, time, depth) : null;
+      const params = scaleParams(scale);
+      return params && scaled(actions, picked, params.time, params.low, params.high);
     }
     if (kind === "shift") {
       const [offset, min, max] = [typed(shift.offset), typed(shift.min), typed(shift.max)];
@@ -998,6 +1006,36 @@ export default function EditorPage() {
     const limit = typed(maxSpeed);
     return limit > 0 ? speedLimited(actions, picked, limit, speedAnchor === "out") : null;
   }, [tool, scale, shift, maxSpeed, speedAnchor]);
+
+  /** Scale's box while it is open: the result's bounding box, from the first affected point `t0` and the last `t1` it was opened on; null while a field is refused. */
+  const scaleBox = (() => {
+    const params = tool?.kind === "scale" && scaleParams(scale);
+    if (!params) return null;
+    const [t0, t1] = [tool!.actions[tool!.picked[0]].at, tool!.actions[tool!.picked[tool!.picked.length - 1]].at];
+    return { ...params, t0, t1, to: t0 + ((t1 - t0) * params.time) / 100 };
+  })();
+
+  /** Drag Scale's box by `sides`: its right edge sets Time %, its top and bottom High and Low, which may pass each other; its body both, within 0–100. */
+  const dragScale = (e: PointerEvent<SVGRectElement>, sides: ("to" | "low" | "high")[]) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const start = scaleBox!;
+    const origin = pointerAt(e);
+    track(e.currentTarget.ownerSVGElement!, e, (m) => {
+      const p = pointerAt(m);
+      const time = Math.max(Number((((start.to + p.at - origin.at - start.t0) / (start.t1 - start.t0)) * 100).toFixed(2)), 0.01);
+      // Stops where any side dragged would leave 0–100, so the body keeps its height.
+      const dragged = (["low", "high"] as const).filter((side) => sides.includes(side));
+      const dp = clamp(p.pos - origin.pos, Math.max(...dragged.map((side) => -start[side])), Math.min(...dragged.map((side) => 100 - start[side])));
+      const depth = (side: "low" | "high") => String(start[side] + dp);
+      setScale((f) => ({
+        time: sides.includes("to") ? String(time) : f.time,
+        low: sides.includes("low") ? depth("low") : f.low,
+        high: sides.includes("high") ? depth("high") : f.high,
+      }));
+    });
+  };
 
   /** Apply the open tool's result as one edit, unless it leaves the points as they are, and go back to the tools. */
   const applyTool = () => {
@@ -1638,24 +1676,24 @@ export default function EditorPage() {
             </IconButton>
             <Text size="2" weight="medium">{TOOLS.find((t) => t.kind === tool.kind)!.name}</Text>
           </Flex>
-          {tool.kind === "scale" && (
-            <Flex gap="2">
-              {(["time", "depth"] as const).map((field) => (
+          {tool.kind === "scale" && ([["time"], ["low", "high"]] as const).map((row) => (
+            <Flex key={row[0]} gap="2">
+              {row.map((field) => (
                 <TextField.Root
                   key={field}
                   type="number"
                   step="any"
-                  aria-label={field === "time" ? "Time scale" : "Depth scale"}
+                  aria-label={{ time: "Time scale", low: "Lowest depth", high: "Highest depth" }[field]}
                   value={scale[field]}
                   onChange={(e) => setScale({ ...scale, [field]: e.target.value })}
                   style={{ flex: 1, minWidth: 0 }}
                 >
-                  <TextField.Slot side="left">{field === "time" ? "Time" : "Depth"}</TextField.Slot>
-                  <TextField.Slot side="right">%</TextField.Slot>
+                  <TextField.Slot side="left">{{ time: "Time", low: "Low", high: "High" }[field]}</TextField.Slot>
+                  {field === "time" && <TextField.Slot side="right">%</TextField.Slot>}
                 </TextField.Root>
               ))}
             </Flex>
-          )}
+          ))}
           {tool.kind === "shift" && ([["offset"], ["min", "max"]] as const).map((row) => (
             <Flex key={row[0]} gap="2">
               {row.map((field) => (
@@ -2152,6 +2190,33 @@ export default function EditorPage() {
                 ))}
               </g>
             )}
+            {/* Scale's box, like the selection box: its right edge stretches time, its top and bottom set the depths, the right corners both, its body moves the depths together; all at one time, it only has the depths. */}
+            {scaleBox && (() => {
+              const [left, right] = [x(scaleBox.t0), x(scaleBox.to)];
+              const [top, bottom] = [y(Math.max(scaleBox.low, scaleBox.high)), y(Math.min(scaleBox.low, scaleBox.high))];
+              const stretches = scaleBox.t1 > scaleBox.t0;
+              const w = Math.max(right - left, 2 * GRIP);
+              return (
+                <g>
+                  <rect x={left} y={top} width={right - left} height={bottom - top} strokeDasharray="4 2" style={{ fill: "var(--accent-a3)", stroke: "var(--accent-9)", cursor: "ns-resize" }} onPointerDown={(e) => dragScale(e, ["low", "high"])} />
+                  {(["low", "high"] as const).map((v) => (
+                    <rect key={v} x={(left + right - w) / 2} width={w} y={y(scaleBox[v]) - GRIP / 2} height={GRIP} style={{ fill: "transparent", cursor: "ns-resize" }} onPointerDown={(e) => dragScale(e, [v])} />
+                  ))}
+                  {stretches && <rect x={right - GRIP / 2} width={GRIP} y={top} height={bottom - top} style={{ fill: "transparent", cursor: "ew-resize" }} onPointerDown={(e) => dragScale(e, ["to"])} />}
+                  {stretches && (["low", "high"] as const).map((v) => (
+                    <rect
+                      key={`to-${v}`}
+                      x={right - GRIP / 2}
+                      width={GRIP}
+                      y={y(scaleBox[v]) - GRIP / 2}
+                      height={GRIP}
+                      style={{ fill: "var(--color-panel-solid)", stroke: "var(--accent-9)", cursor: y(scaleBox[v]) === top ? "nesw-resize" : "nwse-resize" }}
+                      onPointerDown={(e) => dragScale(e, ["to", v])}
+                    />
+                  ))}
+                </g>
+              );
+            })()}
             {only !== null && shown[only] && (
               <text
                 x={x(shown[only].at)}
