@@ -78,15 +78,36 @@ const extended = (area: Area, a: Action): Area => ({
  * A stretch of points made by Generate: its box, times in whole ms, and its
  * own copy of the setup. Its points are the ones in its time; they are locked.
  */
-interface Region extends Area {
+interface Generated extends Area {
   generate: GenerateSetup;
 }
+
+/**
+ * An inserted snippet: its own copies of the snippet's points, the ones in
+ * its time, and generator regions, inside it, with its name; times in whole
+ * ms. Its time runs from its first to its last point, widened to its
+ * regions' boxes. Locked as a generator region; its regions only show once
+ * it is unlocked.
+ */
+interface Instance {
+  from: number;
+  to: number;
+  snippet: { name: string; regions: Generated[] };
+}
+
+/** A locked stretch of points: a generator region or a snippet instance. */
+type Region = Generated | Instance;
+const isInstance = (r: Region): r is Instance => "snippet" in r;
+
+/** The generator regions of `regions` and in their instances: those that put points on the bookmarks. */
+const generators = (regions: Region[]) => regions.flatMap((r) => (isInstance(r) ? r.snippet.regions : [r]));
 
 /** The region of `regions` whose time holds `at`; none outside them. */
 const regionAt = (regions: Region[], at: number) => regions.find((r) => at >= r.from && at <= r.to);
 
-/** `r` moved `dt` ms in time. */
-const movedBy = (r: Region, dt: number): Region => ({ ...r, from: r.from + dt, to: r.to + dt });
+/** `r` moved `dt` ms in time, an instance's regions with it. */
+const movedBy = <R extends Region>(r: R, dt: number): R =>
+  ({ ...r, from: r.from + dt, to: r.to + dt, ...(isInstance(r) && { snippet: { ...r.snippet, regions: r.snippet.regions.map((i) => movedBy(i, dt)) } }) });
 
 /** Points to place, timed from the first, with the regions they carry, timed alike: copied, pasted, moved or the advanced editor's result. */
 interface Clip {
@@ -146,14 +167,17 @@ function merged(items: Entry[], incoming: Entry[]): Entry[] {
 const sortedEntries = (items: Entry[]) => [...items].sort((a, b) => Number(isFolder(b)) - Number(isFolder(a)) || entryName(a).localeCompare(entryName(b)));
 
 /** A region's label, after the timing that placed its points. */
-const regionName = (r: Region) => `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`;
+const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}` : `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`);
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
 /** How the selection box and the tools' boxes in the graph fill and outline. */
 const TOOL_BOX = { fill: "var(--accent-a3)", stroke: "var(--accent-9)" };
-/** How a region's band behind the graph fills and outlines; selected, it outlines as the selected markers. */
-const REGION_BAND = { fill: "var(--cyan-a3)", stroke: "var(--cyan-a8)" };
+/** How a region's band behind the graph fills and outlines, and its label's colour: cyan, an instance's violet; selected, it outlines as the selected markers. */
+const bandOf = (r: Region) => {
+  const c = isInstance(r) ? "violet" : "cyan";
+  return { fill: `var(--${c}-a3)`, stroke: `var(--${c}-a8)`, label: `var(--${c}-11)` };
+};
 /** Size of the selection box's grips, in px. */
 const GRIP = 8;
 /** Least time between a Generate spline's knots, in % of the range. */
@@ -517,19 +541,20 @@ function generated(setup: GenerateSetup, range: Area, marks: number[]): Action[]
 }
 
 /** `actions` with the Markers region `r`'s points put again at the bookmarks `marks` in its box: none without any there; as they are while its setup is refused. */
-function refilled(actions: Action[], r: Region, marks: number[]) {
+function refilled(actions: Action[], r: Generated, marks: number[]) {
   const made = marks.some((t) => t >= r.from && t <= r.to) ? generated(r.generate, r, marks) : [];
   return made ? [...actions.slice(0, byTime(actions, r.from)), ...made, ...actions.slice(afterTime(actions, r.to))] : actions;
 }
 
 /**
- * `s` with the bookmarks `bookmarks`: each Markers region with a bookmark
- * time added or gone in its box puts its points again on the bookmarks.
+ * `s` with the bookmarks `bookmarks`: each Markers region, in an instance
+ * too, with a bookmark time added or gone in its box puts its points again
+ * on the bookmarks.
  */
 function withBookmarks<T extends Content>(s: T, bookmarks: Bookmark[]): T {
   const [was, now] = [s.bookmarks.map((b) => b.time), bookmarks.map((b) => b.time)];
   const changed = [...was.filter((t) => !now.includes(t)), ...now.filter((t) => !was.includes(t))];
-  const touched = s.regions.filter((r) => r.generate.timing === "markers" && changed.some((t) => t >= r.from && t <= r.to));
+  const touched = generators(s.regions).filter((r) => r.generate.timing === "markers" && changed.some((t) => t >= r.from && t <= r.to));
   return { ...s, bookmarks, actions: touched.reduce((list, r) => refilled(list, r, now), s.actions) };
 }
 
@@ -592,16 +617,23 @@ function readMarkers(file: Record<string, unknown>, end: number) {
 /**
  * The regions in `list`, from a file's or the clipboard's `"ossm"`, sorted.
  * Lenient: one is left out, its points staying ordinary, when its times are
- * not numbers with From before To, or its setup is not an object with a known
- * timing and known shapes, a spline's with knots; of overlapping ones, all but
- * the first. Field values are not checked.
+ * not numbers with From before To, or it has neither a setup that is an
+ * object with a known timing and known shapes, a spline's with knots, nor a
+ * snippet with a name; of overlapping ones, all but the first. An instance's
+ * regions are read alike, those not inside it left out alone. Field values
+ * are not checked.
  */
 function readRegions(list: unknown): Region[] {
   const known = (f?: Func) => !!f && typeof f === "object" && Object.keys(SHAPES).includes(f.shape) && (f.shape !== "spline" || Array.isArray(f.knots));
-  const read = (Array.isArray(list) ? list : []).filter((r): r is Region => {
-    const g = r?.generate as GenerateSetup | undefined;
-    return typeof r?.from === "number" && typeof r.to === "number" && r.from < r.to && !!g && typeof g === "object"
-      && ["interval", "speed", "markers"].includes(g.timing) && known(g.interval) && known(g.speed) && known(g.high) && known(g.low);
+  const read = (Array.isArray(list) ? list : []).flatMap((r): Region[] => {
+    if (typeof r?.from !== "number" || typeof r.to !== "number" || !(r.from < r.to)) return [];
+    const g = r.generate as GenerateSetup | undefined;
+    if (!!g && typeof g === "object" && ["interval", "speed", "markers"].includes(g.timing) && known(g.interval) && known(g.speed) && known(g.high) && known(g.low)) return [r];
+    const snippet = r.snippet as { name?: unknown; regions?: unknown } | undefined;
+    if (typeof snippet?.name !== "string") return [];
+    // Not nested: an instance's own instances go.
+    const inner = readRegions(snippet.regions).filter((i): i is Generated => !isInstance(i) && i.from >= r.from && i.to <= r.to);
+    return [{ ...r, snippet: { ...snippet, name: snippet.name, regions: inner } }];
   });
   const regions: Region[] = [];
   for (const r of read.sort((a, b) => a.from - b.from)) if (!regions.length || r.from > regions[regions.length - 1].to) regions.push(r);
@@ -633,7 +665,8 @@ function readEntries(list: unknown): Entry[] {
   return (Array.isArray(list) ? list : []).flatMap((e): Entry[] => {
     if (typeof e?.folder === "string" && e.folder.trim() && Array.isArray(e.items)) return [{ folder: e.folder, items: readEntries(e.items) }];
     const clip = typeof e?.name === "string" && e.name.trim() ? readClip(e.actions, e.regions) : null;
-    return clip && clip.actions.length > 1 ? [{ name: e.name, ...clip }] : [];
+    // Its instances' contents only, as instances do not nest.
+    return clip && clip.actions.length > 1 ? [{ name: e.name, actions: clip.actions, regions: generators(clip.regions) }] : [];
   });
 }
 
@@ -664,7 +697,7 @@ export default function EditorPage() {
    * was opened on, and their fastest segment; its result shows until applied.
    * Generate on a `region`, in the main script too, edits it in place.
    */
-  const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null; region?: Region } | null>(null);
+  const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null; region?: Generated } | null>(null);
   /** The Snippets panel shows beside the graph, in the main script and the advanced editor alike. */
   const [snippetsOpen, setSnippetsOpen] = usePersistedState("ossm:editorSnippetsShown", false, localStorage);
   /** The snippet library, shared by all scripts, as its file holds it. */
@@ -886,7 +919,7 @@ export default function EditorPage() {
     const [lo, hi] = [Math.min(...lifted), Math.max(...lifted)];
     const span = actions[hi].at - actions[lo].at;
     const closed = [...actions.slice(0, lo), ...actions.slice(hi + 1).map((a) => ({ at: a.at - span, pos: a.pos }))];
-    const shifted = span ? keptRegions.filter((r) => r.from > actions[lo].at && r.generate.timing === "markers") : [];
+    const shifted = span ? generators(keptRegions).filter((r) => r.from > actions[lo].at && r.generate.timing === "markers") : [];
     return shifted.reduce((list, r) => refilled(list, r, bookmarks.map((b) => b.time)), closed);
   }, [actions, lifted, closeGap, keptRegions, bookmarks]);
 
@@ -1161,7 +1194,8 @@ export default function EditorPage() {
     const inside = regionAt(regions, point.at);
     if (inside) {
       selectRegion(inside);
-      dragRegion(e, inside);
+      // ponytail: an instance's band is not dragged yet (step 3).
+      if (!isInstance(inside)) dragRegion(e, inside);
       return;
     }
     if (selected.size > 1) {
@@ -1191,7 +1225,7 @@ export default function EditorPage() {
    * of those in view where it is free; with none, it shows red where it is,
    * out of the script, and released there it goes back to where it started.
    */
-  const dragRegion = (e: PointerEvent<SVGSVGElement>, r: Region) => {
+  const dragRegion = (e: PointerEvent<SVGSVGElement>, r: Generated) => {
     const svg = e.currentTarget;
     const own = actions.slice(byTime(actions, r.from), afterTime(actions, r.to));
     const rest = actions.filter((a) => a.at < r.from || a.at > r.to);
@@ -1201,7 +1235,7 @@ export default function EditorPage() {
     /** Whether it is over another region, out of the script. */
     let over = false;
     /** Its points with it moved to `to`, `dt` from where it started: a Markers one's on the bookmarks there. */
-    const pointsAt = (to: Region, dt: number) => {
+    const pointsAt = (to: Generated, dt: number) => {
       const shifted = own.map((a) => ({ at: a.at + dt, pos: a.pos }));
       return r.generate.timing === "markers" ? refilled(shifted, to, bookmarks.map((b) => b.time)) : shifted;
     };
@@ -1461,16 +1495,27 @@ export default function EditorPage() {
     setBox(null);
   };
 
-  /** Unlock the region `r`: it goes, and its points become ordinary points, selected. */
+  /** Unlock the region `r`: it goes, and its points become ordinary points, selected; an instance's regions become regions of their own, their points staying theirs. */
   const unlockRegion = (r: Region) => {
-    editLabel.current = "Unlock region";
-    setScript((s) => ({ ...s, regions: s.regions.filter((o) => o !== r) }));
-    setSelected(new Set(Array.from({ length: afterTime(actions, r.to) - byTime(actions, r.from) }, (_, k) => byTime(actions, r.from) + k)));
+    const inner = isInstance(r) ? r.snippet.regions : [];
+    editLabel.current = isInstance(r) ? "Unlock snippet" : "Unlock region";
+    setScript((s) => ({ ...s, regions: [...s.regions.filter((o) => o !== r), ...inner].sort((a, b) => a.from - b.from) }));
+    setSelected(new Set(Array.from({ length: afterTime(actions, r.to) - byTime(actions, r.from) }, (_, k) => byTime(actions, r.from) + k).filter((i) => !regionAt(inner, actions[i].at))));
   };
 
-  /** Delete the region `r` with its points; `verb` names the edit. */
+  /** Give the instance `r` the name `name`. */
+  const renameInstance = (r: Instance, name: string) => {
+    const renamed = { ...r, snippet: { ...r.snippet, name } };
+    editLabel.current = "Rename snippet";
+    setScript((s) => ({ ...s, regions: s.regions.map((o) => (o === r ? renamed : o)) }));
+    setRegionOn(renamed);
+  };
+  /** The selected instance's Name field as typed, until accepted with Enter or by leaving it; empty, it is refused. */
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+
+  /** Delete the region `r` with its points, an instance with its regions; `verb` names the edit. */
   const deleteRegion = (r: Region, verb = "Delete") => {
-    editLabel.current = `${verb} region`;
+    editLabel.current = `${verb} ${isInstance(r) ? "snippet" : "region"}`;
     setScript((s) => ({ ...s, actions: s.actions.filter((a) => a.at < r.from || a.at > r.to), regions: s.regions.filter((o) => o !== r) }));
     setRegionOn(null);
   };
@@ -1564,7 +1609,8 @@ export default function EditorPage() {
 
   /** Edit the region `r` in place: Generate on its own setup and box; not while placing. */
   const editRegion = (r: Region) => {
-    if (placing) return;
+    // ponytail: an instance's Edit comes in step 4.
+    if (placing || isInstance(r)) return;
     setTool({ kind: "generate", actions, picked: [], fastest: null, region: r });
     setRegionSetup(r.generate);
     setGenRange(rangeFields(r, zero));
@@ -1781,7 +1827,7 @@ export default function EditorPage() {
     const { kind, picked, region } = tool!;
     const next = preview!;
     setTool(null);
-    const made: Region | null = kind === "generate" && genBox!.to > genBox!.from ? { ...genBox!, generate: structuredClone(genSetup) } : null;
+    const made: Generated | null = kind === "generate" && genBox!.to > genBox!.from ? { ...genBox!, generate: structuredClone(genSetup) } : null;
     const same = next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos);
     if (same && (!made || JSON.stringify(made) === JSON.stringify(region))) return;
     editLabel.current = region ? "Edit region" : `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(kind === "generate" ? next.selected.size : picked.length)}`;
@@ -1978,6 +2024,18 @@ export default function EditorPage() {
     setLibrary((lib) => updatedAt(lib, path.slice(0, -1), (items) => [...items.filter((e) => entryName(e) !== name), snippet]));
   };
 
+  /**
+   * Insert the library snippet `s`: it follows the pointer until placed, as
+   * a paste; in the main script as an instance, in the advanced editor as
+   * its points and regions.
+   */
+  const insertSnippet = (s: Snippet) => {
+    const inner = generators(s.regions);
+    const instance: Instance = { from: Math.min(0, ...inner.map((r) => r.from)), to: Math.max(s.actions[s.actions.length - 1].at, ...inner.map((r) => r.to)), snippet: { name: s.name, regions: inner } };
+    cancelPlacing();
+    setPlacing({ actions: s.actions, regions: advanced ? inner : [instance] });
+  };
+
   /** The open folders at `from` and in it, now at `to`. */
   const reopened = (from: string[], to: string[]) => setOpenFolders((keys) => keys.map((k) => {
     const p = JSON.parse(k) as string[];
@@ -2090,7 +2148,8 @@ export default function EditorPage() {
     const clip = readClip(parsed?.actions, parsed?.ossm?.regions);
     if (!clip) return false;
     cancelPlacing();
-    setPlacing(clip);
+    // In the advanced editor, instances come as their contents, as they do not nest.
+    setPlacing(advanced ? { ...clip, regions: generators(clip.regions) } : clip);
     return true;
   };
 
@@ -2133,7 +2192,7 @@ export default function EditorPage() {
     const next = Math.min(later[0]?.at ?? Infinity, ...keptRegions.filter((r) => r.from >= start).map((r) => r.from));
     const shift = Number.isFinite(next) ? Math.max(end - start, end + 1 - next) : 0;
     const regions = keptRegions.map((r) => (r.from >= start ? movedBy(r, shift) : r));
-    const shifted = shift ? regions.filter((r) => r.from >= start + shift && r.generate.timing === "markers") : [];
+    const shifted = shift ? generators(regions).filter((r) => r.from >= start + shift && r.generate.timing === "markers") : [];
     const after = shifted.reduce((list, r) => refilled(list, r, bookmarks.map((b) => b.time)), later.map((a) => ({ at: a.at + shift, pos: a.pos })));
     return { before, after, regions };
   };
@@ -2167,9 +2226,9 @@ export default function EditorPage() {
    */
   const put = (pasted: Action[], insert: boolean) => {
     const { before, after, regions } = around(pasted, insert);
-    const carried = carriedBy(pasted).map((r) => ({ ...r, generate: structuredClone(r.generate) }));
+    const carried = carriedBy(pasted).map((r) => structuredClone(r));
     // Nothing lifted, the advanced editor's result from empty is new, as a paste.
-    editLabel.current = `${lifted?.size ? "Move" : insert ? "Insert" : "Paste"} ${lifted?.size || !carried.length ? points(pasted.length) : carried.length === 1 ? "region" : `${carried.length} regions`}`;
+    editLabel.current = `${lifted?.size ? "Move" : insert ? "Insert" : "Paste"} ${lifted?.size || !carried.length ? points(pasted.length) : carried.length === 1 ? (isInstance(carried[0]) ? "snippet" : "region") : `${carried.length} regions`}`;
     const next = [...before, ...pasted, ...after];
     setScript({ ...script, actions: next, regions: carried.length ? [...regions, ...carried].sort((a, b) => a.from - b.from) : regions });
     setSelected(new Set(pasted.flatMap((a, i) => (regionAt(carried, a.at) ? [] : [before.length + i]))));
@@ -2490,7 +2549,15 @@ export default function EditorPage() {
         {...(isFolder(e) ? dropInto(at) : {})}
         style={{ paddingLeft: depth * 16, minHeight: 28, borderRadius: 4, background: dropOn === key ? "var(--accent-a4)" : undefined }}
       >
-        <Flex align="center" gap="2" flexGrow="1" minWidth="0" onClick={isFolder(e) ? toggle : undefined} style={{ cursor: isFolder(e) ? "pointer" : undefined }}>
+        <Flex
+          align="center"
+          gap="2"
+          flexGrow="1"
+          minWidth="0"
+          onClick={isFolder(e) ? toggle : undefined}
+          onDoubleClick={() => !isFolder(e) && !tool && insertSnippet(e)}
+          style={{ cursor: isFolder(e) ? "pointer" : undefined, userSelect: "none" }}
+        >
           {isFolder(e) ? <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} /> : <ComponentInstanceIcon style={{ flexShrink: 0 }} />}
           <Text size="2" truncate>{name}</Text>
         </Flex>
@@ -2502,8 +2569,9 @@ export default function EditorPage() {
         {!advanced && !isFolder(e) && (
           <IconButton size="1" variant="ghost" color="gray" disabled={!!placing} aria-label="Edit" title="Edit it in the advanced editor" onClick={() => openAdvanced({ path: at })}><MixerHorizontalIcon /></IconButton>
         )}
-        {/* ponytail: Insert comes with instances, in the next step. */}
-        {!isFolder(e) && <IconButton size="1" variant="ghost" color="gray" disabled aria-label="Insert" title="Insert"><EnterIcon /></IconButton>}
+        {!isFolder(e) && (
+          <IconButton size="1" variant="ghost" color="gray" disabled={!!tool} aria-label="Insert" title="Insert: place it with a click (or double-click the row)" onClick={() => insertSnippet(e)}><EnterIcon /></IconButton>
+        )}
         {!advanced && <>
           <NamePopover initial={name} taken={(n) => n !== name && nameTaken(path, n)} onName={(n) => n !== name && renameEntry(at, n)}>
             <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
@@ -2669,10 +2737,26 @@ export default function EditorPage() {
       </Text>
       {/* The selected region, its points locked until unlocked. */}
       {region && <>
-        <Text size="2" weight="medium">Region</Text>
-        <Text size="2" color="gray">{regionName(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
+        <Text size="2" weight="medium">{isInstance(region) ? "Snippet" : "Region"}</Text>
+        {isInstance(region) && (
+          <TextField.Root
+            aria-label="Name"
+            value={nameDraft ?? region.snippet.name}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            onBlur={() => {
+              const name = nameDraft?.trim();
+              if (name && name !== region.snippet.name) renameInstance(region, name);
+              setNameDraft(null);
+            }}
+          >
+            <TextField.Slot side="left">Name</TextField.Slot>
+          </TextField.Root>
+        )}
+        <Text size="2" color="gray">{isInstance(region) ? "Snippet" : regionName(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
         <Flex gap="2">
-          <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title="Edit its setup and box with Generate (E, or double-click it)" onClick={() => editRegion(region)}>
+          {/* ponytail: an instance's Edit comes in step 4. */}
+          <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing || isInstance(region)} title="Edit its setup and box with Generate (E, or double-click it)" onClick={() => editRegion(region)}>
             <Pencil1Icon /> Edit
           </Button>
           <Button variant="soft" color="gray" style={{ flex: 1 }} title="Make its points ordinary points" onClick={() => unlockRegion(region)}>
@@ -3349,7 +3433,7 @@ export default function EditorPage() {
             ))}
             {/* In the advanced editor, the main script's regions faintly, read-only. */}
             {advanced && main.regions.map((r, i) => inView(r.from, r.to) && (
-              <rect key={`m${i}`} x={x(r.from)} width={x(r.to) - x(r.from)} height={plotHeight} strokeDasharray="4 2" style={{ ...REGION_BAND, opacity: 0.5 }} />
+              <rect key={`m${i}`} x={x(r.from)} width={x(r.to) - x(r.from)} height={plotHeight} strokeDasharray="4 2" style={{ ...bandOf(r), opacity: 0.5 }} />
             ))}
             {astray && (
               <rect x={x(astray.regions[0].from)} width={x(astray.regions[0].to) - x(astray.regions[0].from)} height={plotHeight} style={{ fill: "var(--red-a3)", stroke: "var(--red-9)" }} />
@@ -3362,7 +3446,7 @@ export default function EditorPage() {
                 width={x(r.to) - x(r.from)}
                 height={plotHeight}
                 strokeWidth={r === region ? 2 : 1}
-                style={{ fill: REGION_BAND.fill, stroke: r === region ? "var(--accent-9)" : REGION_BAND.stroke }}
+                style={{ fill: bandOf(r).fill, stroke: r === region ? "var(--accent-9)" : bandOf(r).stroke }}
               />
             ))}
             {[0, 50, 100].map((pos) => (
@@ -3547,7 +3631,7 @@ export default function EditorPage() {
               key={i}
               size="1"
               truncate
-              style={{ position: "absolute", top: 2, left: Math.max(x(r.from), 0), maxWidth: Math.min(x(r.to), width) - Math.max(x(r.from), 0), boxSizing: "border-box", padding: "0 4px", color: "var(--cyan-11)", pointerEvents: "none" }}
+              style={{ position: "absolute", top: 2, left: Math.max(x(r.from), 0), maxWidth: Math.min(x(r.to), width) - Math.max(x(r.from), 0), boxSizing: "border-box", padding: "0 4px", color: bandOf(r).label, pointerEvents: "none" }}
             >
               {regionName(r)}
             </Text>
@@ -3718,7 +3802,7 @@ export default function EditorPage() {
             <rect key={i} x={minimapX(c.start)} width={minimapX(c.end) - minimapX(c.start)} height={MINIMAP_HEIGHT} style={{ fill: light[i] ? "var(--gray-a3)" : "var(--gray-a4)" }} />
           ))}
           {[...(advanced ? main.regions : []), ...regions].map((r, i) => (
-            <rect key={`r${i}`} x={minimapX(r.from)} width={minimapX(r.to) - minimapX(r.from)} height={MINIMAP_HEIGHT} style={{ fill: REGION_BAND.fill }} />
+            <rect key={`r${i}`} x={minimapX(r.from)} width={minimapX(r.to) - minimapX(r.from)} height={MINIMAP_HEIGHT} style={{ fill: bandOf(r).fill }} />
           ))}
           {/* The main script's other points behind the advanced editor's. */}
           {advanced && <path d={minimapContext} fill="none" strokeWidth={1} style={{ stroke: "var(--gray-a7)", pointerEvents: "none" }} />}
