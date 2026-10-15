@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ClipboardIcon, LockOpen1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ClipboardIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -558,8 +558,12 @@ export default function EditorPage() {
       return { ...d, actions, regions };
     });
   };
-  /** The advanced editor's open tool, with the points and affected indices it was opened on, and their fastest segment; its result shows until applied. */
-  const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null } | null>(null);
+  /**
+   * The advanced editor's open tool, with the points and affected indices it
+   * was opened on, and their fastest segment; its result shows until applied.
+   * Generate on a `region`, in the main script too, edits it in place.
+   */
+  const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null; region?: Region } | null>(null);
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
   /** The view for drags, which read it between renders as they scroll it. */
   const viewRef = useRef(view);
@@ -1333,8 +1337,12 @@ export default function EditorPage() {
   const [maxSpeed, setMaxSpeed] = useState("");
   /** Which end Max speed keeps: In only lowers points, keeping the low reversals; Out only raises them. */
   const [speedAnchor, setSpeedAnchor] = usePersistedState<"in" | "out">("ossm:editorSpeedAnchor", "in", localStorage);
-  /** Generate's setup, remembered unlike the other tools' fields. */
-  const [genSetup, setGenSetup] = usePersistedState<GenerateSetup>("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage);
+  /** Generate's setup for new runs, remembered unlike the other tools' fields. */
+  const [remembered, setRemembered] = usePersistedState<GenerateSetup>("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage);
+  /** The setup of the region being edited, its own; the remembered one stays as it is. */
+  const [regionSetup, setRegionSetup] = useState(GENERATE_DEFAULTS);
+  /** Generate's setup as shown and changed: the edited region's, or the remembered one. */
+  const [genSetup, setGenSetup] = tool?.region ? [regionSetup, setRegionSetup] : [remembered, setRemembered];
   /** Generate shows its Interval or Speed in a view of its own below the graph. */
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
   /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
@@ -1355,6 +1363,15 @@ export default function EditorPage() {
     setBox(null);
   };
 
+  /** Edit the region `r` in place: Generate on its own setup and box; not while placing. */
+  const editRegion = (r: Region) => {
+    if (placing) return;
+    setTool({ kind: "generate", actions, picked: [], fastest: null, region: r });
+    setRegionSetup(r.generate);
+    setGenRange(rangeFields(r, zero));
+    setBox(null);
+  };
+
   /** The open tool's result, from the points it was opened on, as its fields stand; null while one is invalid. */
   const preview = useMemo(() => {
     if (!tool) return null;
@@ -1368,12 +1385,14 @@ export default function EditorPage() {
       return params && shifted(actions, picked, params.offset, params.min, params.max);
     }
     if (kind === "generate") {
-      // Every point in the range's time goes, whatever its depth.
+      // Every point in the range's time goes, whatever its depth; editing a region, its old points and band too.
       const range = rangeParams(genRange, zero);
       const made = range && generated(genSetup, range, bookmarks.map((b) => b.time));
       if (!range || !made) return null;
-      const [before, after] = [actions.slice(0, byTime(actions, range.from)), actions.slice(afterTime(actions, range.to))];
-      return { actions: [...before, ...made, ...after], selected: new Set(made.map((_, i) => before.length + i)) };
+      const { region } = tool;
+      const rest = region ? actions.filter((a) => a.at < region.from || a.at > region.to) : actions;
+      const [before, after] = [rest.slice(0, byTime(rest, range.from)), rest.slice(afterTime(rest, range.to))];
+      return { actions: [...before, ...made, ...after], selected: new Set(made.map((_, i) => before.length + i)), regions: region && regions.filter((r) => r !== region) };
     }
     const limit = typed(maxSpeed);
     return limit > 0 ? speedLimited(actions, picked, limit, speedAnchor === "out") : null;
@@ -1396,7 +1415,8 @@ export default function EditorPage() {
   /** Generate's range box while it is open; null while a field is refused. */
   const genBox = tool?.kind === "generate" ? rangeParams(genRange, zero) : null;
   /** Why the open tool's result, though shown, cannot be applied: it would put points into a region or stretch one. */
-  const toolBlocked = genBox && regions.some((r) => r.from <= genBox.to && r.to >= genBox.from) ? "The box overlaps a region"
+  const toolBlocked = genBox && regions.some((r) => r !== tool!.region && r.from <= genBox.to && r.to >= genBox.from) ? "The box overlaps a region"
+    : genBox && tool!.region && genBox.to <= genBox.from ? "A region's box needs a length"
     : scaleBox && scaleBox.time !== 100 && regions.some((r) => r.from > scaleBox.t0 && r.to < scaleBox.t1) ? "Time cannot be scaled across a region"
     : null;
   /** Whether Generate's box holds a bookmark, so Markers timing can be chosen. */
@@ -1555,16 +1575,18 @@ export default function EditorPage() {
    * Apply the open tool's result as one edit, unless it leaves the points as
    * they are, and go back to the tools. Generate's box becomes a region of its
    * points, with its own copy of the setup, and selected; not a box without
-   * length, whose point stays ordinary.
+   * length, whose point stays ordinary. Editing a region, it takes the old
+   * one's place.
    */
   const applyTool = () => {
-    const { kind, picked } = tool!;
+    const { kind, picked, region } = tool!;
     const next = preview!;
     setTool(null);
     const made: Region | null = kind === "generate" && genBox!.to > genBox!.from ? { ...genBox!, generate: structuredClone(genSetup) } : null;
-    if (!made && next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos)) return;
-    editLabel.current = `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(kind === "generate" ? next.selected.size : picked.length)}`;
-    setScript((s) => ({ ...s, actions: next.actions, regions: made ? [...s.regions, made].sort((a, b) => a.from - b.from) : next.regions ?? s.regions }));
+    const same = next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos);
+    if (same && (!made || JSON.stringify(made) === JSON.stringify(region))) return;
+    editLabel.current = region ? "Edit region" : `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(kind === "generate" ? next.selected.size : picked.length)}`;
+    setScript((s) => ({ ...s, actions: next.actions, regions: made ? [...(next.regions ?? s.regions), made].sort((a, b) => a.from - b.from) : next.regions ?? s.regions }));
     if (made) selectRegion(made);
     else setSelected(next.selected);
   };
@@ -1624,7 +1646,9 @@ export default function EditorPage() {
       e.preventDefault();
       rename([...marked]);
     } else if (e.key === "e" && !e.ctrlKey && !e.metaKey) {
-      openAdvanced();
+      // With a region selected, edits it instead.
+      if (region) editRegion(region);
+      else openAdvanced();
     } else if (key === "b" && !e.ctrlKey && !e.metaKey && !advanced) {
       // At the playhead, or without media under the pointer.
       const at = videoUrl ? Math.round(time) : hoverAt.current;
@@ -2255,6 +2279,9 @@ export default function EditorPage() {
         <Text size="2" weight="medium">Region</Text>
         <Text size="2" color="gray">{regionName(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
         <Flex gap="2">
+          <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title="Edit its setup and box with Generate (E, or double-click it)" onClick={() => editRegion(region)}>
+            <Pencil1Icon /> Edit
+          </Button>
           <Button variant="soft" color="gray" style={{ flex: 1 }} title="Make its points ordinary points" onClick={() => unlockRegion(region)}>
             <LockOpen1Icon /> Unlock
           </Button>
@@ -2264,8 +2291,9 @@ export default function EditorPage() {
         </Flex>
       </>}
       </>}
-      {advanced && <>
-        {!tool && <>
+      {/* In the main script, only a region's Generate. */}
+      {(advanced || tool) && <>
+        {advanced && !tool && <>
         <Text as="label" size="2">
           <Flex gap="2" align="center">
             <Switch
@@ -2302,7 +2330,7 @@ export default function EditorPage() {
             <IconButton size="1" variant="ghost" color="gray" aria-label="Back to the tools" title="Back to the tools (Escape)" onClick={() => setTool(null)}>
               <ArrowLeftIcon />
             </IconButton>
-            <Text size="2" weight="medium">{TOOLS.find((t) => t.kind === tool.kind)!.name}</Text>
+            <Text size="2" weight="medium">{tool.region ? "Edit region" : TOOLS.find((t) => t.kind === tool.kind)!.name}</Text>
           </Flex>
           {tool.kind === "scale" && ([["time"], ["low", "high"]] as const).map((row) => (
             <Flex key={row[0]} gap="2">
@@ -2878,6 +2906,11 @@ export default function EditorPage() {
             width={width}
             height={height}
             onPointerDown={add}
+            // Double-clicking a region edits it.
+            onDoubleClick={(e) => {
+              const r = !tool && !boxMode && regionAt(regions, pointerAt(e).at);
+              if (r) editRegion(r);
+            }}
             onPointerMove={(e) => {
               // Points are drawn on the canvas, so the cursor shows when one can be grabbed; placing, a click places instead.
               if (!placing) {
