@@ -310,11 +310,11 @@ function reshaped(func: Func, shape: Shape, own?: number, toward?: number): Func
 /**
  * Generate's setup: how the next point's time is found, whether the first
  * point goes on Low (In) or High (Out), and a function for each of
- * Interval (ms), Speed, and High and Low (in % of the box). Only Interval
- * timing so far.
+ * Interval (ms), Speed, and High and Low (in % of the box). Markers timing
+ * puts the points at the bookmarks instead.
  */
 interface GenerateSetup {
-  timing: "interval" | "speed";
+  timing: "interval" | "speed" | "markers";
   first: "in" | "out";
   interval: Func;
   speed: Func;
@@ -399,12 +399,18 @@ function funcAt(func: Func, t: number, span: number) {
  * from its start, the last at or before its end; null while a field is
  * refused. Each next point goes the Interval after the one before, or with
  * Speed timing at the first ms where the segment to it is no faster than the
- * Speed; at least 1 ms after either way.
+ * Speed; at least 1 ms after either way. With Markers timing, one goes at
+ * each of the sorted `marks` in the range, one per ms; null without any.
  */
-function generated(setup: GenerateSetup, range: Area): Action[] | null {
+function generated(setup: GenerateSetup, range: Area, marks: number[]): Action[] | null {
   const span = range.to - range.from;
   /** The depth a point on `func` gets at `at`, rounded; NaN while a field is refused. */
   const depthAt = (func: Func, at: number) => Math.round(range.low + (clamp(funcAt(func, at - range.from, span), 0, 100) * (range.high - range.low)) / 100);
+  if (setup.timing === "markers") {
+    const times = [...new Set(marks.filter((t) => t >= range.from && t <= range.to))];
+    const made = times.map((at, i) => ({ at, pos: depthAt(i % 2 === (setup.first === "out" ? 0 : 1) ? setup.high : setup.low, at) }));
+    return made.length && !made.some((a) => Number.isNaN(a.pos)) ? made : null;
+  }
   const out: Action[] = [];
   for (let at = range.from, high = setup.first === "out"; at <= range.to; high = !high) {
     const pos = depthAt(high ? setup.high : setup.low, at);
@@ -1212,14 +1218,14 @@ export default function EditorPage() {
     if (kind === "generate") {
       // Every point in the range's time goes, whatever its depth.
       const range = rangeParams(genRange, zero);
-      const made = range && generated(genSetup, range);
+      const made = range && generated(genSetup, range, bookmarks.map((b) => b.time));
       if (!range || !made) return null;
       const [before, after] = [actions.slice(0, byTime(actions, range.from)), actions.slice(afterTime(actions, range.to))];
       return { actions: [...before, ...made, ...after], selected: new Set(made.map((_, i) => before.length + i)) };
     }
     const limit = typed(maxSpeed);
     return limit > 0 ? speedLimited(actions, picked, limit, speedAnchor === "out") : null;
-  }, [tool, scale, shift, maxSpeed, speedAnchor, genSetup, genRange, zero]);
+  }, [tool, scale, shift, maxSpeed, speedAnchor, genSetup, genRange, zero, bookmarks]);
 
   /** The open tool's affected points as it was opened on them: the first's time `t0`, the last's `t1`, their lowest depth `lo` and highest `hi`; null without any. */
   const toolSpan = useMemo(() => {
@@ -1237,6 +1243,10 @@ export default function EditorPage() {
   const shiftBox = tool?.kind === "shift" ? shiftParams(shift) : null;
   /** Generate's range box while it is open; null while a field is refused. */
   const genBox = tool?.kind === "generate" ? rangeParams(genRange, zero) : null;
+  /** Whether Generate's box holds a bookmark, so Markers timing can be chosen. */
+  const genMarked = !!genBox && bookmarks.some((b) => b.time >= genBox.from && b.time <= genBox.to);
+  /** Generate's Interval or Speed shows in its own view below the graph; with Markers timing there is none. */
+  const timingShown = !!genBox && timingView && genSetup.timing !== "markers";
   const maxSpan = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, videoDuration, genBox?.to ?? 0, MAX_SPAN_FLOOR);
   const spanStep = SPAN_STEPS.find((s) => s * SPAN_STEP_COUNT >= maxSpan / 1000) ?? SPAN_STEPS[SPAN_STEPS.length - 1];
 
@@ -1270,6 +1280,7 @@ export default function EditorPage() {
   };
   /** The timing view's scale, bottom and top: a spline's Min and Max, else 0 to a quarter above the highest of the function's fields, so it stays put while dragging. */
   const [timingLow, timingHigh] = (() => {
+    if (genSetup.timing === "markers") return [0, 1];
     const func = genSetup[genSetup.timing];
     if (func.shape === "spline") return [typed(func.min ?? ""), typed(func.max ?? "")];
     const peak = Math.max(...SPANNED.map((f) => typed(func[f] ?? "")).filter(Number.isFinite));
@@ -2129,18 +2140,38 @@ export default function EditorPage() {
             </Flex>
             <Flex gap="2" align="center" justify="between">
               <Text size="2">Timing</Text>
-              <SegmentedControl.Root size="1" value={genSetup.timing} onValueChange={(v) => setGenSetup({ ...genSetup, timing: v as "interval" | "speed" })} title="Space the points by a time, or by a speed">
+              <SegmentedControl.Root
+                size="1"
+                value={genSetup.timing}
+                // Markers only while the box holds a bookmark.
+                onValueChange={(v) => (v !== "markers" || genMarked) && setGenSetup({ ...genSetup, timing: v as GenerateSetup["timing"] })}
+                title="Space the points by a time or a speed, or put them at the bookmarks in the box"
+              >
                 <SegmentedControl.Item value="interval">Interval</SegmentedControl.Item>
                 <SegmentedControl.Item value="speed">Speed</SegmentedControl.Item>
+                <SegmentedControl.Item
+                  value="markers"
+                  aria-disabled={!genMarked}
+                  title={genMarked ? undefined : "No bookmarks in the box"}
+                  style={genMarked ? undefined : { opacity: 0.5, cursor: "not-allowed" }}
+                >
+                  Markers
+                </SegmentedControl.Item>
               </SegmentedControl.Root>
             </Flex>
-            <Text as="label" size="2">
-              <Flex gap="2" align="center">
-                <Switch checked={timingView} onCheckedChange={setTimingView} /> Show {genSetup.timing === "speed" ? "Speed" : "Interval"} below the graph
-              </Flex>
-            </Text>
-            {/* Each function: its shape, then its fields, two to a row; values in the function's unit, Speed's none, as Max speed's. */}
-            {([genSetup.timing === "speed" ? (["speed", "Speed", ""] as const) : (["interval", "Interval", "s"] as const), ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([key, label, unit]) => {
+            {genSetup.timing !== "markers" && (
+              <Text as="label" size="2">
+                <Flex gap="2" align="center">
+                  <Switch checked={timingView} onCheckedChange={setTimingView} /> Show {genSetup.timing === "speed" ? "Speed" : "Interval"} below the graph
+                </Flex>
+              </Text>
+            )}
+            {/* Each function: its shape, then its fields, two to a row; values in the function's unit, Speed's none, as Max speed's. Markers timing has none. */}
+            {([
+              ...(genSetup.timing === "speed" ? [["speed", "Speed", ""] as const] : genSetup.timing === "interval" ? [["interval", "Interval", "s"] as const] : []),
+              ["high", "High", "%"] as const,
+              ["low", "Low", "%"] as const,
+            ]).map(([key, label, unit]) => {
               const func = genSetup[key];
               const set = (next: Func) => setGenSetup({ ...genSetup, [key]: next });
               /** Periods and Interval's values: kept in whole ms, shown in s, above 0. */
@@ -2580,7 +2611,7 @@ export default function EditorPage() {
         gap="3"
         flexGrow="1"
         // Its own least height, so it shrinks with the graph instead of keeping the graph's measured one.
-        minHeight={`${120 + 12 + LANE_HEIGHT + (genBox && timingView ? TIMING_HEIGHT + 12 : 0)}px`}
+        minHeight={`${120 + 12 + LANE_HEIGHT + (timingShown ? TIMING_HEIGHT + 12 : 0)}px`}
         onPointerMove={(e) => void (hoverAt.current = Math.max(pointerAt(e).at, 0))}
         onPointerLeave={() => void (hoverAt.current = null)}
       >
@@ -2787,8 +2818,8 @@ export default function EditorPage() {
           <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
         </Box>
         {/* Generate's Interval or Speed in the graph's time, over the box's, on a scale of its own from 0 at the bottom; a spline's knots and line take the same gestures as in the box. */}
-        {genBox && timingView && (() => {
-          const key = genSetup.timing;
+        {timingShown && (() => {
+          const key = genSetup.timing as "interval" | "speed";
           const func = genSetup[key];
           return (
             <Box flexShrink="0" height={`${TIMING_HEIGHT}px`} style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
