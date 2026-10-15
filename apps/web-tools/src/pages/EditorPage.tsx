@@ -256,7 +256,7 @@ const SPANNED: readonly ShapeField[] = ["value", "start", "end", "min", "max"];
 /** A spline's knots, in time order: their times in % of the range, the first at 0 and the last at 100, and values, for Interval and Speed in % of the way from its Min to its Max. */
 type Knots = [number, number][];
 
-/** A Generate function, its fields as typed: its shape and that shape's fields; a spline's knots, edited in the graph, as numbers, and for Interval and Speed the Min and Max of its scale. */
+/** A Generate function, its fields as typed, but a period and Interval's values in whole ms, typed in s: its shape and that shape's fields; a spline's knots, edited in the graph, as numbers, and for Interval and Speed the Min and Max of its scale. */
 type Func = { shape: Shape; knots?: Knots } & Partial<Record<ShapeField, string>>;
 
 /** A new noise seed. */
@@ -303,7 +303,7 @@ function reshaped(func: Func, shape: Shape, own?: number, toward?: number): Func
     const scaled = (v: number) => Math.round(clamp(((v - min) / (max - min)) * 100, 0, 100));
     return { shape, min: String(min), max: String(max), knots: knots(scaled(lo), scaled(hi)) };
   }
-  const all: Func = { value: String(value), start: String(lo), end: String(hi), min: String(lo), max: String(hi), period: shape === "noise" ? "1" : "10", phase: "0", width: "50", seed: newSeed(), ...func };
+  const all: Func = { value: String(value), start: String(lo), end: String(hi), min: String(lo), max: String(hi), period: shape === "noise" ? "1000" : "10000", phase: "0", width: "50", seed: newSeed(), ...func };
   return { shape, ...Object.fromEntries(SHAPES[shape].fields.map((f) => [f, all[f]])) };
 }
 
@@ -378,7 +378,7 @@ function funcAt(func: Func, t: number, span: number) {
     // On its own scale, clamped to Min–Max; refused unless Min is below Max.
     return func.max === undefined ? v : f("min") < f("max") ? f("min") + (clamp(v, 0, 100) * (f("max") - f("min"))) / 100 : NaN;
   }
-  const [min, max, period] = [f("min"), f("max"), f("period") * 1000];
+  const [min, max, period] = [f("min"), f("max"), f("period")];
   if (!(period > 0)) return NaN;
   const along = (w: number) => min + (max - min) * w;
   if (func.shape === "noise") {
@@ -2143,8 +2143,8 @@ export default function EditorPage() {
             {([genSetup.timing === "speed" ? (["speed", "Speed", ""] as const) : (["interval", "Interval", "s"] as const), ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([key, label, unit]) => {
               const func = genSetup[key];
               const set = (next: Func) => setGenSetup({ ...genSetup, [key]: next });
-              const inSeconds = (field: ShapeField) => key === "interval" && SPANNED.includes(field);
-              const positive = (field: ShapeField) => field === "period" || inSeconds(field);
+              /** Periods and Interval's values: kept in whole ms, shown in s, above 0. */
+              const inSeconds = (field: ShapeField) => field === "period" || (key === "interval" && SPANNED.includes(field));
               return (
                 <Flex key={key} direction="column" gap="2">
                   <Flex gap="2" align="center" justify="between">
@@ -2176,14 +2176,14 @@ export default function EditorPage() {
                         key={field}
                         type="number"
                         // Interval's and a period's seconds by tenths with the wheel and arrows; typed, any.
-                        step={positive(field) ? 0.1 : "any"}
+                        step={inSeconds(field) ? 0.1 : "any"}
                         aria-label={`${label} ${field}`}
-                        // Interval's values are kept in whole ms, shown in s: a number, so React leaves what is being typed ("0.0") alone.
+                        // Shown in s: a number, so React leaves what is being typed ("0.0") alone.
                         value={inSeconds(field) ? (Number.isFinite(typed(func[field] ?? "")) ? typed(func[field]!) / 1000 : "") : func[field] ?? ""}
                         onChange={(e) => set({ ...func, [field]: inSeconds(field) && e.target.value ? String(Math.round(Number(e.target.value) * 1000)) : e.target.value })}
                         // Not typed negative; the wheel and arrows keep them to 0.1 or more.
-                        min={positive(field) ? 0.1 : undefined}
-                        onKeyDown={(e) => positive(field) && e.key === "-" && e.preventDefault()}
+                        min={inSeconds(field) ? 0.1 : undefined}
+                        onKeyDown={(e) => inSeconds(field) && e.key === "-" && e.preventDefault()}
                         style={{ flex: "1 1 40%", minWidth: 0 }}
                       >
                         <TextField.Slot side="left">{{ value: "Value", start: "Start", end: "End", min: "Min", max: "Max", period: "Period", phase: "Phase", width: "Width", seed: "Seed" }[field]}</TextField.Slot>
