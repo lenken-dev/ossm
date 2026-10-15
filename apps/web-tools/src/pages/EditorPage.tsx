@@ -581,6 +581,10 @@ export default function EditorPage() {
   }, [selected]);
   /** The selected region, one at a time; selecting points or markers clears it. */
   const [regionOn, setRegionOn] = useState<Region | null>(null);
+  /** While a region is dragged, the ordinary points it would replace, shown faded; they go when it is released. */
+  const [covered, setCovered] = useState<Action[]>([]);
+  /** A dragged region while it is over another, out of the script and shown red, with its points. */
+  const [astray, setAstray] = useState<Clip | null>(null);
   useEffect(() => {
     if (selected.size || marked.size) setRegionOn(null);
   }, [selected, marked]);
@@ -1025,7 +1029,7 @@ export default function EditorPage() {
 
   /**
    * Add a point under the pointer and keep dragging it; in a region, select
-   * it instead; with several points selected, only clear the selection.
+   * it instead, and drag it; with several points selected, only clear the selection.
    * Placing on markers, it goes at the time of the nearest bookmark outside
    * the regions and is dragged along them.
    */
@@ -1040,7 +1044,12 @@ export default function EditorPage() {
     }
     const point = pointerAt(e);
     const inside = regionAt(regions, point.at);
-    if (inside) return selectRegion(inside);
+    if (inside) {
+      selectRegion(inside);
+      // A Markers region stays on its bookmarks.
+      if (inside.generate.timing !== "markers") dragRegion(e, inside);
+      return;
+    }
     if (selected.size > 1) {
       setSelected(new Set());
       return;
@@ -1058,6 +1067,75 @@ export default function EditorPage() {
     setSelected(new Set([i]));
     anchor.current = i;
     drag(e, [i]);
+  };
+
+  /**
+   * Drag the region `r` in time with its points, its depth staying, from 0 on;
+   * the ordinary points it covers go. It passes other regions: over one, it
+   * goes against the edge of a covered one nearest the pointer, the nearest
+   * of those in view where it is free; with none, it shows red where it is,
+   * out of the script, and released there it goes back to where it started.
+   */
+  const dragRegion = (e: PointerEvent<SVGSVGElement>, r: Region) => {
+    const svg = e.currentTarget;
+    const own = actions.slice(byTime(actions, r.from), afterTime(actions, r.to));
+    const rest = actions.filter((a) => a.at < r.from || a.at > r.to);
+    const others = regions.filter((o) => o !== r);
+    const [origin, x0] = [pointerAt(e).at, e.clientX];
+    let moved = false;
+    /** Whether it is over another region, out of the script. */
+    let over = false;
+    /** Put it `dt` from where it started; back there, the script as it was. */
+    const land = (dt: number) => {
+      const to = dt ? movedBy(r, dt) : r;
+      const under = (a: Action) => a.at >= to.from && a.at <= to.to;
+      const left = rest.filter((a) => !under(a));
+      const i = byTime(left, to.from);
+      setCovered(rest.filter(under));
+      setScript((s) => ({
+        ...s,
+        actions: dt ? [...left.slice(0, i), ...own.map((a) => ({ at: a.at + dt, pos: a.pos })), ...left.slice(i)] : actions,
+        regions: dt ? [...others, to].sort((a, b) => a.from - b.from) : regions,
+      }));
+      setRegionOn(to);
+    };
+    dragging.current = true;
+    const move = (m: globalThis.PointerEvent) => {
+      moved ||= Math.abs(m.clientX - x0) > 3;
+      if (!moved) return;
+      const p = pointerAt(m).at;
+      const dt = Math.max(p - origin, -r.from);
+      const to = movedBy(r, dt);
+      const free = (t: Region) => t.from >= 0 && !others.some((o) => o.from <= t.to && o.to >= t.from);
+      editLabel.current = "Move region";
+      if (free(to)) {
+        over = false;
+        setAstray(null);
+        return land(dt);
+      }
+      // The covered regions' edges, nearest the pointer first, with how far it moves to be just past each; the first out of view stops the search.
+      const { from, span } = viewRef.current;
+      const seen = (t: number) => t >= from && t <= from + span;
+      const spot = others
+        .filter((o) => o.from <= to.to && o.to >= to.from)
+        .flatMap((o) => [[o.from, o.from - 1 - r.to], [o.to, o.to + 1 - r.from]])
+        .sort(([a], [b]) => Math.abs(a - p) - Math.abs(b - p))
+        .find(([t, d]) => !seen(t) || free(movedBy(r, d)));
+      over = !spot || !seen(spot[0]);
+      setAstray(over ? { actions: own.map((a) => ({ at: a.at + dt, pos: a.pos })), regions: [to] } : null);
+      if (!over) return land(spot![1]);
+      setCovered([]);
+      setScript((s) => ({ ...s, actions: rest, regions: others }));
+    };
+    // Scrolling stops at 0.
+    const scrolls = (dir: number, m: globalThis.PointerEvent) => dir > 0 || pointerAt(m).at - origin > -r.from;
+    track(svg, e, move, () => {
+      if (over) land(0);
+      setAstray(null);
+      setCovered([]);
+      dragging.current = false;
+      setDragEnds((n) => n + 1);
+    }, scrolls);
   };
 
   /**
@@ -2115,6 +2193,27 @@ export default function EditorPage() {
     ctx.stroke(ringed);
     Object.assign(ctx, { lineWidth: 1.5, strokeStyle: css.getPropertyValue("--red-9") });
     ctx.stroke(crosses);
+    // A dragged region over another, its points red.
+    if (astray) {
+      ctx.save();
+      Object.assign(ctx, { globalAlpha: 0.6, lineWidth: 2, strokeStyle: css.getPropertyValue("--red-9") });
+      ctx.beginPath();
+      for (const a of astray.actions) ctx.lineTo(x(a.at), y(a.pos));
+      ctx.stroke();
+      ctx.restore();
+    }
+    // The points a dragged region covers, faded.
+    if (covered.length) {
+      ctx.save();
+      Object.assign(ctx, { globalAlpha: 0.3, fillStyle: LINE_COLOR });
+      const faded = new Path2D();
+      for (const a of covered.slice(byTime(covered, view.from), afterTime(covered, view.from + view.span))) {
+        faded.moveTo(x(a.at) + 5, y(a.pos));
+        faded.arc(x(a.at), y(a.pos), 5, 0, 2 * Math.PI);
+      }
+      ctx.fill(faded);
+      ctx.restore();
+    }
     // The points being placed, faded, over the rest; only those in view, as a selection to move can be the whole script.
     if (ghostLine) {
       ctx.save();
@@ -2914,7 +3013,9 @@ export default function EditorPage() {
             onPointerMove={(e) => {
               // Points are drawn on the canvas, so the cursor shows when one can be grabbed; placing, a click places instead.
               if (!placing) {
-                e.currentTarget.style.cursor = tool ? "default" : pointUnder(e) !== null ? "grab" : regionAt(regions, pointerAt(e).at) ? "pointer" : "crosshair";
+                // A region drags, unless it is on its bookmarks, where a press only selects it.
+                const over = regionAt(regions, pointerAt(e).at);
+                e.currentTarget.style.cursor = tool ? "default" : pointUnder(e) !== null ? "grab" : over ? (over.generate.timing === "markers" ? "pointer" : "grab") : "crosshair";
                 return;
               }
               // Pasted points follow the pointer; moved ones stay where their box is dragged.
@@ -2932,6 +3033,9 @@ export default function EditorPage() {
             {advanced && main.regions.map((r, i) => inView(r.from, r.to) && (
               <rect key={`m${i}`} x={x(r.from)} width={x(r.to) - x(r.from)} height={plotHeight} strokeDasharray="4 2" style={{ ...REGION_BAND, opacity: 0.5 }} />
             ))}
+            {astray && (
+              <rect x={x(astray.regions[0].from)} width={x(astray.regions[0].to) - x(astray.regions[0].from)} height={plotHeight} style={{ fill: "var(--red-a3)", stroke: "var(--red-9)" }} />
+            )}
             {/* The regions' bands over them, with those being placed, a selected one outlined as the selected markers; their labels are in the box. */}
             {[...shownRegions, ...ghostRegions].map((r, i) => inView(r.from, r.to) && (
               <rect
