@@ -468,6 +468,17 @@ function refilled(actions: Action[], r: Region, marks: number[]) {
   return made ? [...actions.slice(0, byTime(actions, r.from)), ...made, ...actions.slice(afterTime(actions, r.to))] : actions;
 }
 
+/**
+ * `s` with the bookmarks `bookmarks`: each Markers region with a bookmark
+ * time added or gone in its box puts its points again on the bookmarks.
+ */
+function withBookmarks<T extends Content>(s: T, bookmarks: Bookmark[]): T {
+  const [was, now] = [s.bookmarks.map((b) => b.time), bookmarks.map((b) => b.time)];
+  const changed = [...was.filter((t) => !now.includes(t)), ...now.filter((t) => !was.includes(t))];
+  const touched = s.regions.filter((r) => r.generate.timing === "markers" && changed.some((t) => t >= r.from && t <= r.to));
+  return { ...s, bookmarks, actions: touched.reduce((list, r) => refilled(list, r, now), s.actions) };
+}
+
 /** Generate's range fields as numbers, its times in ms from shown seconds; null while one is refused: times before 0, To before From, or depths outside 0–100 or Bottom above Top. */
 function rangeParams(fields: { from: string; to: string; low: string; high: string }, zero: number): Area | null {
   const [from, to] = [Math.round(typed(fields.from) * 1000) + zero, Math.round(typed(fields.to) * 1000) + zero];
@@ -744,6 +755,8 @@ export default function EditorPage() {
   const { actions, chapters, bookmarks, regions } = script;
   /** The selected region while it is in the script; it goes with an edit that replaces it. */
   const region = regionOn && regions.includes(regionOn) ? regionOn : null;
+  /** Whether there is something to copy: selected points, or a selected region with points. */
+  const copyable = selected.size > 0 || (!!region && afterTime(actions, region.to) > byTime(actions, region.from));
   /** While the advanced editor is open, the main script's other points, in runs broken where its points were taken out; drawn faintly behind them, never edited. */
   const context = useMemo(() => {
     if (!advanced) return [];
@@ -1046,8 +1059,7 @@ export default function EditorPage() {
     const inside = regionAt(regions, point.at);
     if (inside) {
       selectRegion(inside);
-      // A Markers region stays on its bookmarks.
-      if (inside.generate.timing !== "markers") dragRegion(e, inside);
+      dragRegion(e, inside);
       return;
     }
     if (selected.size > 1) {
@@ -1070,7 +1082,8 @@ export default function EditorPage() {
   };
 
   /**
-   * Drag the region `r` in time with its points, its depth staying, from 0 on;
+   * Drag the region `r` in time with its points, its depth staying, from 0 on,
+   * a Markers one's going on the bookmarks in its box;
    * the ordinary points it covers go. It passes other regions: over one, it
    * goes against the edge of a covered one nearest the pointer, the nearest
    * of those in view where it is free; with none, it shows red where it is,
@@ -1085,6 +1098,11 @@ export default function EditorPage() {
     let moved = false;
     /** Whether it is over another region, out of the script. */
     let over = false;
+    /** Its points with it moved to `to`, `dt` from where it started: a Markers one's on the bookmarks there. */
+    const pointsAt = (to: Region, dt: number) => {
+      const shifted = own.map((a) => ({ at: a.at + dt, pos: a.pos }));
+      return r.generate.timing === "markers" ? refilled(shifted, to, bookmarks.map((b) => b.time)) : shifted;
+    };
     /** Put it `dt` from where it started; back there, the script as it was. */
     const land = (dt: number) => {
       const to = dt ? movedBy(r, dt) : r;
@@ -1094,7 +1112,7 @@ export default function EditorPage() {
       setCovered(rest.filter(under));
       setScript((s) => ({
         ...s,
-        actions: dt ? [...left.slice(0, i), ...own.map((a) => ({ at: a.at + dt, pos: a.pos })), ...left.slice(i)] : actions,
+        actions: dt ? [...left.slice(0, i), ...pointsAt(to, dt), ...left.slice(i)] : actions,
         regions: dt ? [...others, to].sort((a, b) => a.from - b.from) : regions,
       }));
       setRegionOn(to);
@@ -1122,7 +1140,7 @@ export default function EditorPage() {
         .sort(([a], [b]) => Math.abs(a - p) - Math.abs(b - p))
         .find(([t, d]) => !seen(t) || free(movedBy(r, d)));
       over = !spot || !seen(spot[0]);
-      setAstray(over ? { actions: own.map((a) => ({ at: a.at + dt, pos: a.pos })), regions: [to] } : null);
+      setAstray(over ? { actions: pointsAt(to, dt), regions: [to] } : null);
       if (!over) return land(spot![1]);
       setCovered([]);
       setScript((s) => ({ ...s, actions: rest, regions: others }));
@@ -1237,7 +1255,7 @@ export default function EditorPage() {
   const addBookmark = (time: number) => {
     const added = { name: lastName, time };
     editLabel.current = "Add marker";
-    setScript((s) => ({ ...s, bookmarks: [...s.bookmarks, added].sort((a, b) => a.time - b.time) }));
+    setScript((s) => withBookmarks(s, [...s.bookmarks, added].sort((a, b) => a.time - b.time)));
     selectMarkers([added]);
     markerAnchor.current = added;
   };
@@ -1291,7 +1309,8 @@ export default function EditorPage() {
         ? { ...g, start: g.start + (sides.includes("start") ? dt : 0), end: g.end + (sides.includes("end") ? dt : 0) }
         : { ...g, time: g.time + dt }]));
       editLabel.current = label;
-      setScript((s) => ({ ...s, chapters: swapped(chapters, to), bookmarks: swapped(bookmarks, to).sort((a, z) => a.time - z.time) }));
+      // The Markers regions follow each step, from the one before.
+      setScript((s) => withBookmarks({ ...s, chapters: swapped(chapters, to) }, swapped(bookmarks, to).sort((a, z) => a.time - z.time)));
       setMarked(new Set(to.values()));
       markerAnchor.current = to.get(m)!;
     };
@@ -1328,7 +1347,7 @@ export default function EditorPage() {
 
   const removeMarkers = (ms: Marker[]) => {
     editLabel.current = ms.length > 1 ? `Delete ${ms.length} markers` : isChapter(ms[0]) ? "Delete chapter" : "Delete marker";
-    setScript((s) => ({ ...s, chapters: s.chapters.filter((c) => !ms.includes(c)), bookmarks: s.bookmarks.filter((b) => !ms.includes(b)) }));
+    setScript((s) => withBookmarks({ ...s, chapters: s.chapters.filter((c) => !ms.includes(c)) }, s.bookmarks.filter((b) => !ms.includes(b))));
     setMarked(new Set());
   };
 
@@ -1738,7 +1757,7 @@ export default function EditorPage() {
   /** Also adds them to the clipboard history. */
   const selectionJson = () => {
     const picked = region ? actions.slice(byTime(actions, region.from), afterTime(actions, region.to)) : [...selected].sort((a, b) => a - b).map((i) => actions[i]);
-    const t0 = picked[0]?.at ?? region!.from;
+    const t0 = picked[0].at;
     return remember({ actions: picked.map((a) => ({ at: a.at - t0, pos: a.pos })), regions: region ? [movedBy(region, -t0)] : [] });
   };
 
@@ -2008,7 +2027,7 @@ export default function EditorPage() {
 
   // Ctrl+C, Ctrl+X and Ctrl+V on the system clipboard; not while typing in a field.
   const copy = (e: ClipboardEvent) => {
-    if (e.target instanceof HTMLInputElement || (!selected.size && !region) || (tool && e.type === "cut")) return;
+    if (e.target instanceof HTMLInputElement || !copyable || (tool && e.type === "cut")) return;
     e.preventDefault();
     e.clipboardData!.setData("text/plain", selectionJson());
     if (e.type === "cut") cut();
@@ -2850,10 +2869,10 @@ export default function EditorPage() {
           <ResetIcon style={{ transform: "scaleX(-1)" }} />
         </IconButton>
         <Separator orientation="vertical" size="2" />
-        <IconButton variant="soft" color="gray" disabled={!selected.size && !region} aria-label="Copy" title="Copy (Ctrl+C)" onClick={() => void copyButton(false)}>
+        <IconButton variant="soft" color="gray" disabled={!copyable} aria-label="Copy" title="Copy (Ctrl+C)" onClick={() => void copyButton(false)}>
           <CopyIcon />
         </IconButton>
-        <IconButton variant="soft" color="gray" disabled={(!selected.size && !region) || !!tool} aria-label="Cut" title="Cut (Ctrl+X)" onClick={() => void copyButton(true)}>
+        <IconButton variant="soft" color="gray" disabled={!copyable || !!tool} aria-label="Cut" title="Cut (Ctrl+X)" onClick={() => void copyButton(true)}>
           <ScissorsIcon />
         </IconButton>
         {/* With a history, its button docks to the paste button. */}
@@ -3013,9 +3032,7 @@ export default function EditorPage() {
             onPointerMove={(e) => {
               // Points are drawn on the canvas, so the cursor shows when one can be grabbed; placing, a click places instead.
               if (!placing) {
-                // A region drags, unless it is on its bookmarks, where a press only selects it.
-                const over = regionAt(regions, pointerAt(e).at);
-                e.currentTarget.style.cursor = tool ? "default" : pointUnder(e) !== null ? "grab" : over ? (over.generate.timing === "markers" ? "pointer" : "grab") : "crosshair";
+                e.currentTarget.style.cursor = tool ? "default" : pointUnder(e) !== null || regionAt(regions, pointerAt(e).at) ? "grab" : "crosshair";
                 return;
               }
               // Pasted points follow the pointer; moved ones stay where their box is dragged.
