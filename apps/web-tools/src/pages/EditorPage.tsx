@@ -2190,6 +2190,15 @@ export default function EditorPage() {
 
   /** The regions the points being placed carry, with the first point at `pasted`'s. */
   const carriedBy = (pasted: Action[]) => placing!.regions.map((r) => movedBy(r, pasted[0].at));
+  /**
+   * `pasted` with the Markers regions they carry, also in instances, put
+   * again on the bookmarks under them: none without any there; as they are
+   * while a setup is refused. Placed from `pasted`'s first point, as before.
+   */
+  const filledIn = (pasted: Action[]) => generators(carriedBy(pasted))
+    .filter((r) => r.generate.timing === "markers")
+    .reduce((list, r) => refilled(list, r, bookmarks.map((b) => b.time)), pasted);
+
   /** The time `pasted` covers, with the regions they carry. */
   const spanOf = (pasted: Action[]) => {
     const carried = carriedBy(pasted);
@@ -2248,12 +2257,13 @@ export default function EditorPage() {
   const put = (pasted: Action[], insert: boolean) => {
     const { before, after, regions } = around(pasted, insert);
     const carried = carriedBy(pasted).map((r) => structuredClone(r));
+    const placed = filledIn(pasted);
     // Nothing lifted, the advanced editor's result from empty is new, as a paste.
-    editLabel.current = lifted && liftedRegion ? "Edit snippet" : `${lifted?.size ? "Move" : insert ? "Insert" : "Paste"} ${lifted?.size || !carried.length ? points(pasted.length) : carried.length === 1 ? (isInstance(carried[0]) ? "snippet" : "region") : `${carried.length} regions`}`;
-    const next = [...before, ...pasted, ...after];
+    editLabel.current = lifted && liftedRegion ? "Edit snippet" : `${lifted?.size ? "Move" : insert ? "Insert" : "Paste"} ${lifted?.size || !carried.length ? points(placed.length) : carried.length === 1 ? (isInstance(carried[0]) ? "snippet" : "region") : `${carried.length} regions`}`;
+    const next = [...before, ...placed, ...after];
     setScript({ ...script, actions: next, regions: carried.length ? [...regions, ...carried].sort((a, b) => a.from - b.from) : regions });
-    setSelected(new Set(pasted.flatMap((a, i) => (regionAt(carried, a.at) ? [] : [before.length + i]))));
-    if (carried.length === 1 && pasted.every((a) => regionAt(carried, a.at))) selectRegion(carried[0]);
+    setSelected(new Set(placed.flatMap((a, i) => (regionAt(carried, a.at) ? [] : [before.length + i]))));
+    if (carried.length === 1 && placed.every((a) => regionAt(carried, a.at))) selectRegion(carried[0]);
     setPlacing(null);
     setLifted(null);
     return next;
@@ -2364,6 +2374,8 @@ export default function EditorPage() {
   /** The time they cover with the regions they carry, which show with them. */
   const ghostSpan = ghost && spanOf(ghost);
   const ghostRegions = ghost ? carriedBy(ghost) : [];
+  /** Their points as they would go in, their Markers regions' on the bookmarks under them. */
+  const ghostPoints = ghost && filledIn(ghost);
   /** Whether placing them there is refused, as it would cut into a region; they show red. */
   const refused = !!ghost && refuses(ghost, inserting);
   /** Whether a point at `at` would be replaced by them. */
@@ -2377,7 +2389,7 @@ export default function EditorPage() {
   const marks = preview?.selected ?? selected;
   /** The points being placed joined to the existing points they would sit between. */
   const neighbours = ghost && (moved ?? around(ghost, false));
-  const ghostLine = ghost && [neighbours!.before[neighbours!.before.length - 1], ...ghost, neighbours!.after[0]].filter((a) => a !== undefined);
+  const ghostLine = ghostPoints && [neighbours!.before[neighbours!.before.length - 1], ...ghostPoints, neighbours!.after[0]].filter((a) => a !== undefined);
 
   // The points in view and one beyond each edge, so the line reaches the edges.
   const first = Math.max(byTime(shown, view.from) - 1, 0);
@@ -2511,7 +2523,7 @@ export default function EditorPage() {
       ctx.stroke();
       const ghostDots = new Path2D();
       const r = (5 / width) * view.span;
-      for (const a of ghost!.slice(byTime(ghost!, view.from - r), afterTime(ghost!, view.from + view.span + r))) {
+      for (const a of ghostPoints!.slice(byTime(ghostPoints!, view.from - r), afterTime(ghostPoints!, view.from + view.span + r))) {
         const [cx, cy] = [x(a.at), y(a.pos)];
         if (regionAt(ghostRegions, a.at)) continue;
         ghostDots.moveTo(cx + 5, cy);
