@@ -145,7 +145,7 @@ const entryName = (e: Entry) => (isFolder(e) ? e.folder : e.name);
 
 /** The snippet library as it is kept and exported. */
 interface LibraryFile {
-  ossm: { version: 1; snippets: Entry[] };
+  ossmRsWebTools: { version: 1; snippets: Entry[] };
 }
 
 /** Whether the entry at `path`, by its folders' and its own name, is `folder` or in it. */
@@ -642,7 +642,7 @@ function readMarkers(file: Record<string, unknown>, end: number) {
 }
 
 /**
- * The regions in `list`, from a file's or the clipboard's `"ossm"`, sorted.
+ * The regions in `list`, from a file's or the clipboard's `"ossmRsWebTools"`, sorted.
  * Lenient: one is left out, its points staying ordinary, when its times are
  * not numbers with From before To, or it has neither a setup that is an
  * object with a known timing and known shapes, a spline's with knots, nor a
@@ -730,9 +730,9 @@ export default function EditorPage() {
   const [asideShown, setAsideShown] = usePersistedState("ossm:editorAsideShown", true, localStorage);
   const [asideTab, setAsideTab] = usePersistedState<"markers" | "snippets">("ossm:editorAsideTab", "snippets", localStorage);
   /** The snippet library, shared by all scripts, as its file holds it. */
-  const [libraryFile, setLibraryFile] = usePersistedState<LibraryFile>("ossm:editorSnippets", { ossm: { version: 1, snippets: [] } }, localStorage);
-  const library = libraryFile.ossm.snippets;
-  const setLibrary = (f: (lib: Entry[]) => Entry[]) => setLibraryFile((l) => ({ ossm: { version: 1, snippets: f(l.ossm.snippets) } }));
+  const [libraryFile, setLibraryFile] = usePersistedState<LibraryFile>("ossm:editorSnippets", { ossmRsWebTools: { version: 1, snippets: [] } }, localStorage);
+  const library = libraryFile.ossmRsWebTools.snippets;
+  const setLibrary = (f: (lib: Entry[]) => Entry[]) => setLibraryFile((l) => ({ ossmRsWebTools: { version: 1, snippets: f(l.ossmRsWebTools.snippets) } }));
   /** The library's open folders, by their paths as JSON. */
   const [openFolders, setOpenFolders] = usePersistedState<string[]>("ossm:editorSnippetFolders", [], localStorage);
   /** Only the library's entries with this in their names show, their folders open. */
@@ -2087,7 +2087,7 @@ export default function EditorPage() {
   const cut = () => (region ? deleteRegion(region, "Cut") : removeSelected("Cut"));
 
   /** `clip` as funscript JSON, its regions under our own key. */
-  const clipJson = (clip: Clip) => JSON.stringify(clip.regions.length ? { actions: clip.actions, ossm: { version: 1, regions: clip.regions } } : { actions: clip.actions });
+  const clipJson = (clip: Clip) => JSON.stringify(clip.regions.length ? { actions: clip.actions, ossmRsWebTools: { version: 1, regions: clip.regions } } : { actions: clip.actions });
 
   /** Put `copied` on top of the clipboard history, without a duplicate; returns its JSON. */
   const remember = (copied: Clip) => {
@@ -2306,9 +2306,9 @@ export default function EditorPage() {
   /** Merge a library file into the library: folders of the same name merge, a taken name gets " (2)"; malformed entries go. */
   const importLibrary = async (file: File) => {
     try {
-      const parsed = JSON.parse(await file.text()) as { ossm?: { snippets?: unknown } } | null;
-      if (!Array.isArray(parsed?.ossm?.snippets)) throw new Error();
-      const read = readEntries(parsed.ossm.snippets);
+      const parsed = JSON.parse(await file.text()) as { ossmRsWebTools?: { snippets?: unknown } } | null;
+      if (!Array.isArray(parsed?.ossmRsWebTools?.snippets)) throw new Error();
+      const read = readEntries(parsed.ossmRsWebTools.snippets);
       setLibrary((lib) => merged(lib, read));
       setError(null);
     } catch {
@@ -2351,13 +2351,13 @@ export default function EditorPage() {
    * holds no points.
    */
   const pasteJson = (text: string) => {
-    let parsed: { actions?: unknown; ossm?: { regions?: unknown } } | null;
+    let parsed: { actions?: unknown; ossmRsWebTools?: { regions?: unknown } } | null;
     try {
       parsed = JSON.parse(text);
     } catch {
       return false;
     }
-    const clip = readClip(parsed?.actions, parsed?.ossm?.regions);
+    const clip = readClip(parsed?.actions, parsed?.ossmRsWebTools?.regions);
     if (!clip) return false;
     cancelPlacing();
     // In the advanced editor, instances come as their contents, as they do not nest.
@@ -2528,7 +2528,7 @@ export default function EditorPage() {
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
       const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, videoDuration));
       // Taken as they are, never generated again.
-      const regions = readRegions((rest.ossm as { regions?: unknown } | null | undefined)?.regions);
+      const regions = readRegions((rest.ossmRsWebTools as { regions?: unknown } | null | undefined)?.regions);
       const next = { name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers, regions };
       setSaved(next);
       setScript(next);
@@ -2549,9 +2549,9 @@ export default function EditorPage() {
     if (bookmarks.length || "bookmarks" in metadata) {
       metadata.bookmarks = [...bookmarks].sort((a, b) => a.time - b.time).map(({ time, ...rest }) => ({ ...rest, time: writeTime(time) }));
     }
-    // Into the opened file's "ossm", our own key; the regions only when there are some or the file had them.
-    const ossm = { ...(file.ossm as Record<string, unknown> | undefined) };
-    if (regions.length || "regions" in ossm) Object.assign(ossm, { version: 1, regions: [...regions].sort((a, b) => a.from - b.from) });
+    // Into the opened file's "ossmRsWebTools", our own key; the regions only when there are some or the file had them.
+    const ossmRsWebTools = { ...(file.ossmRsWebTools as Record<string, unknown> | undefined) };
+    if (regions.length || "regions" in ossmRsWebTools) Object.assign(ossmRsWebTools, { version: 1, regions: [...regions].sort((a, b) => a.from - b.from) });
     const json = JSON.stringify({
       version: "1.0",
       inverted: false,
@@ -2559,7 +2559,7 @@ export default function EditorPage() {
       ...file,
       actions,
       ...(Object.keys(metadata).length || "metadata" in file ? { metadata } : {}),
-      ...(Object.keys(ossm).length || "ossm" in file ? { ossm } : {}),
+      ...(Object.keys(ossmRsWebTools).length || "ossmRsWebTools" in file ? { ossmRsWebTools } : {}),
     });
     download(json, `${script.name || "untitled"}.funscript`);
     setSaved(script);
