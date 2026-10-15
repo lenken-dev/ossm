@@ -2584,18 +2584,31 @@ export default function EditorPage() {
         {...(isFolder(e) ? dropInto(at) : {})}
         style={{ paddingLeft: depth * 16, minHeight: 28, borderRadius: 4, background: dropOn === key ? "var(--accent-a4)" : undefined }}
       >
-        <Flex
-          align="center"
-          gap="2"
-          flexGrow="1"
-          minWidth="0"
-          onClick={isFolder(e) ? toggle : undefined}
-          onDoubleClick={() => !isFolder(e) && !tool && insertSnippet(e)}
-          style={{ cursor: isFolder(e) ? "pointer" : undefined, userSelect: "none" }}
-        >
-          {isFolder(e) ? <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} /> : <ComponentInstanceIcon style={{ flexShrink: 0 }} />}
-          <Text size="2" truncate>{name}</Text>
-        </Flex>
+        {/* A snippet's name shows a preview beside the panel: its points, its regions' boxes behind, its length and point count. */}
+        <HoverCard.Root openDelay={300} closeDelay={0} open={isFolder(e) ? false : undefined}>
+          <HoverCard.Trigger>
+            <Flex
+              align="center"
+              gap="2"
+              flexGrow="1"
+              minWidth="0"
+              onClick={isFolder(e) ? toggle : undefined}
+              onDoubleClick={() => !isFolder(e) && !tool && insertSnippet(e)}
+              style={{ cursor: isFolder(e) ? "pointer" : undefined, userSelect: "none" }}
+            >
+              {isFolder(e) ? <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} /> : <ComponentInstanceIcon style={{ flexShrink: 0 }} />}
+              <Text size="2" truncate>{name}</Text>
+            </Flex>
+          </HoverCard.Trigger>
+          {!isFolder(e) && (
+            <HoverCard.Content side="left" size="1">
+              <Flex direction="column" gap="1">
+                <PreviewGraph pieces={[{ kind: "plain", points: e.actions }]} bands={generators(e.regions)} />
+                <Text size="1" color="gray">{formatScriptTime(e.actions[e.actions.length - 1].at / 1000)} · {points(e.actions.length)}</Text>
+              </Flex>
+            </HoverCard.Content>
+          )}
+        </HoverCard.Root>
         {!advanced && isFolder(e) && (
           <NamePopover taken={(n) => nameTaken(at, n)} onName={(n) => addFolder(at, n)}>
             <IconButton size="1" variant="ghost" color="gray" aria-label="New folder in it" title="New folder in it"><PlusIcon /></IconButton>
@@ -4007,9 +4020,10 @@ function diffPieces(before: Action[], after: Action[]): Piece[] {
 
 /**
  * A small graph of `pieces` side by side, each as wide as its time, with
- * breaks in between; the time ticks show each piece's own times.
+ * breaks in between; the time ticks show each piece's own times. `bands`,
+ * times in the first piece's, show faintly behind, as regions do.
  */
-function PreviewGraph({ pieces }: { pieces: Piece[] }) {
+function PreviewGraph({ pieces, bands = [] }: { pieces: Piece[]; bands?: { from: number; to: number }[] }) {
   if (!pieces.length) return <Text size="1" color="gray">No changes</Text>;
   const [width, plotHeight, pad] = [200, 60, 4];
   /** Moved points draw like removed ones where they were and added ones where they went, at the same times. */
@@ -4045,6 +4059,10 @@ function PreviewGraph({ pieces }: { pieces: Piece[] }) {
   const dots = layers.reduce((n, p) => n + p.points.length, 0) <= 200;
   return (
     <svg width={width} height={plotHeight + PREVIEW_AXIS} style={{ display: "block" }}>
+      {bands.map((b, k) => {
+        const [x0, x1] = [clamp(xs[0](b.from), 0, width), clamp(xs[0](b.to), 0, width)];
+        return <rect key={`band${k}`} x={x0} width={Math.max(x1 - x0, 1)} height={plotHeight} style={{ fill: "var(--cyan-a3)" }} />;
+      })}
       {layers.map(({ kind, points, i }, l) => {
         const band = PIECE_STYLES[kind].band;
         const [a, b] = [points[0], points[points.length - 1]];
