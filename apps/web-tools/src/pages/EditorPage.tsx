@@ -718,7 +718,7 @@ export default function EditorPage() {
   const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null; region?: Generated } | null>(null);
   /** The Snippets panel shows beside the graph, in the main script and the advanced editor alike. */
   /** The panel beside the graph, on its other side from the sidebar, and which it shows: the markers list or the snippet library. */
-  const [asideShown, setAsideShown] = usePersistedState("ossm:editorAsideShown", false, localStorage);
+  const [asideShown, setAsideShown] = usePersistedState("ossm:editorAsideShown", true, localStorage);
   const [asideTab, setAsideTab] = usePersistedState<"markers" | "snippets">("ossm:editorAsideTab", "snippets", localStorage);
   /** The snippet library, shared by all scripts, as its file holds it. */
   const [libraryFile, setLibraryFile] = usePersistedState<LibraryFile>("ossm:editorSnippets", { ossm: { version: 1, snippets: [] } }, localStorage);
