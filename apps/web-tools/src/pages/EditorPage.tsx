@@ -484,9 +484,6 @@ function readMarkers(file: Record<string, unknown>, end: number) {
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
   const [main, setMain] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
-  // Scripts kept before markers have none; filled in on the loaded object, once, so they keep their identity.
-  main.chapters ??= [];
-  main.bookmarks ??= [];
   /** The advanced editor's document while it is open; kept across reloads too. */
   const [advanced, setAdvanced] = usePersistedState<Advanced | null>("ossm:editorAdvanced", null, localStorage);
   /** The script the page shows and edits: the main one, or with the advanced editor's points while it is open, which take only point changes. */
@@ -1182,8 +1179,6 @@ export default function EditorPage() {
   const [genSetup, setGenSetup] = usePersistedState<GenerateSetup>("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage);
   /** Generate shows its Interval or Speed in a view of its own below the graph. */
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
-  // Setups kept while the functions were chains hold each in an array of one; unwrapped on the loaded object, once.
-  for (const k of ["interval", "speed", "high", "low"] as const) if (Array.isArray(genSetup[k])) genSetup[k] = (genSetup[k] as unknown as Func[])[0];
   /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
   const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
 
