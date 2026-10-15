@@ -2712,6 +2712,7 @@ export default function EditorPage() {
             setPaused(true);
             setTime(0);
             setVideoFile(file);
+            setPlayerShown(true);
           }
           e.target.value = "";
         }}
