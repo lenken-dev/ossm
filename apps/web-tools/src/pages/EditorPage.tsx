@@ -309,7 +309,7 @@ function reshaped(func: Func, shape: Shape, own?: number, toward?: number): Func
 /**
  * Generate's setup: how the next point's time is found, whether the first
  * point goes on Low (In) or High (Out), and a function for each of
- * Interval (s), Speed, and High and Low (in % of the box). Only Interval
+ * Interval (ms), Speed, and High and Low (in % of the box). Only Interval
  * timing so far.
  */
 interface GenerateSetup {
@@ -324,7 +324,7 @@ interface GenerateSetup {
 type FuncKey = "interval" | "speed" | "high" | "low";
 
 const constant = (value: string): Func => ({ shape: "constant", value });
-const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("0.5"), speed: constant("200"), high: constant("100"), low: constant("0") };
+const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("500"), speed: constant("200"), high: constant("100"), low: constant("0") };
 
 /** A random value, 0–1, for `seed` and `k`. */
 function hashed(seed: number, k: number) {
@@ -407,7 +407,7 @@ function generated(setup: GenerateSetup, range: Area): Action[] | null {
   const out: Action[] = [];
   for (let at = range.from, high = setup.first === "out"; at <= range.to; high = !high) {
     const pos = depthAt(high ? setup.high : setup.low, at);
-    const step = setup.timing === "speed" ? Math.max(funcAt(setup.speed, at - range.from, span), 1) : funcAt(setup.interval, at - range.from, span) * 1000;
+    const step = setup.timing === "speed" ? Math.max(funcAt(setup.speed, at - range.from, span), 1) : funcAt(setup.interval, at - range.from, span);
     // An Interval not above 0 is refused.
     if (Number.isNaN(pos) || !(step > 0)) return null;
     out.push({ at, pos });
@@ -1178,9 +1178,11 @@ export default function EditorPage() {
   /** Which end Max speed keeps: In only lowers points, keeping the low reversals; Out only raises them. */
   const [speedAnchor, setSpeedAnchor] = usePersistedState<"in" | "out">("ossm:editorSpeedAnchor", "in", localStorage);
   /** Generate's setup, remembered unlike the other tools' fields. */
-  const [genSetup, setGenSetup] = usePersistedState<GenerateSetup>("ossm:editorGenerateSetup", GENERATE_DEFAULTS, localStorage);
+  const [genSetup, setGenSetup] = usePersistedState<GenerateSetup>("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage);
   /** Generate shows its Interval or Speed in a view of its own below the graph. */
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
+  // Setups kept while the functions were chains hold each in an array of one; unwrapped on the loaded object, once.
+  for (const k of ["interval", "speed", "high", "low"] as const) if (Array.isArray(genSetup[k])) genSetup[k] = (genSetup[k] as unknown as Func[])[0];
   /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
   const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
 
@@ -2145,7 +2147,8 @@ export default function EditorPage() {
             {([genSetup.timing === "speed" ? (["speed", "Speed", ""] as const) : (["interval", "Interval", "s"] as const), ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([key, label, unit]) => {
               const func = genSetup[key];
               const set = (next: Func) => setGenSetup({ ...genSetup, [key]: next });
-              const positive = (field: ShapeField) => field === "period" || (key === "interval" && SPANNED.includes(field));
+              const inSeconds = (field: ShapeField) => key === "interval" && SPANNED.includes(field);
+              const positive = (field: ShapeField) => field === "period" || inSeconds(field);
               return (
                 <Flex key={key} direction="column" gap="2">
                   <Flex gap="2" align="center" justify="between">
@@ -2179,8 +2182,9 @@ export default function EditorPage() {
                         // Interval's and a period's seconds by tenths with the wheel and arrows; typed, any.
                         step={positive(field) ? 0.1 : "any"}
                         aria-label={`${label} ${field}`}
-                        value={func[field] ?? ""}
-                        onChange={(e) => set({ ...func, [field]: e.target.value })}
+                        // Interval's values are kept in ms, shown in s: a number, so React leaves what is being typed ("0.0") alone.
+                        value={inSeconds(field) ? (Number.isFinite(typed(func[field] ?? "")) ? typed(func[field]!) / 1000 : "") : func[field] ?? ""}
+                        onChange={(e) => set({ ...func, [field]: inSeconds(field) && e.target.value ? String(+(Number(e.target.value) * 1000).toFixed(6)) : e.target.value })}
                         // Not typed negative; the wheel and arrows keep them to 0.1 or more.
                         min={positive(field) ? 0.1 : undefined}
                         onKeyDown={(e) => positive(field) && e.key === "-" && e.preventDefault()}
@@ -2799,7 +2803,8 @@ export default function EditorPage() {
                     <g key={f} style={{ pointerEvents: "none" }}>
                       <line x1={0} x2={width} y1={PAD + (1 - f) * (TIMING_HEIGHT - 2 * PAD)} y2={PAD + (1 - f) * (TIMING_HEIGHT - 2 * PAD)} style={{ stroke: "var(--gray-a5)" }} />
                       <text x={width - 4} y={PAD + (1 - f) * (TIMING_HEIGHT - 2 * PAD) + (f === 0 ? -3 : f === 1 ? 10 : 3)} textAnchor="end" fontSize={10} style={{ fill: "var(--blue-11)" }}>
-                        {Math.round(timingLow + f * (timingHigh - timingLow))}
+                        {/* Interval's in s, as its fields. */}
+                        {key === "interval" ? +((timingLow + f * (timingHigh - timingLow)) / 1000).toFixed(2) : Math.round(timingLow + f * (timingHigh - timingLow))}
                       </text>
                     </g>
                   ))}
