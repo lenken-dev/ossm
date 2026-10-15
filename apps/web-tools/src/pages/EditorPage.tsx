@@ -1194,8 +1194,7 @@ export default function EditorPage() {
     const inside = regionAt(regions, point.at);
     if (inside) {
       selectRegion(inside);
-      // ponytail: an instance's band is not dragged yet (step 3).
-      if (!isInstance(inside)) dragRegion(e, inside);
+      dragRegion(e, inside);
       return;
     }
     if (selected.size > 1) {
@@ -1219,13 +1218,13 @@ export default function EditorPage() {
 
   /**
    * Drag the region `r` in time with its points, its depth staying, from 0 on,
-   * a Markers one's going on the bookmarks in its box;
+   * a Markers one's, also in an instance, going on the bookmarks in its box;
    * the ordinary points it covers go. It passes other regions: over one, it
    * goes against the edge of a covered one nearest the pointer, the nearest
    * of those in view where it is free; with none, it shows red where it is,
    * out of the script, and released there it goes back to where it started.
    */
-  const dragRegion = (e: PointerEvent<SVGSVGElement>, r: Generated) => {
+  const dragRegion = (e: PointerEvent<SVGSVGElement>, r: Region) => {
     const svg = e.currentTarget;
     const own = actions.slice(byTime(actions, r.from), afterTime(actions, r.to));
     const rest = actions.filter((a) => a.at < r.from || a.at > r.to);
@@ -1234,10 +1233,10 @@ export default function EditorPage() {
     let moved = false;
     /** Whether it is over another region, out of the script. */
     let over = false;
-    /** Its points with it moved to `to`, `dt` from where it started: a Markers one's on the bookmarks there. */
-    const pointsAt = (to: Generated, dt: number) => {
+    /** Its points with it moved to `to`, `dt` from where it started: a Markers one's, or an instance's Markers regions', on the bookmarks there. */
+    const pointsAt = (to: Region, dt: number) => {
       const shifted = own.map((a) => ({ at: a.at + dt, pos: a.pos }));
-      return r.generate.timing === "markers" ? refilled(shifted, to, bookmarks.map((b) => b.time)) : shifted;
+      return generators([to]).filter((g) => g.generate.timing === "markers").reduce((list, g) => refilled(list, g, bookmarks.map((b) => b.time)), shifted);
     };
     /** Put it `dt` from where it started; back there, the script as it was. */
     const land = (dt: number) => {
@@ -1261,7 +1260,7 @@ export default function EditorPage() {
       const dt = Math.max(p - origin, -r.from);
       const to = movedBy(r, dt);
       const free = (t: Region) => t.from >= 0 && !others.some((o) => o.from <= t.to && o.to >= t.from);
-      editLabel.current = "Move region";
+      editLabel.current = isInstance(r) ? "Move snippet" : "Move region";
       if (free(to)) {
         over = false;
         setAstray(null);
