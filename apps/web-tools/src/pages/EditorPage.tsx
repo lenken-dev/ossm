@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement } from "react";
-import { Box, Button, Callout, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
+import { AlertDialog, Box, Button, Callout, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
 import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -781,6 +781,8 @@ export default function EditorPage() {
    * points in it are selected. Otherwise Shift draws one that goes when released.
    */
   const [boxMode, setBoxMode] = useState(false);
+  /** Asking whether to apply or discard the advanced editor's changes, on leaving it by its toolbox button. */
+  const [leaving, setLeaving] = useState(false);
   /** Pasted points, timed from the first, with the regions they carry, that follow the pointer until a click places them. */
   const [placing, setPlacing] = useState<Clip | null>(null);
   /** In Move mode, the selected points being placed again, left out of the script until placed; Escape puts them back. None for the advanced editor's result when it was opened empty. */
@@ -2022,11 +2024,9 @@ export default function EditorPage() {
    * selects it again.
    */
   const closeAdvanced = (done: boolean, name?: string) => {
-    const { actions: result, regions: made, from, zero, snippet } = advanced!;
+    const { actions: result, regions: made, from, snippet } = advanced!;
     const instance = advanced!.instance === undefined ? null : (main.regions[advanced!.instance] as Instance);
-    // Opened on points, it has no regions, so any is a change.
-    const original = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => main.actions[i]) ?? [], regions: instance?.snippet.regions ?? [] };
-    if (!done && JSON.stringify({ actions: result, regions: made }) !== JSON.stringify(original) && !confirm("Discard the advanced editor's changes?")) return;
+    setLeaving(false);
     setTimeline(mainTimeline.current ?? { states: [{ actions: main.actions, chapters, bookmarks, regions: main.regions, label: "Start" }], index: 0 });
     mainTimeline.current = null;
     setAdvanced(null);
@@ -2051,6 +2051,15 @@ export default function EditorPage() {
       setPlaceAt(result[0]);
       setBoxMode(false);
     }
+  };
+
+  /** Whether the advanced editor's document differs from what it was opened on. */
+  const advancedChanged = () => {
+    const { actions: result, regions: made, from, zero, snippet } = advanced!;
+    const instance = advanced!.instance === undefined ? null : (main.regions[advanced!.instance] as Instance);
+    // Opened on points, it has no regions, so any is a change.
+    const original = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => main.actions[i]) ?? [], regions: instance?.snippet.regions ?? [] };
+    return JSON.stringify({ actions: result, regions: made }) !== JSON.stringify(original);
   };
 
   /** Whether the folder at `folder` has an entry named `name`. */
@@ -2700,6 +2709,15 @@ export default function EditorPage() {
     )}
   </Flex>;
 
+  /** The advanced editor's Done, as `label`. In snippet mode, it saves to the library, a new snippet under a name, so it needs a length. */
+  const doneButton = (label: string) => advanced && (advanced.snippet && !advanced.snippet.path ? (
+    <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => closeAdvanced(true, n)}>
+      <Button style={{ flex: 1 }} disabled={actions.length < 2}>{label}</Button>
+    </NamePopover>
+  ) : (
+    <Button style={{ flex: 1 }} disabled={actions.length < (advanced.snippet || advanced.instance !== undefined ? 2 : 1)} onClick={() => closeAdvanced(true)}>{label}</Button>
+  ));
+
   const sidebar = (
     // At least the panel's height, so the buttons docked at its bottom sit there.
     <Flex direction="column" gap="3" p="3" minHeight="100%">
@@ -3128,15 +3146,8 @@ export default function EditorPage() {
             </Button>
           </NamePopover>
           <Flex gap="2">
-            {/* In snippet mode, it saves to the library, a new snippet under a name, so it needs a length. */}
-            {advanced.snippet && !advanced.snippet.path ? (
-              <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => closeAdvanced(true, n)}>
-                <Button style={{ flex: 1 }} disabled={actions.length < 2}>Done</Button>
-              </NamePopover>
-            ) : (
-              <Button style={{ flex: 1 }} disabled={actions.length < (advanced.snippet || advanced.instance !== undefined ? 2 : 1)} onClick={() => closeAdvanced(true)}>Done</Button>
-            )}
-            <Button variant="soft" color="gray" style={{ flex: 1 }} onClick={() => closeAdvanced(false)}>Cancel</Button>
+            {doneButton("Done")}
+            <Button variant="soft" color="gray" style={{ flex: 1 }} onClick={() => (!advancedChanged() || confirm("Discard the advanced editor's changes?")) && closeAdvanced(false)}>Cancel</Button>
           </Flex>
         </Flex>
       )}
@@ -3465,12 +3476,25 @@ export default function EditorPage() {
           variant={advanced ? "solid" : "soft"}
           color={advanced ? undefined : "gray"}
           aria-pressed={!!advanced}
-          disabled={!!placing || !!advanced || !!tool}
-          title="Edit the selected points, or new ones, in the advanced editor (E)"
-          onClick={() => openAdvanced()}
+          disabled={!!placing || !!tool}
+          title={advanced ? "Back to the script, asking to apply or discard any changes" : "Edit the selected points, or new ones, in the advanced editor (E)"}
+          onClick={() => (!advanced ? openAdvanced() : advancedChanged() ? setLeaving(true) : closeAdvanced(false))}
         >
           <MixerHorizontalIcon /> Advanced
         </Button>
+        <AlertDialog.Root open={leaving} onOpenChange={setLeaving}>
+          <AlertDialog.Content maxWidth="400px">
+            <AlertDialog.Title>Leave the advanced editor</AlertDialog.Title>
+            <AlertDialog.Description size="2">Apply the changes or discard them?</AlertDialog.Description>
+            <Flex gap="3" mt="4">
+              {doneButton("Apply")}
+              <Button variant="soft" color="red" style={{ flex: 1 }} onClick={() => closeAdvanced(false)}>Discard</Button>
+              <AlertDialog.Cancel>
+                <Button variant="soft" color="gray" style={{ flex: 1 }}>Keep editing</Button>
+              </AlertDialog.Cancel>
+            </Flex>
+          </AlertDialog.Content>
+        </AlertDialog.Root>
         {videoUrl && <>
           <Separator orientation="vertical" size="2" />
           <Button
