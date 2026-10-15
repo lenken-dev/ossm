@@ -504,6 +504,9 @@ export default function EditorPage() {
   /** The view for drags, which read it between renders as they scroll it. */
   const viewRef = useRef(view);
   viewRef.current = view;
+  /** The points for drags, which read them between renders. */
+  const actionsRef = useRef(script.actions);
+  actionsRef.current = script.actions;
   const [error, setError] = useState<string | null>(null);
   /** Indices of the selected points, moved together and deleted with the Delete key. */
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
@@ -592,6 +595,11 @@ export default function EditorPage() {
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
   /** The advanced editor shows times from its 0, earlier ones negative; only as shown, the points keep the main script's times. */
   const [fromZero, setFromZero] = usePersistedState("ossm:editorFromZero", false, localStorage);
+  /** In the advanced editor, points are added and dragged onto the nearest bookmark's time; only with bookmarks. */
+  const [onMarkers, setOnMarkers] = usePersistedState("ossm:editorOnMarkers", false, localStorage);
+  useEffect(() => {
+    if (!script.bookmarks.length) setOnMarkers(false);
+  }, [script.bookmarks.length, setOnMarkers]);
   /** The time shown as 0. */
   const zero = advanced && fromZero ? advanced.zero : 0;
   const [steps, setSteps] = usePersistedState("ossm:editorSteps", DEFAULT_STEPS, localStorage);
@@ -792,6 +800,9 @@ export default function EditorPage() {
   /**
    * Drag the points `indices` together. They keep their spacing, stay within
    * 0–100 and between their unselected neighbours, so the actions stay sorted.
+   * Placing points on markers, the grabbed one goes to the bookmark nearest the
+   * pointer instead, and they may pass other points; on release, a point left
+   * at a dragged one's time goes.
    */
   const drag = (e: PointerEvent<Element>, indices: number[]) => {
     e.preventDefault();
@@ -805,8 +816,26 @@ export default function EditorPage() {
     let start: Action[] | null = null;
     /** How far in time they can go, from where they started; known from the first move. */
     let limits: [number, number] | null = null;
+    /** Snapped, the points in order as last shown, the dragged ones marked. */
+    let placed: { action: Action; moved: boolean }[] | null = null;
+    const show = (list: { action: Action; moved: boolean }[]) => {
+      placed = list;
+      setScript((s) => ({ ...s, actions: list.map((x) => x.action) }));
+      setSelected(new Set(list.flatMap((x, j) => (x.moved ? [j] : []))));
+    };
     const move = (m: globalThis.PointerEvent) => {
       const p = pointerAt(m);
+      if (advanced && onMarkers) {
+        // A render has run since the press, so this has a point added just before.
+        const a = (start ??= actionsRef.current);
+        const grabbed = indices.reduce((g, i) => (Math.abs(a[i].at - origin.at) < Math.abs(a[g].at - origin.at) ? i : g));
+        const mark = bookmarks.reduce((n, b) => (Math.abs(b.time - p.at) < Math.abs(n.time - p.at) ? b : n)).time;
+        const dt = Math.max(mark - a[grabbed].at, -Math.min(...indices.map((i) => a[i].at)));
+        const dp = clamp(p.pos - origin.pos, Math.max(...indices.map((i) => -a[i].pos)), Math.min(...indices.map((i) => 100 - a[i].pos)));
+        const moved = indices.map((i) => ({ action: { at: a[i].at + dt, pos: a[i].pos + dp }, moved: true }));
+        const kept = a.filter((_, i) => !moving.has(i)).map((action) => ({ action, moved: false }));
+        return show([...kept, ...moved].sort((x, y) => x.action.at - y.action.at));
+      }
       setScript((s) => {
         const a = (start ??= s.actions);
         let [dtMin, dtMax, dpMin, dpMax] = [-Infinity, Infinity, -100, 100];
@@ -830,6 +859,11 @@ export default function EditorPage() {
       return !limits || (dir > 0 ? dt < limits[1] : dt > limits[0]);
     };
     track(svg, e, move, () => {
+      if (placed) {
+        const taken = new Set(placed.filter((x) => x.moved).map((x) => x.action.at));
+        show(placed.filter((x) => x.moved || !taken.has(x.action.at)));
+        anchor.current = null;
+      }
       dragging.current = false;
       setDragEnds((n) => n + 1);
     }, scrolls);
@@ -901,7 +935,11 @@ export default function EditorPage() {
     track(svg, e, move);
   };
 
-  /** Add a point under the pointer and keep dragging it; with several points selected, only clear the selection. */
+  /**
+   * Add a point under the pointer and keep dragging it; with several points
+   * selected, only clear the selection. Placing on markers, it goes at the
+   * nearest bookmark's time and is dragged along them.
+   */
   const add = (e: PointerEvent<SVGSVGElement>) => {
     if (tool) return;
     const hit = pointUnder(e);
@@ -916,6 +954,9 @@ export default function EditorPage() {
       return;
     }
     const point = pointerAt(e);
+    if (advanced && onMarkers) {
+      point.at = bookmarks.reduce((a, b) => (Math.abs(b.time - point.at) < Math.abs(a.time - point.at) ? b : a)).time;
+    }
     if (point.at < 0) return;
     const i = byTime(actions, point.at);
     if (actions[i]?.at === point.at) return;
@@ -2026,6 +2067,11 @@ export default function EditorPage() {
                 if (genBox) setGenRange(rangeFields(genBox, on ? advanced.zero : 0));
               }}
             /> Time from 0
+          </Flex>
+        </Text>
+        <Text as="label" size="2" title="New and dragged points go to the nearest bookmark's time">
+          <Flex gap="2" align="center">
+            <Switch checked={onMarkers} disabled={!bookmarks.length} onCheckedChange={setOnMarkers} /> Place points on markers
           </Flex>
         </Text>
         <Separator size="4" />
