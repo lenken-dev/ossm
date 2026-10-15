@@ -48,7 +48,8 @@ export default function GraphPage() {
   );
 }
 
-export function GraphLayout({ sidebar, content, sidebarHidden }: { sidebar: ReactNode; content: ReactNode; sidebarHidden?: boolean }) {
+/** The sidebar, the content, and an optional `aside` on the content's other side; on mobile, the content on top, then `aside`, then the sidebar. */
+export function GraphLayout({ sidebar, content, sidebarHidden, aside }: { sidebar: ReactNode; content: ReactNode; sidebarHidden?: boolean; aside?: ReactNode }) {
   const isMobile = useIsMobile();
   return (
     <Flex
@@ -59,9 +60,11 @@ export function GraphLayout({ sidebar, content, sidebarHidden }: { sidebar: Reac
       <Box className={isMobile ? styles.sidebarMobile : styles.sidebarDesktop} display={sidebarHidden ? "none" : undefined}>
         {sidebar}
       </Box>
+      {isMobile && aside && <Box className={styles.sidebarMobile}>{aside}</Box>}
       <Box className={styles.content}>
         {content}
       </Box>
+      {!isMobile && aside && <Box className={styles.asideDesktop}>{aside}</Box>}
     </Flex>
   );
 }
