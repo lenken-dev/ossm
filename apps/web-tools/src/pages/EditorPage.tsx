@@ -2160,6 +2160,9 @@ export default function EditorPage() {
                         aria-label={`${label} ${field}`}
                         value={func[field] ?? ""}
                         onChange={(e) => set({ ...func, [field]: e.target.value })}
+                        // A period can't be typed negative.
+                        min={field === "period" ? 0 : undefined}
+                        onKeyDown={(e) => field === "period" && e.key === "-" && e.preventDefault()}
                         style={{ flex: "1 1 40%", minWidth: 0 }}
                       >
                         <TextField.Slot side="left">{{ value: "Value", start: "Start", end: "End", min: "Min", max: "Max", period: "Period", phase: "Phase", width: "Width", seed: "Seed" }[field]}</TextField.Slot>
@@ -2173,6 +2176,7 @@ export default function EditorPage() {
                       </TextField.Root>
                     ))}
                   </Flex>
+                  {func.period !== undefined && !(typed(func.period) > 0) && <Text size="1" color="red">Period must be above 0.</Text>}
                 </Flex>
               );
             })}
