@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement } from "react";
-import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
 import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -2701,7 +2701,8 @@ export default function EditorPage() {
   </Flex>;
 
   const sidebar = (
-    <Flex direction="column" gap="3" p="3">
+    // At least the panel's height, so the buttons docked at its bottom sit there.
+    <Flex direction="column" gap="3" p="3" minHeight="100%">
       <input
         ref={input}
         type="file"
@@ -2713,7 +2714,12 @@ export default function EditorPage() {
           e.target.value = "";
         }}
       />
-      {/* The advanced editor's document is not a file of its own. */}
+      {/* The advanced editor's document is not a file of its own: in its place, what is being edited; how to leave is at the bottom. */}
+      {advanced && (
+        <Heading size="4" truncate>
+          {advanced.instance !== undefined ? `Snippet · ${(main.regions[advanced.instance] as Instance).snippet.name}` : !advanced.snippet ? "Advanced editor" : advanced.snippet.path ? `Snippet · ${advanced.snippet.path[advanced.snippet.path.length - 1]}` : "New snippet"}
+        </Heading>
+      )}
       {!advanced && <Flex gap="2">
         <Button
           variant="soft"
@@ -3102,14 +3108,38 @@ export default function EditorPage() {
               </Button>
             </Flex>
           </>}
-          {/* Docked to the panel's bottom while it scrolls, covering what passes under; the padding takes the place of the gap and the panel's own. */}
-          {toolBlocked && <Text size="1" color="red">{toolBlocked}.</Text>}
-          <Flex gap="2" py="3" my="-3" style={{ position: "sticky", bottom: 0, background: "var(--color-background)" }}>
-            <Button disabled={!preview || !!toolBlocked} onClick={applyTool} style={{ flex: 1 }}>Apply</Button>
-            <Button variant="soft" color="gray" onClick={() => setTool(null)} style={{ flex: 1 }}>Discard</Button>
+          {/* At the panel's bottom, docked there while it scrolls, covering what passes under; the padding takes the place of the gap and the panel's own. */}
+          <Flex direction="column" gap="2" py="3" mb="-3" style={{ marginTop: "auto", position: "sticky", bottom: 0, background: "var(--color-background)" }}>
+            {toolBlocked && <Text size="1" color="red">{toolBlocked}.</Text>}
+            <Flex gap="2">
+              <Button disabled={!preview || !!toolBlocked} onClick={applyTool} style={{ flex: 1 }}>Apply</Button>
+              <Button variant="soft" color="gray" onClick={() => setTool(null)} style={{ flex: 1 }}>Discard</Button>
+            </Flex>
           </Flex>
         </>}
       </>}
+      {/* At the panel's bottom as a tool's Apply, which takes its place while a tool is open. */}
+      {advanced && !tool && (
+        <Flex direction="column" gap="2" py="3" mb="-3" style={{ marginTop: "auto", position: "sticky", bottom: 0, background: "var(--color-background)" }}>
+          {/* At the top level of the library; the editor stays open. */}
+          <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions, regions })}>
+            <Button variant="soft" disabled={actions.length < 2} title="Save the whole document to the snippet library">
+              <ComponentInstanceIcon /> Save as snippet
+            </Button>
+          </NamePopover>
+          <Flex gap="2">
+            {/* In snippet mode, it saves to the library, a new snippet under a name, so it needs a length. */}
+            {advanced.snippet && !advanced.snippet.path ? (
+              <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => closeAdvanced(true, n)}>
+                <Button style={{ flex: 1 }} disabled={actions.length < 2}>Done</Button>
+              </NamePopover>
+            ) : (
+              <Button style={{ flex: 1 }} disabled={actions.length < (advanced.snippet || advanced.instance !== undefined ? 2 : 1)} onClick={() => closeAdvanced(true)}>Done</Button>
+            )}
+            <Button variant="soft" color="gray" style={{ flex: 1 }} onClick={() => closeAdvanced(false)}>Cancel</Button>
+          </Flex>
+        </Flex>
+      )}
     </Flex>
   );
 
@@ -3244,28 +3274,6 @@ export default function EditorPage() {
         </Flex>
       )}
       </Flex>
-      {advanced && (
-        <Flex gap="2" align="center" flexShrink="0" px="3" py="2" style={{ borderRadius: 6, background: "var(--accent-a3)" }}>
-          <Text size="2" weight="medium" truncate style={{ flexGrow: 1 }}>
-            {advanced.instance !== undefined ? `Snippet · ${(main.regions[advanced.instance] as Instance).snippet.name}` : !advanced.snippet ? "Advanced editor" : advanced.snippet.path ? `Snippet · ${advanced.snippet.path[advanced.snippet.path.length - 1]}` : "New snippet"} · {points(actions.length)}
-          </Text>
-          {/* At the top level of the library; the editor stays open. */}
-          <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions, regions })}>
-            <Button size="1" variant="soft" disabled={actions.length < 2 || !!tool} title="Save the whole document to the snippet library">
-              <ComponentInstanceIcon /> Save as snippet
-            </Button>
-          </NamePopover>
-          {/* In snippet mode, it saves to the library, a new snippet under a name, so it needs a length. */}
-          {advanced.snippet && !advanced.snippet.path ? (
-            <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => closeAdvanced(true, n)}>
-              <Button size="1" disabled={actions.length < 2 || !!tool}>Done</Button>
-            </NamePopover>
-          ) : (
-            <Button size="1" disabled={actions.length < (advanced.snippet || advanced.instance !== undefined ? 2 : 1) || !!tool} onClick={() => closeAdvanced(true)}>Done</Button>
-          )}
-          <Button size="1" variant="soft" color="gray" onClick={() => closeAdvanced(false)}>Cancel</Button>
-        </Flex>
-      )}
       {/* Toolbox: convenience buttons for what the keyboard also does. */}
       <Flex gap="2" align="center" flexShrink="0">
         <Flex>
