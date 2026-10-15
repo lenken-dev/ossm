@@ -12,6 +12,14 @@
   overflow: auto;
 }
 
+.asideDesktop {
+  width: 280px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--gray-5);
+  min-height: 0;
+  overflow: auto;
+}
+
 .sidebarMobile {
   flex-shrink: 0;
   max-height: 50%;

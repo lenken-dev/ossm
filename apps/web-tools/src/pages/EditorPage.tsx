@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent, type ReactElement } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ClipboardIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, EnterIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -94,6 +94,57 @@ interface Clip {
   regions: Region[];
 }
 
+/** `clip` moved `dt` ms in time, its regions with it. */
+const clipBy = (clip: Clip, dt: number): Clip => ({ actions: clip.actions.map((a) => ({ at: a.at + dt, pos: a.pos })), regions: clip.regions.map((r) => movedBy(r, dt)) });
+
+/** A saved advanced-editor document: its points, at least two, and generator regions, timed from its first point at 0. */
+interface Snippet extends Clip {
+  name: string;
+}
+
+/** A folder of the snippet library, with its folders and snippets. */
+interface Folder {
+  folder: string;
+  items: Entry[];
+}
+
+/** A row of the snippet library; its name is unique in its folder, among folders and snippets alike. */
+type Entry = Folder | Snippet;
+const isFolder = (e: Entry): e is Folder => "folder" in e;
+const entryName = (e: Entry) => (isFolder(e) ? e.folder : e.name);
+
+/** The snippet library as it is kept and exported. */
+interface LibraryFile {
+  ossm: { version: 1; snippets: Entry[] };
+}
+
+/** Whether the entry at `path`, by its folders' and its own name, is `folder` or in it. */
+const under = (path: string[], folder: string[]) => folder.length <= path.length && folder.every((n, i) => path[i] === n);
+
+/** The entries in the folder at `path` of `lib`; none when it is not there. */
+const itemsAt = (lib: Entry[], path: string[]) => path.reduce<Entry[]>((items, name) => items.find((e): e is Folder => isFolder(e) && e.folder === name)?.items ?? [], lib);
+
+/** The entry at `path` of `lib`. */
+const entryAt = (lib: Entry[], path: string[]) => itemsAt(lib, path.slice(0, -1)).find((e) => entryName(e) === path[path.length - 1]);
+
+/** `lib` with the entries in the folder at `path` changed by `f`. */
+const updatedAt = (lib: Entry[], path: string[], f: (items: Entry[]) => Entry[]): Entry[] =>
+  path.length ? lib.map((e) => (isFolder(e) && e.folder === path[0] ? { ...e, items: updatedAt(e.items, path.slice(1), f) } : e)) : f(lib);
+
+/** `items` with `incoming` merged in: a folder into the one of the same name, the rest under a free name, " (2)" on. */
+function merged(items: Entry[], incoming: Entry[]): Entry[] {
+  return incoming.reduce((list, e) => {
+    const same = isFolder(e) && list.find((o): o is Folder => isFolder(o) && o.folder === e.folder);
+    if (same && isFolder(e)) return list.map((o) => (o === same ? { ...same, items: merged(same.items, e.items) } : o));
+    let name = entryName(e);
+    for (let k = 2; list.some((o) => entryName(o) === name); k++) name = `${entryName(e)} (${k})`;
+    return [...list, isFolder(e) ? { folder: name, items: merged([], e.items) } : { ...e, name }];
+  }, items);
+}
+
+/** Folders first, then snippets, each by name. */
+const sortedEntries = (items: Entry[]) => [...items].sort((a, b) => Number(isFolder(b)) - Number(isFolder(a)) || entryName(a).localeCompare(entryName(b)));
+
 /** A region's label, after the timing that placed its points. */
 const regionName = (r: Region) => `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`;
 
@@ -114,13 +165,16 @@ const EXTEND = 24;
  * The advanced editor's document, which the page edits instead of the main
  * script while it is open: its points, in the main script's times, its 0, and
  * the indices of the main script's points it was opened from, null when opened empty;
- * and its regions.
+ * and its regions. In snippet mode, the library snippet it edits, by its
+ * folders' and its own name, or null for a new one: Done saves it to the
+ * library instead of placing it.
  */
 interface Advanced {
   actions: Action[];
   regions: Region[];
   zero: number;
   from: number[] | null;
+  snippet?: { path: string[] | null };
 }
 
 const EMPTY: Script = { name: "untitled", actions: [], chapters: [], bookmarks: [], regions: [] };
@@ -554,6 +608,42 @@ function readRegions(list: unknown): Region[] {
   return regions;
 }
 
+/**
+ * Points from the clipboard or a file, with the regions they carry, timed
+ * from the first point; null without any. Anything could be in them: points
+ * without numbers go, the rest are sorted, in whole ms, one per ms, within
+ * 0–100; the regions are read as `readRegions` does.
+ */
+function readClip(actions: unknown, regions: unknown): Clip | null {
+  if (!Array.isArray(actions)) return null;
+  const valid = (actions as Partial<Action>[])
+    .filter((a): a is Action => Number.isFinite(a?.at) && Number.isFinite(a?.pos))
+    .sort((a, b) => a.at - b.at);
+  if (!valid.length) return null;
+  return {
+    actions: valid
+      .map((a) => ({ at: Math.round(a.at - valid[0].at), pos: clamp(a.pos, 0, 100) }))
+      .filter((a, i, all) => i === 0 || a.at !== all[i - 1].at),
+    regions: readRegions(regions).map((r) => movedBy(r, -valid[0].at)),
+  };
+}
+
+/** The snippet library's entries in `list`, from an imported file; malformed ones go: without a name, or a snippet without two points. */
+function readEntries(list: unknown): Entry[] {
+  return (Array.isArray(list) ? list : []).flatMap((e): Entry[] => {
+    if (typeof e?.folder === "string" && e.folder.trim() && Array.isArray(e.items)) return [{ folder: e.folder, items: readEntries(e.items) }];
+    const clip = typeof e?.name === "string" && e.name.trim() ? readClip(e.actions, e.regions) : null;
+    return clip && clip.actions.length > 1 ? [{ name: e.name, ...clip }] : [];
+  });
+}
+
+/** Download `json` as the file `name`. */
+function download(json: string, name: string) {
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([json], { type: "application/json" })), download: name });
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
   const [main, setMain] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
@@ -575,6 +665,18 @@ export default function EditorPage() {
    * Generate on a `region`, in the main script too, edits it in place.
    */
   const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null; region?: Region } | null>(null);
+  /** The Snippets panel shows beside the graph, in the main script and the advanced editor alike. */
+  const [snippetsOpen, setSnippetsOpen] = usePersistedState("ossm:editorSnippetsShown", false, localStorage);
+  /** The snippet library, shared by all scripts, as its file holds it. */
+  const [libraryFile, setLibraryFile] = usePersistedState<LibraryFile>("ossm:editorSnippets", { ossm: { version: 1, snippets: [] } }, localStorage);
+  const library = libraryFile.ossm.snippets;
+  const setLibrary = (f: (lib: Entry[]) => Entry[]) => setLibraryFile((l) => ({ ossm: { version: 1, snippets: f(l.ossm.snippets) } }));
+  /** The library's open folders, by their paths as JSON. */
+  const [openFolders, setOpenFolders] = usePersistedState<string[]>("ossm:editorSnippetFolders", [], localStorage);
+  /** The library row being dragged, by its path, and the folder it would go into, by its path as JSON. */
+  const dragged = useRef<string[] | null>(null);
+  const [dropOn, setDropOn] = useState<string | null>(null);
+  const libraryInput = useRef<HTMLInputElement>(null);
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
   /** The view for drags, which read it between renders as they scroll it. */
   const viewRef = useRef(view);
@@ -1804,15 +1906,26 @@ export default function EditorPage() {
     setBox(null);
   };
 
-  /** Open the selected points in the advanced editor, or start it empty; its undo history starts anew. */
-  const openAdvanced = () => {
+  /** The library snippet at `path` as the advanced editor opens it: from `zero`, in whole ms; empty when it is gone. */
+  const snippetFrom = (path: string[] | null, zero: number) => {
+    const s = path && entryAt(library, path);
+    return s && !isFolder(s) ? clipBy(s, zero) : { actions: [], regions: [] };
+  };
+
+  /**
+   * Open the selected points in the advanced editor, or start it empty; its
+   * undo history starts anew. In snippet mode, on the library snippet at the
+   * `snippet`'s path, from the view's start, or empty for a new one.
+   */
+  const openAdvanced = (snippet?: Advanced["snippet"]) => {
     if (placing || advanced) return;
-    const from = selected.size ? [...selected].sort((a, b) => a - b) : null;
-    const doc = from ? from.map((i) => actions[i]) : [];
-    mainTimeline.current = timeline;
-    setTimeline({ states: [{ actions: doc, chapters, bookmarks, regions: [], label: "Open" }], index: 0 });
+    const from = !snippet && selected.size ? [...selected].sort((a, b) => a - b) : null;
     // In whole ms, as Generate's times count from it.
-    setAdvanced({ actions: doc, regions: [], zero: Math.round(doc[0]?.at ?? view.from), from });
+    const zero = Math.round(from ? actions[from[0]].at : view.from);
+    const doc = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => actions[i]) ?? [], regions: [] };
+    mainTimeline.current = timeline;
+    setTimeline({ states: [{ ...doc, chapters, bookmarks, label: "Open" }], index: 0 });
+    setAdvanced({ ...doc, zero, from, snippet });
     setSelected(new Set());
     setMarked(new Set());
     setBox(null);
@@ -1823,27 +1936,113 @@ export default function EditorPage() {
    * places the result with its regions in Move mode, where it was edited, with
    * the points it was opened from lifted, none when opened empty, and adds it
    * to the clipboard history; Cancel drops it, the points it was
-   * opened from selected again.
+   * opened from selected again. In snippet mode, Done saves it to the library
+   * instead, a new one as `name`.
    */
-  const closeAdvanced = (done: boolean) => {
-    const { actions: result, regions: made, from } = advanced!;
-    const original = from?.map((i) => main.actions[i]) ?? [];
-    // It opens without regions, so any is a change.
-    if (!done && (JSON.stringify(result) !== JSON.stringify(original) || made.length) && !confirm("Discard the advanced editor's changes?")) return;
+  const closeAdvanced = (done: boolean, name?: string) => {
+    const { actions: result, regions: made, from, zero, snippet } = advanced!;
+    // Opened on points, it has no regions, so any is a change.
+    const original = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => main.actions[i]) ?? [], regions: [] };
+    if (!done && JSON.stringify({ actions: result, regions: made }) !== JSON.stringify(original) && !confirm("Discard the advanced editor's changes?")) return;
     setTimeline(mainTimeline.current ?? { states: [{ actions: main.actions, chapters, bookmarks, regions: main.regions, label: "Start" }], index: 0 });
     mainTimeline.current = null;
     setAdvanced(null);
     // Cancelled, an open tool goes too, unapplied.
     setTool(null);
     setBox(null);
+    if (snippet) {
+      if (done) saveSnippet(snippet.path ?? [name!], { actions: result, regions: made });
+      setSelected(new Set());
+      setLifted(null);
+      setPlacing(null);
+      return;
+    }
     setSelected(new Set(done ? [] : from));
     setLifted(done ? new Set(from) : null);
-    const shape = done ? { actions: result.map((a) => ({ at: a.at - result[0].at, pos: a.pos })), regions: made.map((r) => movedBy(r, -result[0].at)) } : null;
+    const shape = done ? clipBy({ actions: result, regions: made }, -result[0].at) : null;
     if (shape) remember(shape);
     setPlacing(shape);
     if (done) {
       setPlaceAt(result[0]);
       setBoxMode(false);
+    }
+  };
+
+  /** Whether the folder at `folder` has an entry named `name`. */
+  const nameTaken = (folder: string[], name: string) => itemsAt(library, folder).some((e) => entryName(e) === name);
+
+  /** Save `clip` to the library as the snippet at `path`, timed from its first point, in place of one there. */
+  const saveSnippet = (path: string[], clip: Clip) => {
+    const name = path[path.length - 1];
+    const snippet: Snippet = { name, ...clipBy(clip, -clip.actions[0].at) };
+    setLibrary((lib) => updatedAt(lib, path.slice(0, -1), (items) => [...items.filter((e) => entryName(e) !== name), snippet]));
+  };
+
+  /** The open folders at `from` and in it, now at `to`. */
+  const reopened = (from: string[], to: string[]) => setOpenFolders((keys) => keys.map((k) => {
+    const p = JSON.parse(k) as string[];
+    return under(p, from) ? JSON.stringify([...to, ...p.slice(from.length)]) : k;
+  }));
+
+  /** Add an empty folder `name` in the folder at `path`, and open that. */
+  const addFolder = (path: string[], name: string) => {
+    setLibrary((lib) => updatedAt(lib, path, (items) => [...items, { folder: name, items: [] }]));
+    if (path.length) setOpenFolders((keys) => [...new Set([...keys, JSON.stringify(path)])]);
+  };
+
+  const renameEntry = (path: string[], name: string) => {
+    const old = path[path.length - 1];
+    setLibrary((lib) => updatedAt(lib, path.slice(0, -1), (items) => items.map((e) => (entryName(e) !== old ? e : isFolder(e) ? { ...e, folder: name } : { ...e, name }))));
+    reopened(path, [...path.slice(0, -1), name]);
+  };
+
+  /** Delete the entry at `path`, a folder with its contents, once confirmed; an empty folder without asking. */
+  const deleteEntry = (path: string[]) => {
+    const [e, name] = [entryAt(library, path), path[path.length - 1]];
+    const ask = !e ? null : !isFolder(e) ? `Delete the snippet ${name}?` : e.items.length ? `Delete the folder ${name} and everything in it?` : null;
+    if (ask && !confirm(ask)) return;
+    setLibrary((lib) => updatedAt(lib, path.slice(0, -1), (items) => items.filter((o) => entryName(o) !== name)));
+  };
+
+  /** Whether the entry at `from` may go into the folder at `to`: not where it is, not into itself, and not onto a name taken there. */
+  const movable = (from: string[], to: string[]) => JSON.stringify(from.slice(0, -1)) !== JSON.stringify(to) && !under(to, from) && !nameTaken(to, from[from.length - 1]);
+
+  const moveEntry = (from: string[], to: string[]) => {
+    setLibrary((lib) => {
+      const e = entryAt(lib, from)!;
+      return updatedAt(updatedAt(lib, from.slice(0, -1), (items) => items.filter((o) => o !== e)), to, (items) => [...items, e]);
+    });
+    reopened(from, [...to, from[from.length - 1]]);
+  };
+
+  /** A library row or the panel's top area as a place to drop a dragged row into the folder at `to`, the top level for none; only in the main script. */
+  const dropInto = (to: string[]) => advanced ? {} : {
+    onDragOver: (e: DragEvent) => {
+      if (!dragged.current || !movable(dragged.current, to)) return;
+      e.preventDefault();
+      setDropOn(JSON.stringify(to));
+    },
+    onDragLeave: (e: DragEvent) => !e.currentTarget.contains(e.relatedTarget as Node) && setDropOn(null),
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      moveEntry(dragged.current!, to);
+      setDropOn(null);
+    },
+  };
+
+  /** The library as a file: every snippet and folder. */
+  const exportLibrary = () => download(JSON.stringify(libraryFile), "snippets.json");
+
+  /** Merge a library file into the library: folders of the same name merge, a taken name gets " (2)"; malformed entries go. */
+  const importLibrary = async (file: File) => {
+    try {
+      const parsed = JSON.parse(await file.text()) as { ossm?: { snippets?: unknown } } | null;
+      if (!Array.isArray(parsed?.ossm?.snippets)) throw new Error();
+      const read = readEntries(parsed.ossm.snippets);
+      setLibrary((lib) => merged(lib, read));
+      setError(null);
+    } catch {
+      setError(`${file.name} is not a snippet library.`);
     }
   };
 
@@ -1888,19 +2087,10 @@ export default function EditorPage() {
     } catch {
       return false;
     }
-    if (!Array.isArray(parsed?.actions)) return false;
-    // From the clipboard, so anything could be in it.
-    const valid = (parsed.actions as Partial<Action>[])
-      .filter((a): a is Action => Number.isFinite(a?.at) && Number.isFinite(a?.pos))
-      .sort((a, b) => a.at - b.at);
-    if (!valid.length) return false;
+    const clip = readClip(parsed?.actions, parsed?.ossm?.regions);
+    if (!clip) return false;
     cancelPlacing();
-    setPlacing({
-      actions: valid
-        .map((a) => ({ at: Math.round(a.at - valid[0].at), pos: clamp(a.pos, 0, 100) }))
-        .filter((a, i, all) => i === 0 || a.at !== all[i - 1].at),
-      regions: readRegions(parsed.ossm?.regions).map((r) => movedBy(r, -valid[0].at)),
-    });
+    setPlacing(clip);
     return true;
   };
 
@@ -2085,12 +2275,7 @@ export default function EditorPage() {
       ...(Object.keys(metadata).length || "metadata" in file ? { metadata } : {}),
       ...(Object.keys(ossm).length || "ossm" in file ? { ossm } : {}),
     });
-    const a = Object.assign(document.createElement("a"), {
-      href: URL.createObjectURL(new Blob([json], { type: "application/json" })),
-      download: `${script.name || "untitled"}.funscript`,
-    });
-    a.click();
-    URL.revokeObjectURL(a.href);
+    download(json, `${script.name || "untitled"}.funscript`);
     setSaved(script);
   };
 
@@ -2276,6 +2461,84 @@ export default function EditorPage() {
     ] as const).filter(([, , , shown]) => shown);
   })();
 
+  /**
+   * The library's rows in the folder at `path`, `depth` deep, an open
+   * folder's rows after it. In the main script a row is dragged onto a folder
+   * row to move it there, and has Rename and Delete; a folder's New folder, a
+   * snippet's Edit. Insert is a snippet's everywhere.
+   */
+  const libraryRows = (items: Entry[], path: string[], depth: number): ReactElement[] => sortedEntries(items).flatMap((e) => {
+    const [name, at] = [entryName(e), [...path, entryName(e)]];
+    const key = JSON.stringify(at);
+    const open = isFolder(e) && openFolders.includes(key);
+    const toggle = () => setOpenFolders((keys) => (open ? keys.filter((k) => k !== key) : [...keys, key]));
+    const row = (
+      <Flex
+        key={key}
+        align="center"
+        gap="1"
+        draggable={!advanced}
+        onDragStart={(d) => {
+          dragged.current = at;
+          d.dataTransfer.effectAllowed = "move";
+          d.dataTransfer.setData("text/plain", name);
+        }}
+        onDragEnd={() => {
+          dragged.current = null;
+          setDropOn(null);
+        }}
+        {...(isFolder(e) ? dropInto(at) : {})}
+        style={{ paddingLeft: depth * 16, minHeight: 28, borderRadius: 4, background: dropOn === key ? "var(--accent-a4)" : undefined }}
+      >
+        <Flex align="center" gap="2" flexGrow="1" minWidth="0" onClick={isFolder(e) ? toggle : undefined} style={{ cursor: isFolder(e) ? "pointer" : undefined }}>
+          {isFolder(e) ? <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} /> : <ComponentInstanceIcon style={{ flexShrink: 0 }} />}
+          <Text size="2" truncate>{name}</Text>
+        </Flex>
+        {!advanced && isFolder(e) && (
+          <NamePopover taken={(n) => nameTaken(at, n)} onName={(n) => addFolder(at, n)}>
+            <IconButton size="1" variant="ghost" color="gray" aria-label="New folder in it" title="New folder in it"><PlusIcon /></IconButton>
+          </NamePopover>
+        )}
+        {!advanced && !isFolder(e) && (
+          <IconButton size="1" variant="ghost" color="gray" disabled={!!placing} aria-label="Edit" title="Edit it in the advanced editor" onClick={() => openAdvanced({ path: at })}><MixerHorizontalIcon /></IconButton>
+        )}
+        {/* ponytail: Insert comes with instances, in the next step. */}
+        {!isFolder(e) && <IconButton size="1" variant="ghost" color="gray" disabled aria-label="Insert" title="Insert"><EnterIcon /></IconButton>}
+        {!advanced && <>
+          <NamePopover initial={name} taken={(n) => n !== name && nameTaken(path, n)} onName={(n) => n !== name && renameEntry(at, n)}>
+            <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
+          </NamePopover>
+          <IconButton size="1" variant="ghost" color="red" aria-label="Delete" title={isFolder(e) ? "Delete it with its contents" : "Delete"} onClick={() => deleteEntry(at)}><TrashIcon /></IconButton>
+        </>}
+      </Flex>
+    );
+    return [row, ...(open ? libraryRows((e as Folder).items, at, depth + 1) : [])];
+  });
+
+  /** The Snippets panel, beside the graph: the library as a tree; in the main script, its top area takes rows dropped to the top level. */
+  const snippetsPanel = <Flex direction="column" gap="3" p="3">
+    <Flex direction="column" gap="2" {...dropInto([])} style={{ borderRadius: 4, background: dropOn === "[]" ? "var(--accent-a4)" : undefined }}>
+      <Text size="2" weight="medium">Snippets</Text>
+      {!advanced && <Flex gap="2" wrap="wrap">
+        <Button size="1" variant="soft" color="gray" disabled={!!placing} title="Make a snippet in the advanced editor" onClick={() => openAdvanced({ path: null })}>
+          <PlusIcon /> New snippet
+        </Button>
+        <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => addFolder([], n)}>
+          <Button size="1" variant="soft" color="gray"><PlusIcon /> New folder</Button>
+        </NamePopover>
+        <Button size="1" variant="soft" color="gray" disabled={!library.length} title="Save the library to a file" onClick={exportLibrary}>
+          <DownloadIcon /> Export
+        </Button>
+        <Button size="1" variant="soft" color="gray" title="Merge a library file into the library" onClick={() => libraryInput.current?.click()}>
+          <UploadIcon /> Import
+        </Button>
+      </Flex>}
+    </Flex>
+    <Flex direction="column">
+      {library.length ? libraryRows(library, [], 0) : <Text size="1" color="gray">No snippets yet.</Text>}
+    </Flex>
+  </Flex>;
+
   const sidebar = (
     <Flex direction="column" gap="3" p="3">
       <input
@@ -2311,6 +2574,17 @@ export default function EditorPage() {
           <UploadIcon /> Open
         </Button>
       </Flex>}
+      <input
+        ref={libraryInput}
+        type="file"
+        accept=".json,application/json"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void importLibrary(file);
+          e.target.value = "";
+        }}
+      />
       <input
         ref={videoInput}
         type="file"
@@ -2795,8 +3069,23 @@ export default function EditorPage() {
       </Flex>
       {advanced && (
         <Flex gap="2" align="center" flexShrink="0" px="3" py="2" style={{ borderRadius: 6, background: "var(--accent-a3)" }}>
-          <Text size="2" weight="medium" style={{ flexGrow: 1 }}>Advanced editor · {points(actions.length)}</Text>
-          <Button size="1" disabled={!actions.length || !!tool} onClick={() => closeAdvanced(true)}>Done</Button>
+          <Text size="2" weight="medium" truncate style={{ flexGrow: 1 }}>
+            {!advanced.snippet ? "Advanced editor" : advanced.snippet.path ? `Snippet · ${advanced.snippet.path[advanced.snippet.path.length - 1]}` : "New snippet"} · {points(actions.length)}
+          </Text>
+          {/* At the top level of the library; the editor stays open. */}
+          <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions, regions })}>
+            <Button size="1" variant="soft" disabled={actions.length < 2 || !!tool} title="Save the whole document to the snippet library">
+              <ComponentInstanceIcon /> Save as snippet
+            </Button>
+          </NamePopover>
+          {/* In snippet mode, it saves to the library, a new snippet under a name, so it needs a length. */}
+          {advanced.snippet && !advanced.snippet.path ? (
+            <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => closeAdvanced(true, n)}>
+              <Button size="1" disabled={actions.length < 2 || !!tool}>Done</Button>
+            </NamePopover>
+          ) : (
+            <Button size="1" disabled={actions.length < (advanced.snippet ? 2 : 1) || !!tool} onClick={() => closeAdvanced(true)}>Done</Button>
+          )}
           <Button size="1" variant="soft" color="gray" onClick={() => closeAdvanced(false)}>Cancel</Button>
         </Flex>
       )}
@@ -2993,7 +3282,7 @@ export default function EditorPage() {
           aria-pressed={!!advanced}
           disabled={!!placing || !!advanced || !!tool}
           title="Edit the selected points, or new ones, in the advanced editor (E)"
-          onClick={openAdvanced}
+          onClick={() => openAdvanced()}
         >
           <MixerHorizontalIcon /> Advanced
         </Button>
@@ -3009,6 +3298,16 @@ export default function EditorPage() {
             <VideoIcon /> Player
           </Button>
         </>}
+        <Button
+          variant={snippetsOpen ? "solid" : "soft"}
+          color={snippetsOpen ? undefined : "gray"}
+          aria-pressed={snippetsOpen}
+          title={`${snippetsOpen ? "Hide" : "Show"} the snippet library`}
+          onClick={() => setSnippetsOpen(!snippetsOpen)}
+          style={{ marginLeft: "auto" }}
+        >
+          <ComponentInstanceIcon /> Snippets
+        </Button>
       </Flex>
       {/* The graph with the marker lane under it; the wheel works on both. */}
       <Flex
@@ -3464,7 +3763,7 @@ export default function EditorPage() {
     </Flex>
   );
 
-  return <GraphLayout sidebar={sidebar} content={content} />;
+  return <GraphLayout sidebar={sidebar} content={content} aside={snippetsOpen && snippetsPanel} />;
 }
 
 /** Height of a small graph's time axis, in px. */
@@ -3741,6 +4040,37 @@ function MarkerPreview({ before, after }: { before: Content; after: Content }) {
       {lines.slice(0, MARKER_DIFF_LINES).map((line, i) => <Text key={i} size="1" color="gray">{line}</Text>)}
       {lines.length > MARKER_DIFF_LINES && <Text size="1" color="gray">and {lines.length - MARKER_DIFF_LINES} more</Text>}
     </Flex>
+  );
+}
+
+/**
+ * `children`, a button, opening a small field for a name, `initial` at
+ * first: Enter gives it, trimmed, to `onName`, unless it is empty or `taken`.
+ */
+function NamePopover({ initial = "", taken, onName, children }: { initial?: string; taken: (name: string) => boolean; onName: (name: string) => void; children: ReactElement }) {
+  const [name, setName] = useState<string | null>(null);
+  const refused = name === null || !name.trim() || taken(name.trim());
+  return (
+    <Popover.Root open={name !== null} onOpenChange={(open) => setName(open ? initial : null)}>
+      <Popover.Trigger>{children}</Popover.Trigger>
+      <Popover.Content size="1" width="200px">
+        <Flex direction="column" gap="1">
+          <TextField.Root
+            size="1"
+            aria-label="Name"
+            value={name ?? ""}
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || refused) return;
+              onName(name.trim());
+              setName(null);
+            }}
+          />
+          {name?.trim() && refused && <Text size="1" color="red">That name is taken.</Text>}
+        </Flex>
+      </Popover.Content>
+    </Popover.Root>
   );
 }
 
