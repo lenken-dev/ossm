@@ -1810,8 +1810,8 @@ export default function EditorPage() {
     }
     ctx.strokeStyle = css.getPropertyValue("--gray-12");
     ctx.stroke(line);
-    // Packed this close, the points would only blur the line.
-    const showDots = visible.length * DOT_SPACING < width;
+    // Packed this close, the points would only blur the line; a tool's result only shows its line, as its points can't be dragged.
+    const showDots = !tool && visible.length * DOT_SPACING < width;
     // One path per look, so drawing stays fast however many points there are. The points being replaced show as small crosses.
     const [dots, ringed, crosses] = [new Path2D(), new Path2D(), new Path2D()];
     visible.forEach((a, j) => {
@@ -1823,7 +1823,7 @@ export default function EditorPage() {
         crosses.lineTo(cx - 3, cy + 3);
         return;
       }
-      const ring = marks.has(first + j) && !long[j];
+      const ring = !tool && marks.has(first + j) && !long[j];
       if (!ring && !showDots) return;
       const path = ring ? ringed : dots;
       const r = ring ? 7 : 5;
