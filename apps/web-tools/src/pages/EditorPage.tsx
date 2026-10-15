@@ -291,14 +291,15 @@ function reshaped(func: Func, shape: Shape, own?: number, toward?: number): Func
   const values = spanned.map((v) => typed(v ?? "")).filter((v) => Number.isFinite(v) && (own === undefined || v > 0));
   // None: a depth's whole range, Interval's or Speed's own value.
   let [lo, hi] = values.length ? [Math.min(...values), Math.max(...values)] : own === undefined ? [0, 100] : [own, own];
-  const value = toward === undefined ? (lo + hi) / 2 : Math.abs(lo - toward) > Math.abs(hi - toward) ? lo : hi;
-  if (lo === hi) [lo, hi] = toward === undefined ? [lo * 0.5, lo * 1.5].map((v) => Math.round(v * 1000) / 1000) : [lo, Math.round(lo + (toward - lo) / 4)].sort((a, b) => a - b);
+  // Interval's and Speed's in whole numbers, Interval's ms.
+  const value = toward === undefined ? Math.round((lo + hi) / 2) : Math.abs(lo - toward) > Math.abs(hi - toward) ? lo : hi;
+  if (lo === hi) [lo, hi] = toward === undefined ? [Math.round(lo * 0.5), Math.round(lo * 1.5)] : [lo, Math.round(lo + (toward - lo) / 4)].sort((a, b) => a - b);
   if (shape === "spline") {
     const knots = (lo: number, hi: number): Knots => [[0, hi], [100 / 3, lo], [200 / 3, hi], [100, lo]];
     if (own === undefined) return { shape, knots: knots(lo, hi) };
     const kept = typed(func.min ?? "") < typed(func.max ?? "");
     // Else room past both ends, half the lowest, keeping the scale above 0.
-    const [min, max] = kept ? [typed(func.min!), typed(func.max!)] : [lo / 2, hi + lo / 2].map((v) => Math.round(v * 1000) / 1000);
+    const [min, max] = kept ? [typed(func.min!), typed(func.max!)] : [Math.round(lo / 2), Math.round(hi + lo / 2)];
     const scaled = (v: number) => Math.round(clamp(((v - min) / (max - min)) * 100, 0, 100));
     return { shape, min: String(min), max: String(max), knots: knots(scaled(lo), scaled(hi)) };
   }
@@ -2182,9 +2183,9 @@ export default function EditorPage() {
                         // Interval's and a period's seconds by tenths with the wheel and arrows; typed, any.
                         step={positive(field) ? 0.1 : "any"}
                         aria-label={`${label} ${field}`}
-                        // Interval's values are kept in ms, shown in s: a number, so React leaves what is being typed ("0.0") alone.
+                        // Interval's values are kept in whole ms, shown in s: a number, so React leaves what is being typed ("0.0") alone.
                         value={inSeconds(field) ? (Number.isFinite(typed(func[field] ?? "")) ? typed(func[field]!) / 1000 : "") : func[field] ?? ""}
-                        onChange={(e) => set({ ...func, [field]: inSeconds(field) && e.target.value ? String(+(Number(e.target.value) * 1000).toFixed(6)) : e.target.value })}
+                        onChange={(e) => set({ ...func, [field]: inSeconds(field) && e.target.value ? String(Math.round(Number(e.target.value) * 1000)) : e.target.value })}
                         // Not typed negative; the wheel and arrows keep them to 0.1 or more.
                         min={positive(field) ? 0.1 : undefined}
                         onKeyDown={(e) => positive(field) && e.key === "-" && e.preventDefault()}
