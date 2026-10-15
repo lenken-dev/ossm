@@ -623,7 +623,7 @@ export default function EditorPage() {
   const [boxMode, setBoxMode] = useState(false);
   /** Pasted points, timed from the first, with the regions they carry, that follow the pointer until a click places them. */
   const [placing, setPlacing] = useState<Clip | null>(null);
-  /** The selected points being placed again, left out of the script until placed; Escape puts them back. */
+  /** In Move mode, the selected points being placed again, left out of the script until placed; Escape puts them back. None for the advanced editor's result when it was opened empty. */
   const [lifted, setLifted] = useState<Set<number> | null>(null);
   /** Where the first point being placed is, under the pointer. */
   const [placeAt, setPlaceAt] = useState<Action | null>(null);
@@ -767,7 +767,7 @@ export default function EditorPage() {
   }, [main.actions, advanced?.from]);
   /** The regions that stay while placing, with `kept`'s points: closing the gap, those in it go with their points, and later ones move left as theirs do. */
   const keptRegions = useMemo(() => {
-    if (!lifted || !closeGap) return regions;
+    if (!lifted?.size || !closeGap) return regions;
     const [lo, hi] = [actions[Math.min(...lifted)].at, actions[Math.max(...lifted)].at];
     return regions.filter((r) => r.to < lo || r.from > hi).map((r) => (r.from > hi ? movedBy(r, lo - hi) : r));
   }, [regions, actions, lifted, closeGap]);
@@ -780,7 +780,7 @@ export default function EditorPage() {
    */
   const kept = useMemo(() => {
     if (!lifted) return actions;
-    if (!closeGap) return actions.filter((_, i) => !lifted.has(i));
+    if (!closeGap || !lifted.size) return actions.filter((_, i) => !lifted.has(i));
     const [lo, hi] = [Math.min(...lifted), Math.max(...lifted)];
     const span = actions[hi].at - actions[lo].at;
     const closed = [...actions.slice(0, lo), ...actions.slice(hi + 1).map((a) => ({ at: a.at - span, pos: a.pos }))];
@@ -1820,9 +1820,9 @@ export default function EditorPage() {
 
   /**
    * Leave the advanced editor for the main script and its undo history. Done
-   * places the result with its regions as in Move mode, where it was edited,
-   * with the points it was opened from lifted, or as a paste when opened empty,
-   * and adds it to the clipboard history; Cancel drops it, the points it was
+   * places the result with its regions in Move mode, where it was edited, with
+   * the points it was opened from lifted, none when opened empty, and adds it
+   * to the clipboard history; Cancel drops it, the points it was
    * opened from selected again.
    */
   const closeAdvanced = (done: boolean) => {
@@ -1837,11 +1837,11 @@ export default function EditorPage() {
     setTool(null);
     setBox(null);
     setSelected(new Set(done ? [] : from));
-    setLifted(done && from ? new Set(from) : null);
+    setLifted(done ? new Set(from) : null);
     const shape = done ? { actions: result.map((a) => ({ at: a.at - result[0].at, pos: a.pos })), regions: made.map((r) => movedBy(r, -result[0].at)) } : null;
     if (shape) remember(shape);
     setPlacing(shape);
-    if (done && from) {
+    if (done) {
       setPlaceAt(result[0]);
       setBoxMode(false);
     }
@@ -1978,7 +1978,8 @@ export default function EditorPage() {
   const put = (pasted: Action[], insert: boolean) => {
     const { before, after, regions } = around(pasted, insert);
     const carried = carriedBy(pasted).map((r) => ({ ...r, generate: structuredClone(r.generate) }));
-    editLabel.current = `${lifted ? "Move" : insert ? "Insert" : "Paste"} ${lifted || !carried.length ? points(pasted.length) : carried.length === 1 ? "region" : `${carried.length} regions`}`;
+    // Nothing lifted, the advanced editor's result from empty is new, as a paste.
+    editLabel.current = `${lifted?.size ? "Move" : insert ? "Insert" : "Paste"} ${lifted?.size || !carried.length ? points(pasted.length) : carried.length === 1 ? "region" : `${carried.length} regions`}`;
     const next = [...before, ...pasted, ...after];
     setScript({ ...script, actions: next, regions: carried.length ? [...regions, ...carried].sort((a, b) => a.from - b.from) : regions });
     setSelected(new Set(pasted.flatMap((a, i) => (regionAt(carried, a.at) ? [] : [before.length + i]))));
@@ -2973,7 +2974,8 @@ export default function EditorPage() {
             <ColumnSpacingIcon /> Insert
           </Button>
         )}
-        {lifted && (
+        {/* Nothing lifted, there is no gap. */}
+        {!!lifted?.size && (
           <Button
             variant={closeGap ? "solid" : "soft"}
             color={closeGap ? undefined : "gray"}
