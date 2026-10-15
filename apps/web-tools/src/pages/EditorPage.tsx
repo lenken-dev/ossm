@@ -576,6 +576,13 @@ export default function EditorPage() {
   const [pipHeight, setPipHeight] = usePersistedState("ossm:editorVideoPipHeight", VIDEO_MIN_HEIGHT, localStorage);
   const [paused, setPaused] = useState(true);
   const [pip, setPip] = useState(false);
+  /** Hidden, the video or audio and its controls leave their room to the graph. */
+  const [playerShown, setPlayerShown] = useState(true);
+  /** Hide the player, pausing it, or show it. */
+  const togglePlayer = () => {
+    if (playerShown) videoRef.current?.pause();
+    setPlayerShown(!playerShown);
+  };
   const [videoHeight, setVideoHeight] = pip ? [pipHeight, setPipHeight] : [normalHeight, setNormalHeight];
   /** A minimap of the whole script to scroll with, instead of the slider. */
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
@@ -1398,12 +1405,13 @@ export default function EditorPage() {
 
   // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points, or all bookmarks with markers selected or
   // over the marker lane; Escape none, Delete (or Backspace, the Mac's delete key) removes the selected ones; F2 renames the selected
-  // markers, B adds a bookmark. Not while typing in a field.
+  // markers, B adds a bookmark, P hides or shows the player, also with a tool open. Not while typing in a field.
   // With a tool open, Escape (also in its fields) discards it, and only undo and redo do the same; other keys do nothing.
   useWindowEvent("keydown", (e) => {
     if (tool && e.key === "Escape") return setTool(null);
     if (e.target instanceof HTMLInputElement) return;
     const key = e.key.toLowerCase();
+    if (key === "p" && !e.ctrlKey && !e.metaKey && videoUrl) return togglePlayer();
     if (tool && !((e.ctrlKey || e.metaKey) && (key === "z" || key === "y"))) return;
     if ((e.ctrlKey || e.metaKey) && (key === "z" || key === "y")) {
       e.preventDefault();
@@ -2252,6 +2260,8 @@ export default function EditorPage() {
 
   const content = (
     <Flex direction="column" gap="3" p="3" height="100%">
+      {/* Hidden, not unmounted, so the media stays loaded; without media, so it leaves no gap. */}
+      <Flex direction="column" gap="3" flexShrink="0" display={videoUrl && playerShown ? undefined : "none"}>
       {videoUrl && isAudio && <audio {...mediaProps} style={{ width: "100%", flexShrink: 0 }} />}
       {videoUrl && !isAudio && (
         <Box position="relative" flexShrink="0">
@@ -2348,6 +2358,7 @@ export default function EditorPage() {
           </Popover.Root>
         </Flex>
       )}
+      </Flex>
       {advanced && (
         <Flex gap="2" align="center" flexShrink="0" px="3" py="2" style={{ borderRadius: 6, background: "var(--accent-a3)" }}>
           <Text size="2" weight="medium" style={{ flexGrow: 1 }}>Advanced editor · {points(actions.length)}</Text>
@@ -2549,6 +2560,18 @@ export default function EditorPage() {
         >
           <MixerHorizontalIcon /> Advanced
         </Button>
+        {videoUrl && <>
+          <Separator orientation="vertical" size="2" />
+          <Button
+            variant={playerShown ? "solid" : "soft"}
+            color={playerShown ? undefined : "gray"}
+            aria-pressed={playerShown}
+            title={`${playerShown ? "Hide" : "Show"} the ${isAudio ? "audio" : "video"} player (P)`}
+            onClick={togglePlayer}
+          >
+            <VideoIcon /> Player
+          </Button>
+        </>}
       </Flex>
       {/* The graph with the marker lane under it; the wheel works on both. */}
       <Flex
