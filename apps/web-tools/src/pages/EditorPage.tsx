@@ -441,7 +441,8 @@ const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after
   { kind: "scale", name: "Scale", verb: "Scale", before: "4,16 12,8 20,16 28,8", after: "4,20 20,4 36,20 52,4" },
   { kind: "shift", name: "Shift depth", verb: "Shift depth of", before: "4,20 14,12 24,20 34,12 44,20 52,12", after: "4,12 14,4 24,12 34,4 44,12 52,4" },
   { kind: "speed", name: "Max speed", verb: "Limit speed of", before: "4,20 12,4 20,20 28,4 36,20 44,4 52,20", after: "4,20 12,12 20,20 28,12 36,20 44,12 52,20" },
-  { kind: "generate", name: "Generate", verb: "Generate", before: "4,12 52,12", after: "4,20 10,4 16,20 22,4 28,20 34,4 40,20 46,4 52,20" },
+  // Strokes up to a sine for High, down to a constant Low; the sine faint behind them.
+  { kind: "generate", name: "Generate", verb: "Generate", before: "4,8 6,7 8,6 10,5.2 12,4.5 14,4.1 16,4 18,4.1 20,4.5 22,5.2 24,6 26,7 28,8 30,9 32,10 34,10.8 36,11.5 38,11.9 40,12 42,11.9 44,11.5 46,10.8 48,10 50,9 52,8", after: "4,20 8,6 12,20 16,4 20,20 24,6 28,20 32,10 36,20 40,12 44,20 48,10 52,20" },
 ];
 
 /** A marker time from a file, in ms: ms as a number or `"HH:MM:SS.mmm"`; null when unusable. */
