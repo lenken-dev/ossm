@@ -99,6 +99,13 @@ interface Instance {
 type Region = Generated | Instance;
 const isInstance = (r: Region): r is Instance => "snippet" in r;
 
+/** An instance named `name` of `clip`'s points and its generator regions: from its first to its last point, widened to their boxes. */
+const instanceOf = (name: string, clip: Clip): Instance => {
+  const inner = generators(clip.regions);
+  const { actions } = clip;
+  return { from: Math.min(actions[0].at, ...inner.map((r) => r.from)), to: Math.max(actions[actions.length - 1].at, ...inner.map((r) => r.to)), snippet: { name, regions: inner } };
+};
+
 /** The generator regions of `regions` and in their instances: those that put points on the bookmarks. */
 const generators = (regions: Region[]) => regions.flatMap((r) => (isInstance(r) ? r.snippet.regions : [r]));
 
@@ -199,6 +206,8 @@ interface Advanced {
   zero: number;
   from: number[] | null;
   snippet?: { path: string[] | null };
+  /** Editing an instance, its index in the main script's regions: Done gives one instance of its name. */
+  instance?: number;
 }
 
 const EMPTY: Script = { name: "untitled", actions: [], chapters: [], bookmarks: [], regions: [] };
@@ -760,6 +769,8 @@ export default function EditorPage() {
   const [placing, setPlacing] = useState<Clip | null>(null);
   /** In Move mode, the selected points being placed again, left out of the script until placed; Escape puts them back. None for the advanced editor's result when it was opened empty. */
   const [lifted, setLifted] = useState<Set<number> | null>(null);
+  /** In Move mode, the instance being placed again with the lifted points, left out of the script with them. */
+  const [liftedRegion, setLiftedRegion] = useState<Region | null>(null);
   /** Where the first point being placed is, under the pointer. */
   const [placeAt, setPlaceAt] = useState<Action | null>(null);
   /** Placing inserts, moving later points right, instead of replacing the points the pasted ones cover. */
@@ -900,12 +911,13 @@ export default function EditorPage() {
     main.actions.forEach((a, i) => (from.has(i) ? runs[runs.length - 1].length && runs.push([]) : runs[runs.length - 1].push(a)));
     return runs.filter((run) => run.length);
   }, [main.actions, advanced?.from]);
-  /** The regions that stay while placing, with `kept`'s points: closing the gap, those in it go with their points, and later ones move left as theirs do. */
+  /** The regions that stay while placing, with `kept`'s points, but a lifted instance: closing the gap, those in it go with their points, and later ones move left as theirs do. */
   const keptRegions = useMemo(() => {
-    if (!lifted?.size || !closeGap) return regions;
+    const rest = lifted ? regions.filter((r) => r !== liftedRegion) : regions;
+    if (!lifted?.size || !closeGap) return rest;
     const [lo, hi] = [actions[Math.min(...lifted)].at, actions[Math.max(...lifted)].at];
-    return regions.filter((r) => r.to < lo || r.from > hi).map((r) => (r.from > hi ? movedBy(r, lo - hi) : r));
-  }, [regions, actions, lifted, closeGap]);
+    return rest.filter((r) => r.to < lo || r.from > hi).map((r) => (r.from > hi ? movedBy(r, lo - hi) : r));
+  }, [regions, actions, lifted, liftedRegion, closeGap]);
   /**
    * The points that stay while placing. Closing the gap, the time from the
    * first to the last lifted point goes, with any other points in it, and the
@@ -1499,8 +1511,11 @@ export default function EditorPage() {
     const inner = isInstance(r) ? r.snippet.regions : [];
     editLabel.current = isInstance(r) ? "Unlock snippet" : "Unlock region";
     setScript((s) => ({ ...s, regions: [...s.regions.filter((o) => o !== r), ...inner].sort((a, b) => a.from - b.from) }));
-    setSelected(new Set(Array.from({ length: afterTime(actions, r.to) - byTime(actions, r.from) }, (_, k) => byTime(actions, r.from) + k).filter((i) => !regionAt(inner, actions[i].at))));
+    setSelected(new Set(pointsOf(r).filter((i) => !regionAt(inner, actions[i].at))));
   };
+
+  /** The indices of the points in `r`'s time. */
+  const pointsOf = (r: Region) => Array.from({ length: afterTime(actions, r.to) - byTime(actions, r.from) }, (_, k) => byTime(actions, r.from) + k);
 
   /** Give the instance `r` the name `name`. */
   const renameInstance = (r: Instance, name: string) => {
@@ -1608,8 +1623,8 @@ export default function EditorPage() {
 
   /** Edit the region `r` in place: Generate on its own setup and box; not while placing. */
   const editRegion = (r: Region) => {
-    // ponytail: an instance's Edit comes in step 4.
-    if (placing || isInstance(r)) return;
+    if (placing) return;
+    if (isInstance(r)) return openAdvanced(undefined, r);
     setTool({ kind: "generate", actions, picked: [], fastest: null, region: r });
     setRegionSetup(r.generate);
     setGenRange(rangeFields(r, zero));
@@ -1930,7 +1945,9 @@ export default function EditorPage() {
 
   /** Stop placing points; moved ones go back where they were, still selected. */
   const cancelPlacing = () => {
-    if (lifted) setSelected(lifted);
+    // A lifted instance's points are its own, so it is selected instead.
+    if (lifted && liftedRegion) setRegionOn(liftedRegion);
+    else if (lifted) setSelected(lifted);
     setPlacing(null);
     setLifted(null);
   };
@@ -1946,6 +1963,7 @@ export default function EditorPage() {
     setPlacing({ actions: picked.map((a) => ({ at: a.at - picked[0].at, pos: a.pos })), regions: [] });
     setPlaceAt(picked[0]);
     setLifted(selected);
+    setLiftedRegion(null);
     setSelected(new Set());
     setBoxMode(false);
     setBox(null);
@@ -1960,17 +1978,18 @@ export default function EditorPage() {
   /**
    * Open the selected points in the advanced editor, or start it empty; its
    * undo history starts anew. In snippet mode, on the library snippet at the
-   * `snippet`'s path, from the view's start, or empty for a new one.
+   * `snippet`'s path, from the view's start, or empty for a new one. On an
+   * `instance`, its points and regions, from its start.
    */
-  const openAdvanced = (snippet?: Advanced["snippet"]) => {
+  const openAdvanced = (snippet?: Advanced["snippet"], instance?: Instance) => {
     if (placing || advanced) return;
-    const from = !snippet && selected.size ? [...selected].sort((a, b) => a - b) : null;
+    const from = instance ? pointsOf(instance) : !snippet && selected.size ? [...selected].sort((a, b) => a - b) : null;
     // In whole ms, as Generate's times count from it.
-    const zero = Math.round(from ? actions[from[0]].at : view.from);
-    const doc = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => actions[i]) ?? [], regions: [] };
+    const zero = Math.round(instance ? instance.from : from ? actions[from[0]].at : view.from);
+    const doc = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => actions[i]) ?? [], regions: instance?.snippet.regions ?? [] };
     mainTimeline.current = timeline;
     setTimeline({ states: [{ ...doc, chapters, bookmarks, label: "Open" }], index: 0 });
-    setAdvanced({ ...doc, zero, from, snippet });
+    setAdvanced({ ...doc, zero, from, snippet, instance: instance && regions.indexOf(instance) });
     setSelected(new Set());
     setMarked(new Set());
     setBox(null);
@@ -1982,12 +2001,15 @@ export default function EditorPage() {
    * the points it was opened from lifted, none when opened empty, and adds it
    * to the clipboard history; Cancel drops it, the points it was
    * opened from selected again. In snippet mode, Done saves it to the library
-   * instead, a new one as `name`.
+   * instead, a new one as `name`. Editing an instance, Done places one
+   * instance of its name, the original lifted with its points, and Cancel
+   * selects it again.
    */
   const closeAdvanced = (done: boolean, name?: string) => {
     const { actions: result, regions: made, from, zero, snippet } = advanced!;
+    const instance = advanced!.instance === undefined ? null : (main.regions[advanced!.instance] as Instance);
     // Opened on points, it has no regions, so any is a change.
-    const original = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => main.actions[i]) ?? [], regions: [] };
+    const original = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => main.actions[i]) ?? [], regions: instance?.snippet.regions ?? [] };
     if (!done && JSON.stringify({ actions: result, regions: made }) !== JSON.stringify(original) && !confirm("Discard the advanced editor's changes?")) return;
     setTimeline(mainTimeline.current ?? { states: [{ actions: main.actions, chapters, bookmarks, regions: main.regions, label: "Start" }], index: 0 });
     mainTimeline.current = null;
@@ -2002,9 +2024,11 @@ export default function EditorPage() {
       setPlacing(null);
       return;
     }
-    setSelected(new Set(done ? [] : from));
+    setSelected(new Set(done || instance ? [] : from));
+    if (!done && instance) setRegionOn(instance);
     setLifted(done ? new Set(from) : null);
-    const shape = done ? clipBy({ actions: result, regions: made }, -result[0].at) : null;
+    setLiftedRegion(done ? instance : null);
+    const shape = done ? clipBy({ actions: result, regions: instance ? [instanceOf(instance.snippet.name, { actions: result, regions: made })] : made }, -result[0].at) : null;
     if (shape) remember(shape);
     setPlacing(shape);
     if (done) {
@@ -2029,10 +2053,8 @@ export default function EditorPage() {
    * its points and regions.
    */
   const insertSnippet = (s: Snippet) => {
-    const inner = generators(s.regions);
-    const instance: Instance = { from: Math.min(0, ...inner.map((r) => r.from)), to: Math.max(s.actions[s.actions.length - 1].at, ...inner.map((r) => r.to)), snippet: { name: s.name, regions: inner } };
     cancelPlacing();
-    setPlacing({ actions: s.actions, regions: advanced ? inner : [instance] });
+    setPlacing({ actions: s.actions, regions: advanced ? generators(s.regions) : [instanceOf(s.name, s)] });
   };
 
   /** The open folders at `from` and in it, now at `to`. */
@@ -2227,7 +2249,7 @@ export default function EditorPage() {
     const { before, after, regions } = around(pasted, insert);
     const carried = carriedBy(pasted).map((r) => structuredClone(r));
     // Nothing lifted, the advanced editor's result from empty is new, as a paste.
-    editLabel.current = `${lifted?.size ? "Move" : insert ? "Insert" : "Paste"} ${lifted?.size || !carried.length ? points(pasted.length) : carried.length === 1 ? (isInstance(carried[0]) ? "snippet" : "region") : `${carried.length} regions`}`;
+    editLabel.current = lifted && liftedRegion ? "Edit snippet" : `${lifted?.size ? "Move" : insert ? "Insert" : "Paste"} ${lifted?.size || !carried.length ? points(pasted.length) : carried.length === 1 ? (isInstance(carried[0]) ? "snippet" : "region") : `${carried.length} regions`}`;
     const next = [...before, ...pasted, ...after];
     setScript({ ...script, actions: next, regions: carried.length ? [...regions, ...carried].sort((a, b) => a.from - b.from) : regions });
     setSelected(new Set(pasted.flatMap((a, i) => (regionAt(carried, a.at) ? [] : [before.length + i]))));
@@ -2754,8 +2776,7 @@ export default function EditorPage() {
         )}
         <Text size="2" color="gray">{isInstance(region) ? "Snippet" : regionName(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
         <Flex gap="2">
-          {/* ponytail: an instance's Edit comes in step 4. */}
-          <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing || isInstance(region)} title="Edit its setup and box with Generate (E, or double-click it)" onClick={() => editRegion(region)}>
+          <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title={isInstance(region) ? "Edit its points and regions in the advanced editor (E, or double-click it)" : "Edit its setup and box with Generate (E, or double-click it)"} onClick={() => editRegion(region)}>
             <Pencil1Icon /> Edit
           </Button>
           <Button variant="soft" color="gray" style={{ flex: 1 }} title="Make its points ordinary points" onClick={() => unlockRegion(region)}>
@@ -3153,7 +3174,7 @@ export default function EditorPage() {
       {advanced && (
         <Flex gap="2" align="center" flexShrink="0" px="3" py="2" style={{ borderRadius: 6, background: "var(--accent-a3)" }}>
           <Text size="2" weight="medium" truncate style={{ flexGrow: 1 }}>
-            {!advanced.snippet ? "Advanced editor" : advanced.snippet.path ? `Snippet · ${advanced.snippet.path[advanced.snippet.path.length - 1]}` : "New snippet"} · {points(actions.length)}
+            {advanced.instance !== undefined ? `Snippet · ${(main.regions[advanced.instance] as Instance).snippet.name}` : !advanced.snippet ? "Advanced editor" : advanced.snippet.path ? `Snippet · ${advanced.snippet.path[advanced.snippet.path.length - 1]}` : "New snippet"} · {points(actions.length)}
           </Text>
           {/* At the top level of the library; the editor stays open. */}
           <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions, regions })}>
@@ -3167,7 +3188,7 @@ export default function EditorPage() {
               <Button size="1" disabled={actions.length < 2 || !!tool}>Done</Button>
             </NamePopover>
           ) : (
-            <Button size="1" disabled={actions.length < (advanced.snippet ? 2 : 1) || !!tool} onClick={() => closeAdvanced(true)}>Done</Button>
+            <Button size="1" disabled={actions.length < (advanced.snippet || advanced.instance !== undefined ? 2 : 1) || !!tool} onClick={() => closeAdvanced(true)}>Done</Button>
           )}
           <Button size="1" variant="soft" color="gray" onClick={() => closeAdvanced(false)}>Cancel</Button>
         </Flex>
@@ -3431,7 +3452,7 @@ export default function EditorPage() {
               <rect key={i} x={x(c.start)} width={x(c.end) - x(c.start)} height={plotHeight} style={{ fill: light[i] ? "var(--gray-a3)" : "var(--gray-a4)" }} />
             ))}
             {/* In the advanced editor, the main script's regions faintly, read-only. */}
-            {advanced && main.regions.map((r, i) => inView(r.from, r.to) && (
+            {advanced && main.regions.map((r, i) => i !== advanced.instance && inView(r.from, r.to) && (
               <rect key={`m${i}`} x={x(r.from)} width={x(r.to) - x(r.from)} height={plotHeight} strokeDasharray="4 2" style={{ ...bandOf(r), opacity: 0.5 }} />
             ))}
             {astray && (
