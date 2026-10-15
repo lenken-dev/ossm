@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -173,6 +173,13 @@ function merged(items: Entry[], incoming: Entry[]): Entry[] {
 }
 
 /** Folders first, then snippets, each by name. */
+/** The entries of `items` whose names have `q` in them, ignoring case: a folder with all it holds, else with those in it that do. */
+const matching = (items: Entry[], q: string): Entry[] => items.flatMap((e) => {
+  if (entryName(e).toLowerCase().includes(q.toLowerCase())) return [e];
+  const inner = isFolder(e) ? matching(e.items, q) : [];
+  return inner.length ? [{ ...e, items: inner } as Folder] : [];
+});
+
 const sortedEntries = (items: Entry[]) => [...items].sort((a, b) => Number(isFolder(b)) - Number(isFolder(a)) || entryName(a).localeCompare(entryName(b)));
 
 /** A region's label, after the timing that placed its points. */
@@ -717,6 +724,8 @@ export default function EditorPage() {
   const setLibrary = (f: (lib: Entry[]) => Entry[]) => setLibraryFile((l) => ({ ossm: { version: 1, snippets: f(l.ossm.snippets) } }));
   /** The library's open folders, by their paths as JSON. */
   const [openFolders, setOpenFolders] = usePersistedState<string[]>("ossm:editorSnippetFolders", [], localStorage);
+  /** Only the library's entries with this in their names show, their folders open. */
+  const [snippetQuery, setSnippetQuery] = useState("");
   /**
    * The library row being dragged, by its path, with the pointer, and the
    * folder it would go into, by its path as JSON. Pointer events, not native
@@ -2599,7 +2608,7 @@ export default function EditorPage() {
   const libraryRows = (items: Entry[], path: string[], depth: number): ReactElement[] => sortedEntries(items).flatMap((e) => {
     const [name, at] = [entryName(e), [...path, entryName(e)]];
     const key = JSON.stringify(at);
-    const open = isFolder(e) && openFolders.includes(key);
+    const open = isFolder(e) && (!!snippetQuery || openFolders.includes(key));
     const toggle = () => setOpenFolders((keys) => (open ? keys.filter((k) => k !== key) : [...keys, key]));
     const row = (
       <Flex
@@ -2654,6 +2663,7 @@ export default function EditorPage() {
     return [row, ...(open ? libraryRows((e as Folder).items, at, depth + 1) : [])];
   });
 
+  const shownLibrary = snippetQuery ? matching(library, snippetQuery) : library;
   /** The Snippets panel, beside the graph: the library as a tree; in the main script, its top area takes rows dropped to the top level. */
   const snippetsPanel = <Flex direction="column" gap="3" p="3">
     <Flex direction="column" gap="2" {...dropInto([])} style={{ borderRadius: 4, background: dropOn === "[]" ? "var(--accent-a4)" : undefined }}>
@@ -2672,9 +2682,14 @@ export default function EditorPage() {
           <UploadIcon /> Import
         </Button>
       </Flex>}
+      {!!library.length && (
+        <TextField.Root size="1" placeholder="Search" aria-label="Search snippets" value={snippetQuery} onChange={(e) => setSnippetQuery(e.target.value)}>
+          <TextField.Slot><MagnifyingGlassIcon /></TextField.Slot>
+        </TextField.Root>
+      )}
     </Flex>
     <Flex direction="column">
-      {library.length ? libraryRows(library, [], 0) : <Text size="1" color="gray">No snippets yet.</Text>}
+      {shownLibrary.length ? libraryRows(shownLibrary, [], 0) : <Text size="1" color="gray">{library.length ? "No matches." : "No snippets yet."}</Text>}
     </Flex>
     {/* The dragged row's icon and name follow the pointer. */}
     {rowDrag && (
