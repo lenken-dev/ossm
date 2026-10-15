@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement } from "react";
-import { AlertDialog, Box, Button, Callout, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -442,6 +442,8 @@ function reshaped(func: Func, shape: Shape, own?: number, toward?: number): Func
  */
 interface GenerateSetup {
   timing: "interval" | "speed" | "markers";
+  /** With Markers timing, the names of the bookmarks it leaves out. */
+  skip?: string[];
   first: "in" | "out";
   interval: Func;
   speed: Func;
@@ -527,14 +529,15 @@ function funcAt(func: Func, t: number, span: number) {
  * refused. Each next point goes the Interval after the one before, or with
  * Speed timing at the first ms where the segment to it is no faster than the
  * Speed; at least 1 ms after either way. With Markers timing, one goes at
- * each of the sorted `marks` in the range, one per ms; null without any.
+ * each of the sorted bookmarks `marks` in the range it doesn't skip, one per
+ * ms; null without any.
  */
-function generated(setup: GenerateSetup, range: Area, marks: number[]): Action[] | null {
+function generated(setup: GenerateSetup, range: Area, marks: Bookmark[]): Action[] | null {
   const span = range.to - range.from;
   /** The depth a point on `func` gets at `at`, rounded; NaN while a field is refused. */
   const depthAt = (func: Func, at: number) => Math.round(range.low + (clamp(funcAt(func, at - range.from, span), 0, 100) * (range.high - range.low)) / 100);
   if (setup.timing === "markers") {
-    const times = [...new Set(marks.filter((t) => t >= range.from && t <= range.to))];
+    const times = [...new Set(markTimes(setup, marks).filter((t) => t >= range.from && t <= range.to))];
     const made = times.map((at, i) => ({ at, pos: depthAt(i % 2 === (setup.first === "out" ? 0 : 1) ? setup.high : setup.low, at) }));
     return made.length && !made.some((a) => Number.isNaN(a.pos)) ? made : null;
   }
@@ -558,22 +561,26 @@ function generated(setup: GenerateSetup, range: Area, marks: number[]): Action[]
   return out;
 }
 
-/** `actions` with the Markers region `r`'s points put again at the bookmarks `marks` in its box: none without any there; as they are while its setup is refused. */
-function refilled(actions: Action[], r: Generated, marks: number[]) {
-  const made = marks.some((t) => t >= r.from && t <= r.to) ? generated(r.generate, r, marks) : [];
+/** The times of the bookmarks `marks` that Markers timing with `setup` puts points at: those with names it doesn't skip. */
+const markTimes = (setup: GenerateSetup, marks: Bookmark[]) => marks.filter((b) => !setup.skip?.includes(b.name)).map((b) => b.time);
+
+/** `actions` with the Markers region `r`'s points put again at the bookmarks `marks` in its box it doesn't skip: none without any there; as they are while its setup is refused. */
+function refilled(actions: Action[], r: Generated, marks: Bookmark[]) {
+  const made = markTimes(r.generate, marks).some((t) => t >= r.from && t <= r.to) ? generated(r.generate, r, marks) : [];
   return made ? [...actions.slice(0, byTime(actions, r.from)), ...made, ...actions.slice(afterTime(actions, r.to))] : actions;
 }
 
 /**
  * `s` with the bookmarks `bookmarks`: each Markers region, in an instance
- * too, with a bookmark time added or gone in its box puts its points again
- * on the bookmarks.
+ * too, with a bookmark added, gone or renamed in its box puts its points
+ * again on the bookmarks, as a rename can change which it skips.
  */
 function withBookmarks<T extends Content>(s: T, bookmarks: Bookmark[]): T {
-  const [was, now] = [s.bookmarks.map((b) => b.time), bookmarks.map((b) => b.time)];
-  const changed = [...was.filter((t) => !now.includes(t)), ...now.filter((t) => !was.includes(t))];
+  const key = (b: Bookmark) => JSON.stringify([b.time, b.name]);
+  const [was, now] = [new Set(s.bookmarks.map(key)), new Set(bookmarks.map(key))];
+  const changed = [...s.bookmarks.filter((b) => !now.has(key(b))), ...bookmarks.filter((b) => !was.has(key(b)))].map((b) => b.time);
   const touched = generators(s.regions).filter((r) => r.generate.timing === "markers" && changed.some((t) => t >= r.from && t <= r.to));
-  return { ...s, bookmarks, actions: touched.reduce((list, r) => refilled(list, r, now), s.actions) };
+  return { ...s, bookmarks, actions: touched.reduce((list, r) => refilled(list, r, bookmarks), s.actions) };
 }
 
 /** Generate's range fields as numbers, its times in ms from shown seconds; null while one is refused: times before 0, To before From, or depths outside 0–100 or Bottom above Top. */
@@ -952,7 +959,7 @@ export default function EditorPage() {
     const span = actions[hi].at - actions[lo].at;
     const closed = [...actions.slice(0, lo), ...actions.slice(hi + 1).map((a) => ({ at: a.at - span, pos: a.pos }))];
     const shifted = span ? generators(keptRegions).filter((r) => r.from > actions[lo].at && r.generate.timing === "markers") : [];
-    return shifted.reduce((list, r) => refilled(list, r, bookmarks.map((b) => b.time)), closed);
+    return shifted.reduce((list, r) => refilled(list, r, bookmarks), closed);
   }, [actions, lifted, closeGap, keptRegions, bookmarks]);
 
   /** Undo history: the points, markers and regions after each edit, the first as loaded; `index` is the current one. */
@@ -1268,7 +1275,7 @@ export default function EditorPage() {
     /** Its points with it moved to `to`, `dt` from where it started: a Markers one's, or an instance's Markers regions', on the bookmarks there. */
     const pointsAt = (to: Region, dt: number) => {
       const shifted = own.map((a) => ({ at: a.at + dt, pos: a.pos }));
-      return generators([to]).filter((g) => g.generate.timing === "markers").reduce((list, g) => refilled(list, g, bookmarks.map((b) => b.time)), shifted);
+      return generators([to]).filter((g) => g.generate.timing === "markers").reduce((list, g) => refilled(list, g, bookmarks), shifted);
     };
     /** Put it `dt` from where it started; back there, the script as it was. */
     const land = (dt: number) => {
@@ -1517,7 +1524,7 @@ export default function EditorPage() {
       if (!name || ms.every((m) => m.name === name)) return;
       const to = new Map<Marker, Marker>(ms.map((m) => [m, { ...m, name }]));
       editLabel.current = label;
-      setScript((s) => ({ ...s, chapters: swapped(s.chapters, to), bookmarks: swapped(s.bookmarks, to) }));
+      setScript((s) => withBookmarks({ ...s, chapters: swapped(s.chapters, to) }, swapped(s.bookmarks, to)));
       setMarked(new Set(to.values()));
     } });
   };
@@ -1676,7 +1683,7 @@ export default function EditorPage() {
     if (kind === "generate") {
       // Every point in the range's time goes, whatever its depth; editing a region, its old points and band too.
       const range = rangeParams(genRange, zero);
-      const made = range && generated(genSetup, range, bookmarks.map((b) => b.time));
+      const made = range && generated(genSetup, range, bookmarks);
       if (!range || !made) return null;
       const { region } = tool;
       const rest = region ? actions.filter((a) => a.at < region.from || a.at > region.to) : actions;
@@ -2258,7 +2265,7 @@ export default function EditorPage() {
    */
   const filledIn = (pasted: Action[]) => generators(carriedBy(pasted))
     .filter((r) => r.generate.timing === "markers")
-    .reduce((list, r) => refilled(list, r, bookmarks.map((b) => b.time)), pasted);
+    .reduce((list, r) => refilled(list, r, bookmarks), pasted);
 
   /** The time `pasted` covers, with the regions they carry. */
   const spanOf = (pasted: Action[]) => {
@@ -2284,7 +2291,7 @@ export default function EditorPage() {
     const shift = Number.isFinite(next) ? Math.max(end - start, end + 1 - next) : 0;
     const regions = keptRegions.map((r) => (r.from >= start ? movedBy(r, shift) : r));
     const shifted = shift ? generators(regions).filter((r) => r.from >= start + shift && r.generate.timing === "markers") : [];
-    const after = shifted.reduce((list, r) => refilled(list, r, bookmarks.map((b) => b.time)), later.map((a) => ({ at: a.at + shift, pos: a.pos })));
+    const after = shifted.reduce((list, r) => refilled(list, r, bookmarks), later.map((a) => ({ at: a.at + shift, pos: a.pos })));
     return { before, after, regions };
   };
 
@@ -3097,6 +3104,44 @@ export default function EditorPage() {
                 </SegmentedControl.Item>
               </SegmentedControl.Root>
             </Flex>
+            {/* Markers timing: which bookmark names it puts points at, all at first; in a popover, as there can be many. */}
+            {genSetup.timing === "markers" && (() => {
+              const names = [...new Set(bookmarks.map((b) => b.name))].sort((a, b) => a.localeCompare(b));
+              const skip = genSetup.skip ?? [];
+              const used = names.filter((n) => !skip.includes(n)).length;
+              return (
+                <Flex gap="2" align="center" justify="between">
+                  <Text size="2">Bookmarks</Text>
+                  <Popover.Root>
+                    <Popover.Trigger>
+                      <Button size="1" variant="soft" color="gray" title="The bookmark names to put points at">
+                        {used === names.length ? "All names" : `${used} of ${names.length} names`} <ChevronDownIcon />
+                      </Button>
+                    </Popover.Trigger>
+                    {/* Lined up with the button's right edge, which stays put as its label changes width. */}
+                    <Popover.Content size="1" align="end" maxWidth="240px" style={{ maxHeight: 320, overflowY: "auto" }}>
+                      <Flex direction="column" gap="2">
+                        {names.map((n) => (
+                          <Text key={n} as="label" size="2">
+                            <Flex gap="2" align="center">
+                              <Checkbox
+                                checked={!skip.includes(n)}
+                                onCheckedChange={(on) => {
+                                  const next = on ? skip.filter((o) => o !== n) : [...skip, n];
+                                  setGenSetup({ ...genSetup, skip: next.length ? next : undefined });
+                                }}
+                              />
+                              <Box flexShrink="0" width="8px" height="8px" style={{ borderRadius: "50%", background: `var(--${markerColor(n)}-9)` }} />
+                              <Text truncate>{n}</Text>
+                            </Flex>
+                          </Text>
+                        ))}
+                      </Flex>
+                    </Popover.Content>
+                  </Popover.Root>
+                </Flex>
+              );
+            })()}
             {genSetup.timing !== "markers" && (
               <Text as="label" size="2">
                 <Flex gap="2" align="center">
