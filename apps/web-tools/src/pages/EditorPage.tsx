@@ -260,39 +260,45 @@ type Func = { shape: Shape; knots?: Knots } & Partial<Record<ShapeField, string>
 /** A new noise seed. */
 const newSeed = () => String(Math.floor(Math.random() * 1_000_000));
 
+/** A function's lowest and highest value as typed, a spline's of its knots; 0 and 100 without any. */
+function extent(func: Func): [number, number] {
+  const values = func.shape === "spline" ? func.knots!.map(([, v]) => v) : (["value", "start", "end", "min", "max"] as const).map((f) => typed(func[f] ?? "")).filter(Number.isFinite);
+  return values.length ? [Math.min(...values), Math.max(...values)] : [0, 100];
+}
+
 /**
  * `func` as `shape`, keeping the fields the two share, the rest from what it
- * spanned so the curve stays about where it was: a constant's value, a ramp's
- * Start and End, a wave's Min and Max or a spline's end values become the new
- * ones, their middle a constant's value. A new spline has a knot at each end
- * of a range `span` ms long, at the value `func` had there. Interval's and
- * Speed's, on their own scale, given the value `own` to fall back on, keep a
- * wave's or noise's Min and Max for it, else get 0 and twice the value at the
- * start, or twice `own` when that is not above 0; going back, the scale is
- * the wave's Min and Max.
+ * spans, lowest to highest, so the curve stays where it was: a constant's
+ * value, a ramp's Start and End, a wave's Min and Max or a spline's knots.
+ * A flat one is spread so the new shape shows: High's and Low's, given the
+ * other's nearest value `toward`, keep their value and reach a quarter of the
+ * way toward it; Interval's and Speed's half either side. Back to a constant,
+ * High and Low keep the end away from `toward`, so switching back and forth
+ * does not drift, Interval and Speed the middle. A new spline goes high, low,
+ * high, low on four evenly spaced knots, so it shows what it can do.
+ * Interval's and Speed's, on their own scale, given the value `own` to fall
+ * back on, keep a wave's or noise's Min and Max for it, else get 0 and twice
+ * the middle, or twice `own` when that is not above 0; going back, the scale
+ * is the wave's Min and Max.
  */
-function reshaped(func: Func, shape: Shape, span: number, own?: number): Func {
-  if (shape === "spline") {
-    if (own === undefined) {
-      const end = (t: number) => Math.round(clamp(funcAt(func, t, span), 0, 100)) || 0;
-      return { shape, knots: [[0, end(0)], [100, end(span)]] };
-    }
-    const start = funcAt(func, 0, span);
-    const kept = typed(func.min ?? "") < typed(func.max ?? "");
-    const [min, max] = kept ? [typed(func.min!), typed(func.max!)] : [0, start > 0 ? 2 * start : 2 * own];
-    // Refused, halfway up: `own` when it is the Max's fallback.
-    const end = (t: number) => {
-      const v = funcAt(func, t, span);
-      return Number.isFinite(v) ? Math.round(clamp(((v - min) / (max - min)) * 100, 0, 100)) : 50;
-    };
-    return { shape, min: String(min), max: String(max), knots: [[0, end(0)], [100, end(span)]] };
-  }
-  const k = func.knots ?? [];
+function reshaped(func: Func, shape: Shape, own?: number, toward?: number): Func {
   // An Interval or Speed spline's knots on its scale.
   const knotValue = (v: number) => (func.max === undefined ? v : typed(func.min ?? "") + (v * (typed(func.max) - typed(func.min ?? ""))) / 100);
-  const [lo, hi] = func.shape === "constant" ? [func.value, func.value] : func.shape === "ramp" ? [func.start, func.end] : func.shape === "spline" ? [String(knotValue(k[0]?.[1])), String(knotValue(k[k.length - 1]?.[1]))] : [func.min, func.max];
-  const mid = (typed(lo ?? "") + typed(hi ?? "")) / 2;
-  const all: Func = { value: Number.isFinite(mid) ? String(mid) : lo, start: lo, end: hi, min: lo, max: hi, period: "1", phase: "0", width: "50", seed: newSeed(), ...func };
+  const spanned = func.shape === "constant" ? [func.value] : func.shape === "ramp" ? [func.start, func.end] : func.shape === "spline" ? func.knots!.map(([, v]) => String(knotValue(v))) : [func.min, func.max];
+  const values = spanned.map((v) => typed(v ?? "")).filter(Number.isFinite);
+  // Refused: a depth's whole range, Interval's or Speed's own value.
+  let [lo, hi] = values.length ? [Math.min(...values), Math.max(...values)] : own === undefined ? [0, 100] : [own, own];
+  const value = toward === undefined ? (lo + hi) / 2 : Math.abs(lo - toward) > Math.abs(hi - toward) ? lo : hi;
+  if (lo === hi) [lo, hi] = toward === undefined ? [lo * 0.5, lo * 1.5] : [lo, Math.round(lo + (toward - lo) / 4)].sort((a, b) => a - b);
+  if (shape === "spline") {
+    const knots = (lo: number, hi: number): Knots => [[0, hi], [100 / 3, lo], [200 / 3, hi], [100, lo]];
+    if (own === undefined) return { shape, knots: knots(lo, hi) };
+    const kept = typed(func.min ?? "") < typed(func.max ?? "");
+    const [min, max] = kept ? [typed(func.min!), typed(func.max!)] : [0, lo + hi > 0 ? lo + hi : 2 * own];
+    const scaled = (v: number) => Math.round(clamp(((v - min) / (max - min)) * 100, 0, 100));
+    return { shape, min: String(min), max: String(max), knots: knots(scaled(lo), scaled(hi)) };
+  }
+  const all: Func = { value: String(value), start: String(lo), end: String(hi), min: String(lo), max: String(hi), period: "10", phase: "0", width: "50", seed: newSeed(), ...func };
   return { shape, ...Object.fromEntries(SHAPES[shape].fields.map((f) => [f, all[f]])) };
 }
 
@@ -2124,7 +2130,9 @@ export default function EditorPage() {
                 <Flex key={key} direction="column" gap="2">
                   <Flex gap="2" align="center" justify="between">
                     <Text size="2">{label}</Text>
-                    <Select.Root size="1" value={func.shape} onValueChange={(v) => set(reshaped(func, v as Shape, genBox ? genBox.to - genBox.from : 0, key === "high" || key === "low" ? undefined : typed(GENERATE_DEFAULTS[key].value ?? "")))}>
+                    <Select.Root size="1" value={func.shape} onValueChange={(v) => set(key === "high" || key === "low"
+                      ? reshaped(func, v as Shape, undefined, key === "high" ? extent(genSetup.low)[1] : extent(genSetup.high)[0])
+                      : reshaped(func, v as Shape, typed(GENERATE_DEFAULTS[key].value ?? "")))}>
                       <Select.Trigger aria-label={`${label} shape`} />
                       <Select.Content>
                         {/* Each with a small graph, which the trigger shows too. */}
