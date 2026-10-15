@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ClipboardIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ClipboardIcon, LockOpen1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -22,11 +22,13 @@ interface Script {
   file?: Record<string, unknown>;
   chapters: Chapter[];
   bookmarks: Bookmark[];
+  /** Sorted by time, never overlapping. */
+  regions: Region[];
 }
 
-/** What an edit changes, undo restores and saving keeps: the points and markers. */
-type Content = Pick<Script, "actions" | "chapters" | "bookmarks">;
-const sameContent = (a: Content, b: Content) => a.actions === b.actions && a.chapters === b.chapters && a.bookmarks === b.bookmarks;
+/** What an edit changes, undo restores and saving keeps: the points, markers and regions. */
+type Content = Pick<Script, "actions" | "chapters" | "bookmarks" | "regions">;
+const sameContent = (a: Content, b: Content) => a.actions === b.actions && a.chapters === b.chapters && a.bookmarks === b.bookmarks && a.regions === b.regions;
 
 /** A named time range, in ms, from `metadata.chapters`; other properties of the loaded one are kept. */
 interface Chapter {
@@ -72,10 +74,29 @@ const extended = (area: Area, a: Action): Area => ({
   high: Math.max(area.high, a.pos),
 });
 
+/**
+ * A stretch of points made by Generate: its box, times in whole ms, and its
+ * own copy of the setup. Its points are the ones in its time; they are locked.
+ */
+interface Region extends Area {
+  generate: GenerateSetup;
+}
+
+/** The region of `regions` whose time holds `at`; none outside them. */
+const regionAt = (regions: Region[], at: number) => regions.find((r) => at >= r.from && at <= r.to);
+
+/** `r` moved `dt` ms in time. */
+const movedBy = (r: Region, dt: number): Region => ({ ...r, from: r.from + dt, to: r.to + dt });
+
+/** A region's label, after the timing that placed its points. */
+const regionName = (r: Region) => `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`;
+
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
 /** How the selection box and the tools' boxes in the graph fill and outline. */
 const TOOL_BOX = { fill: "var(--accent-a3)", stroke: "var(--accent-9)" };
+/** How a region's band behind the graph fills and outlines; selected, it outlines as the selected markers. */
+const REGION_BAND = { fill: "var(--cyan-a3)", stroke: "var(--cyan-a8)" };
 /** Size of the selection box's grips, in px. */
 const GRIP = 8;
 /** Least time between a Generate spline's knots, in % of the range. */
@@ -86,15 +107,17 @@ const EXTEND = 24;
 /**
  * The advanced editor's document, which the page edits instead of the main
  * script while it is open: its points, in the main script's times, its 0, and
- * the indices of the main script's points it was opened from, null when opened empty.
+ * the indices of the main script's points it was opened from, null when opened empty;
+ * and its regions.
  */
 interface Advanced {
   actions: Action[];
+  regions: Region[];
   zero: number;
   from: number[] | null;
 }
 
-const EMPTY: Script = { name: "untitled", actions: [], chapters: [], bookmarks: [] };
+const EMPTY: Script = { name: "untitled", actions: [], chapters: [], bookmarks: [], regions: [] };
 
 /** Copies kept in the clipboard history. */
 const HISTORY_SIZE = 10;
@@ -155,21 +178,23 @@ const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
 /** A typed number; NaN when empty. */
 const typed = (v: string) => (v.trim() ? Number(v) : NaN);
 
-/** A transform's result: the new points, and the indices of the affected ones among them. */
+/** A transform's result: the new points, and the indices of the affected ones among them; the regions, when it moves them. */
 interface Transformed {
   actions: Action[];
   selected: Set<number>;
+  regions?: Region[];
 }
 
 /**
  * Scale the points `picked` of `actions` by `time` % and onto `low`–`high`. In
  * time from the first, which stays: the points up to the last stretch along,
  * those in between too so the order stays, and later ones move by the change
- * in length; points landing on the same ms merge, the later kept. In depth
+ * in length, as do the `regions` after them; points landing on the same ms
+ * merge, the later kept. In depth
  * their range maps onto `low`–`high`, flipped when `low` is above; all at one
  * depth, they go halfway between.
  */
-function scaled(actions: Action[], picked: number[], time: number, low: number, high: number): Transformed {
+function scaled(actions: Action[], picked: number[], time: number, low: number, high: number, regions: Region[]): Transformed {
   const hit = new Set(picked);
   const [i0, i1] = [picked[0], picked[picked.length - 1]];
   const t0 = actions[i0].at;
@@ -189,7 +214,7 @@ function scaled(actions: Action[], picked: number[], time: number, low: number, 
     if (hit.has(i)) moved.add(next.length);
     next.push({ at, pos: hit.has(i) ? Math.round(clamp(mapped(a.pos), 0, 100)) : a.pos });
   });
-  return { actions: next, selected: moved };
+  return { actions: next, selected: moved, regions: regions.map((r) => (r.from > actions[i1].at ? movedBy(r, shift) : r)) };
 }
 
 /** Scale's fields as numbers; null while one is refused: a time of 0 or less would fold the points onto each other, and the depths are 0–100. */
@@ -492,11 +517,15 @@ export default function EditorPage() {
   const [main, setMain] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
   /** The advanced editor's document while it is open; kept across reloads too. */
   const [advanced, setAdvanced] = usePersistedState<Advanced | null>("ossm:editorAdvanced", null, localStorage);
-  /** The script the page shows and edits: the main one, or with the advanced editor's points while it is open, which take only point changes. */
-  const script = advanced ? { ...main, actions: advanced.actions } : main;
+  /** The script the page shows and edits: the main one, or with the advanced editor's points and regions while it is open, which take only changes to those. */
+  const script = advanced ? { ...main, actions: advanced.actions, regions: advanced.regions } : main;
   const setScript: typeof setMain = (next) => {
     if (!advanced) return setMain(next);
-    setAdvanced((d) => d && { ...d, actions: (next instanceof Function ? next({ ...main, actions: d.actions }) : next).actions });
+    setAdvanced((d) => {
+      if (!d) return d;
+      const { actions, regions } = next instanceof Function ? next({ ...main, actions: d.actions, regions: d.regions }) : next;
+      return { ...d, actions, regions };
+    });
   };
   /** The advanced editor's open tool, with the points and affected indices it was opened on, and their fastest segment; its result shows until applied. */
   const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null } | null>(null);
@@ -515,6 +544,11 @@ export default function EditorPage() {
   useEffect(() => {
     if (selected.size) setMarked(new Set());
   }, [selected]);
+  /** The selected region, one at a time; selecting points or markers clears it. */
+  const [regionOn, setRegionOn] = useState<Region | null>(null);
+  useEffect(() => {
+    if (selected.size || marked.size) setRegionOn(null);
+  }, [selected, marked]);
   /** The marker last clicked without Shift, where a Shift+click range of bookmarks starts. */
   const markerAnchor = useRef<Marker | null>(null);
   /** Whether the pointer is over the marker lane, where Ctrl/Cmd+A selects all bookmarks. */
@@ -668,7 +702,9 @@ export default function EditorPage() {
     return () => observer.disconnect();
   }, []);
 
-  const { actions, chapters, bookmarks } = script;
+  const { actions, chapters, bookmarks, regions } = script;
+  /** The selected region while it is in the script; it goes with an edit that replaces it. */
+  const region = regionOn && regions.includes(regionOn) ? regionOn : null;
   /** While the advanced editor is open, the main script's other points, in runs broken where its points were taken out; drawn faintly behind them, never edited. */
   const context = useMemo(() => {
     if (!advanced) return [];
@@ -689,9 +725,15 @@ export default function EditorPage() {
     const span = actions[hi].at - actions[lo].at;
     return [...actions.slice(0, lo), ...actions.slice(hi + 1).map((a) => ({ at: a.at - span, pos: a.pos }))];
   }, [actions, lifted, closeGap]);
+  /** The regions with `kept`'s points: closing the gap, those in it go with their points, and later ones move left as theirs do. */
+  const keptRegions = useMemo(() => {
+    if (!lifted || !closeGap) return regions;
+    const [lo, hi] = [actions[Math.min(...lifted)].at, actions[Math.max(...lifted)].at];
+    return regions.filter((r) => r.to < lo || r.from > hi).map((r) => (r.from > hi ? movedBy(r, lo - hi) : r));
+  }, [regions, actions, lifted, closeGap]);
 
-  /** Undo history: the points and markers after each edit, the first as loaded; `index` is the current one. */
-  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, chapters, bookmarks, label: advanced ? "Open" : "Start" }], index: 0 }));
+  /** Undo history: the points, markers and regions after each edit, the first as loaded; `index` is the current one. */
+  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, chapters, bookmarks, regions, label: advanced ? "Open" : "Start" }], index: 0 }));
   /** The main script's undo history, put aside while the advanced editor is open; lost on a reload, when it starts over. */
   const mainTimeline = useRef<typeof timeline | null>(null);
   /** Set while a drag runs, so the whole drag becomes one edit when it ends. */
@@ -700,26 +742,27 @@ export default function EditorPage() {
   /** What the next edit is called in the undo history. */
   const editLabel = useRef<string | null>(null);
 
-  // Every change of the points or markers, except by undo and redo, is an edit.
+  // Every change of the points, markers or regions, except by undo and redo, is an edit.
   useEffect(() => {
     if (dragging.current) return;
     const label = editLabel.current ?? "Edit";
     editLabel.current = null;
     setTimeline((tl) => {
       if (sameContent(tl.states[tl.index], script)) return tl;
-      const states = [...tl.states.slice(0, tl.index + 1), { actions, chapters, bookmarks, label }].slice(-UNDO_SIZE - 1);
+      const states = [...tl.states.slice(0, tl.index + 1), { actions, chapters, bookmarks, regions, label }].slice(-UNDO_SIZE - 1);
       return { states, index: states.length - 1 };
     });
-  }, [actions, chapters, bookmarks, dragEnds]);
+  }, [actions, chapters, bookmarks, regions, dragEnds]);
 
-  /** Go to the points and markers after edit `index` of the undo history. */
+  /** Go to the points, markers and regions after edit `index` of the undo history. */
   const jump = (index: number) => {
-    const { actions, chapters, bookmarks } = timeline.states[index];
+    const { actions, chapters, bookmarks, regions } = timeline.states[index];
     setTimeline((tl) => ({ ...tl, index }));
     setTool(null);
-    setScript((s) => ({ ...s, actions, chapters, bookmarks }));
+    setScript((s) => ({ ...s, actions, chapters, bookmarks, regions }));
     setSelected(new Set());
     setMarked(new Set());
+    setRegionOn(null);
     setBox(null);
     setPlacing(null);
     setLifted(null);
@@ -799,10 +842,11 @@ export default function EditorPage() {
 
   /**
    * Drag the points `indices` together. They keep their spacing, stay within
-   * 0–100 and between their unselected neighbours, so the actions stay sorted.
-   * Placing points on markers, the grabbed one goes to the bookmark nearest the
-   * pointer instead, and they may pass other points; on release, a point left
-   * at a dragged one's time goes.
+   * 0–100 and between their unselected neighbours, so the actions stay sorted,
+   * and out of the regions. Placing points on markers, the grabbed one goes to
+   * the bookmark nearest the pointer instead, of those that keep them all from
+   * 0 on and out of the regions, and they may pass other points; on release, a
+   * point left at a dragged one's time goes.
    */
   const drag = (e: PointerEvent<Element>, indices: number[]) => {
     e.preventDefault();
@@ -829,8 +873,9 @@ export default function EditorPage() {
         // A render has run since the press, so this has a point added just before.
         const a = (start ??= actionsRef.current);
         const grabbed = indices.reduce((g, i) => (Math.abs(a[i].at - origin.at) < Math.abs(a[g].at - origin.at) ? i : g));
-        const mark = bookmarks.reduce((n, b) => (Math.abs(b.time - p.at) < Math.abs(n.time - p.at) ? b : n)).time;
-        const dt = Math.max(mark - a[grabbed].at, -Math.min(...indices.map((i) => a[i].at)));
+        const fits = bookmarks.filter((b) => indices.every((i) => a[i].at + b.time - a[grabbed].at >= 0 && !regionAt(regions, a[i].at + b.time - a[grabbed].at)));
+        if (!fits.length) return;
+        const dt = fits.reduce((n, b) => (Math.abs(b.time - p.at) < Math.abs(n.time - p.at) ? b : n)).time - a[grabbed].at;
         const dp = clamp(p.pos - origin.pos, Math.max(...indices.map((i) => -a[i].pos)), Math.min(...indices.map((i) => 100 - a[i].pos)));
         const moved = indices.map((i) => ({ action: { at: a[i].at + dt, pos: a[i].pos + dp }, moved: true }));
         const kept = a.filter((_, i) => !moving.has(i)).map((action) => ({ action, moved: false }));
@@ -844,6 +889,10 @@ export default function EditorPage() {
           dtMax = Math.min(dtMax, i < a.length - 1 && !moving.has(i + 1) ? a[i + 1].at - 1 - a[i].at : Infinity);
           dpMin = Math.max(dpMin, -a[i].pos);
           dpMax = Math.min(dpMax, 100 - a[i].pos);
+          for (const r of regions) {
+            if (r.from > a[i].at) dtMax = Math.min(dtMax, r.from - 1 - a[i].at);
+            if (r.to < a[i].at) dtMin = Math.max(dtMin, r.to + 1 - a[i].at);
+          }
         }
         limits = [dtMin, dtMax];
         const dt = clamp(p.at - origin.at, dtMin, dtMax);
@@ -869,11 +918,11 @@ export default function EditorPage() {
     }, scrolls);
   };
 
-  /** The indices of the points in `area`. */
+  /** The indices of the points in `area`, but the regions' points, which are never selected. */
   const within = (area: Area) => {
     const found = [];
     for (let i = byTime(actions, area.from); i < actions.length && actions[i].at <= area.to; i++) {
-      if (actions[i].pos >= area.low && actions[i].pos <= area.high) found.push(i);
+      if (actions[i].pos >= area.low && actions[i].pos <= area.high && !regionAt(regions, actions[i].at)) found.push(i);
     }
     return found;
   };
@@ -936,9 +985,10 @@ export default function EditorPage() {
   };
 
   /**
-   * Add a point under the pointer and keep dragging it; with several points
-   * selected, only clear the selection. Placing on markers, it goes at the
-   * nearest bookmark's time and is dragged along them.
+   * Add a point under the pointer and keep dragging it; in a region, select
+   * it instead; with several points selected, only clear the selection.
+   * Placing on markers, it goes at the time of the nearest bookmark outside
+   * the regions and is dragged along them.
    */
   const add = (e: PointerEvent<SVGSVGElement>) => {
     if (tool) return;
@@ -949,13 +999,17 @@ export default function EditorPage() {
       boxSelect(e);
       return;
     }
+    const point = pointerAt(e);
+    const inside = regionAt(regions, point.at);
+    if (inside) return selectRegion(inside);
     if (selected.size > 1) {
       setSelected(new Set());
       return;
     }
-    const point = pointerAt(e);
     if (advanced && onMarkers) {
-      point.at = bookmarks.reduce((a, b) => (Math.abs(b.time - point.at) < Math.abs(a.time - point.at) ? b : a)).time;
+      const free = bookmarks.filter((b) => !regionAt(regions, b.time));
+      if (!free.length) return;
+      point.at = free.reduce((a, b) => (Math.abs(b.time - point.at) < Math.abs(a.time - point.at) ? b : a)).time;
     }
     if (point.at < 0) return;
     const i = byTime(actions, point.at);
@@ -983,9 +1037,9 @@ export default function EditorPage() {
         return;
       }
       if (e.shiftKey) {
-        // The anchor may be past the end after deleting points.
+        // The anchor may be past the end after deleting points. The regions' points in the range stay out.
         const from = Math.min(anchor.current ?? i, actions.length - 1);
-        setSelected(new Set(Array.from({ length: Math.abs(i - from) + 1 }, (_, k) => Math.min(i, from) + k)));
+        setSelected(new Set(Array.from({ length: Math.abs(i - from) + 1 }, (_, k) => Math.min(i, from) + k).filter((k) => !regionAt(regions, actions[k].at))));
         return;
       }
       anchor.current = i;
@@ -1161,6 +1215,28 @@ export default function EditorPage() {
     setMarked(new Set());
   };
 
+  /** Select the region `r`, clearing the point and marker selection. */
+  const selectRegion = (r: Region) => {
+    setRegionOn(r);
+    setSelected(new Set());
+    setMarked(new Set());
+    setBox(null);
+  };
+
+  /** Unlock the region `r`: it goes, and its points become ordinary points, selected. */
+  const unlockRegion = (r: Region) => {
+    editLabel.current = "Unlock region";
+    setScript((s) => ({ ...s, regions: s.regions.filter((o) => o !== r) }));
+    setSelected(new Set(Array.from({ length: afterTime(actions, r.to) - byTime(actions, r.from) }, (_, k) => byTime(actions, r.from) + k)));
+  };
+
+  /** Delete the region `r` with its points. */
+  const deleteRegion = (r: Region) => {
+    editLabel.current = "Delete region";
+    setScript((s) => ({ ...s, actions: s.actions.filter((a) => a.at < r.from || a.at > r.to), regions: s.regions.filter((o) => o !== r) }));
+    setRegionOn(null);
+  };
+
   /** Close the name field, accepting what was typed unless `accept` is false or it is empty. */
   const closeNaming = (accept: boolean) => {
     const name = accept ? naming!.name.trim() : "";
@@ -1229,9 +1305,9 @@ export default function EditorPage() {
   /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
   const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
 
-  /** Open a tool on the selected points, or all, from their defaults. */
+  /** Open a tool on the selected points, or all but the regions', from their defaults. */
   const openTool = (kind: ToolKind) => {
-    const picked = selected.size ? [...selected].sort((a, b) => a - b) : [...actions.keys()];
+    const picked = selected.size ? [...selected].sort((a, b) => a - b) : [...actions.keys()].filter((i) => !regionAt(regions, actions[i].at));
     const fastest = fastestOf(actions, picked);
     setTool({ kind, actions, picked, fastest });
     const depths = picked.map((i) => actions[i].pos);
@@ -1250,7 +1326,7 @@ export default function EditorPage() {
     const { kind, actions, picked } = tool;
     if (kind === "scale") {
       const params = scaleParams(scale);
-      return params && scaled(actions, picked, params.time, params.low, params.high);
+      return params && scaled(actions, picked, params.time, params.low, params.high, regions);
     }
     if (kind === "shift") {
       const params = shiftParams(shift);
@@ -1266,7 +1342,7 @@ export default function EditorPage() {
     }
     const limit = typed(maxSpeed);
     return limit > 0 ? speedLimited(actions, picked, limit, speedAnchor === "out") : null;
-  }, [tool, scale, shift, maxSpeed, speedAnchor, genSetup, genRange, zero, bookmarks]);
+  }, [tool, scale, shift, maxSpeed, speedAnchor, genSetup, genRange, zero, bookmarks, regions]);
 
   /** The open tool's affected points as it was opened on them: the first's time `t0`, the last's `t1`, their lowest depth `lo` and highest `hi`; null without any. */
   const toolSpan = useMemo(() => {
@@ -1284,6 +1360,10 @@ export default function EditorPage() {
   const shiftBox = tool?.kind === "shift" ? shiftParams(shift) : null;
   /** Generate's range box while it is open; null while a field is refused. */
   const genBox = tool?.kind === "generate" ? rangeParams(genRange, zero) : null;
+  /** Why the open tool's result, though shown, cannot be applied: it would put points into a region or stretch one. */
+  const toolBlocked = genBox && regions.some((r) => r.from <= genBox.to && r.to >= genBox.from) ? "The box overlaps a region"
+    : scaleBox && scaleBox.time !== 100 && regions.some((r) => r.from > scaleBox.t0 && r.to < scaleBox.t1) ? "Time cannot be scaled across a region"
+    : null;
   /** Whether Generate's box holds a bookmark, so Markers timing can be chosen. */
   const genMarked = !!genBox && bookmarks.some((b) => b.time >= genBox.from && b.time <= genBox.to);
   /** Generate's Interval or Speed shows in its own view below the graph; with Markers timing there is none. */
@@ -1436,15 +1516,22 @@ export default function EditorPage() {
     />
   );
 
-  /** Apply the open tool's result as one edit, unless it leaves the points as they are, and go back to the tools. */
+  /**
+   * Apply the open tool's result as one edit, unless it leaves the points as
+   * they are, and go back to the tools. Generate's box becomes a region of its
+   * points, with its own copy of the setup, and selected; not a box without
+   * length, whose point stays ordinary.
+   */
   const applyTool = () => {
     const { kind, picked } = tool!;
     const next = preview!;
     setTool(null);
-    if (next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos)) return;
+    const made: Region | null = kind === "generate" && genBox!.to > genBox!.from ? { ...genBox!, generate: structuredClone(genSetup) } : null;
+    if (!made && next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos)) return;
     editLabel.current = `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(kind === "generate" ? next.selected.size : picked.length)}`;
-    setScript((s) => ({ ...s, actions: next.actions }));
-    setSelected(next.selected);
+    setScript((s) => ({ ...s, actions: next.actions, regions: made ? [...s.regions, made].sort((a, b) => a.from - b.from) : next.regions ?? s.regions }));
+    if (made) selectRegion(made);
+    else setSelected(next.selected);
   };
 
   const removeSelected = (verb = "Delete") => {
@@ -1453,8 +1540,8 @@ export default function EditorPage() {
     setSelected(new Set());
   };
 
-  // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points, or all bookmarks with markers selected or
-  // over the marker lane; Escape none, Delete (or Backspace, the Mac's delete key) removes the selected ones; F2 renames the selected
+  // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points but the regions', or all bookmarks with markers
+  // selected or over the marker lane; Escape none, Delete (or Backspace, the Mac's delete key) removes the selected ones or region; F2 renames the selected
   // markers, B adds a bookmark, P hides or shows the player, also with a tool open. Not while typing in a field.
   // With a tool open, Escape (also in its fields) discards it, and only undo and redo do the same; other keys do nothing.
   useWindowEvent("keydown", (e) => {
@@ -1470,20 +1557,21 @@ export default function EditorPage() {
     } else if ((e.ctrlKey || e.metaKey) && e.key === "a") {
       e.preventDefault();
       if (marked.size || overLane.current) selectMarkers(bookmarks);
-      else setSelected(new Set(actions.keys()));
+      else setSelected(new Set([...actions.keys()].filter((i) => !regionAt(regions, actions[i].at))));
     } else if (e.key === "Escape") {
       // Cancels placing points first.
       if (placing) cancelPlacing();
       else {
         setSelected(new Set());
         setMarked(new Set());
+        setRegionOn(null);
         setBox(null);
       }
     } else if (e.key === "Enter" && ghost) {
-      // Places the points being placed where they are shown.
+      // Places the points being placed where they are shown, unless refused there.
       e.preventDefault();
       if (lifted) drop();
-      else put(ghost, inserting);
+      else if (!refused) put(ghost, inserting);
     } else if (e.key === "s" && !e.ctrlKey && !e.metaKey) {
       toggleBoxMode();
     } else if (e.key === "m" && !e.ctrlKey && !e.metaKey) {
@@ -1494,6 +1582,9 @@ export default function EditorPage() {
     } else if ((e.key === "Delete" || e.key === "Backspace") && marked.size) {
       e.preventDefault();
       removeMarkers([...marked]);
+    } else if ((e.key === "Delete" || e.key === "Backspace") && region) {
+      e.preventDefault();
+      deleteRegion(region);
     } else if (e.key === "F2" && marked.size) {
       e.preventDefault();
       rename([...marked]);
@@ -1557,8 +1648,9 @@ export default function EditorPage() {
     const from = selected.size ? [...selected].sort((a, b) => a - b) : null;
     const doc = from ? from.map((i) => actions[i]) : [];
     mainTimeline.current = timeline;
-    setTimeline({ states: [{ actions: doc, chapters, bookmarks, label: "Open" }], index: 0 });
-    setAdvanced({ actions: doc, zero: doc[0]?.at ?? view.from, from });
+    setTimeline({ states: [{ actions: doc, chapters, bookmarks, regions: [], label: "Open" }], index: 0 });
+    // In whole ms, as Generate's times count from it.
+    setAdvanced({ actions: doc, regions: [], zero: Math.round(doc[0]?.at ?? view.from), from });
     setSelected(new Set());
     setMarked(new Set());
     setBox(null);
@@ -1572,10 +1664,11 @@ export default function EditorPage() {
    * again.
    */
   const closeAdvanced = (done: boolean) => {
-    const { actions: result, from } = advanced!;
+    const { actions: result, regions: made, from } = advanced!;
     const original = from?.map((i) => main.actions[i]) ?? [];
-    if (!done && JSON.stringify(result) !== JSON.stringify(original) && !confirm("Discard the advanced editor's changes?")) return;
-    setTimeline(mainTimeline.current ?? { states: [{ actions: main.actions, chapters, bookmarks, label: "Start" }], index: 0 });
+    // It opens without regions, so any is a change.
+    if (!done && (JSON.stringify(result) !== JSON.stringify(original) || made.length) && !confirm("Discard the advanced editor's changes?")) return;
+    setTimeline(mainTimeline.current ?? { states: [{ actions: main.actions, chapters, bookmarks, regions: main.regions, label: "Start" }], index: 0 });
     mainTimeline.current = null;
     setAdvanced(null);
     // Cancelled, an open tool goes too, unapplied.
@@ -1598,6 +1691,7 @@ export default function EditorPage() {
    * with the box around them.
    */
   const toggleBoxMode = () => {
+    if (lifted && refused) return;
     setBoxMode(!boxMode);
     if (lifted) return drop(true);
     if (!boxMode && selected.size) {
@@ -1656,17 +1750,22 @@ export default function EditorPage() {
   /**
    * The existing points before and after `pasted` once placed. Inserting moves
    * the points from the first pasted one on right by the pasted length, so the
-   * gap that followed stays, and at least 1 ms past the last pasted point.
-   * Replacing drops the points in the time `pasted` covers.
+   * gap that followed stays, and at least 1 ms past the last pasted point,
+   * and the regions there with them. Replacing drops the points in the time
+   * `pasted` covers.
    */
   const around = (pasted: Action[], insert: boolean) => {
     const [start, end] = [pasted[0].at, pasted[pasted.length - 1].at];
     const before = kept.slice(0, byTime(kept, start));
-    if (!insert) return { before, after: kept.slice(afterTime(kept, end)) };
+    if (!insert) return { before, after: kept.slice(afterTime(kept, end)), regions: keptRegions };
     const later = kept.slice(before.length);
     const shift = later.length ? Math.max(end - start, end + 1 - later[0].at) : 0;
-    return { before, after: later.map((a) => ({ at: a.at + shift, pos: a.pos })) };
+    return { before, after: later.map((a) => ({ at: a.at + shift, pos: a.pos })), regions: keptRegions.map((r) => (r.from >= start ? movedBy(r, shift) : r)) };
   };
+
+  /** Whether `pasted` may not go in: replacing, it would cover part of a region; inserting, it would split one. */
+  const refuses = (pasted: Action[], insert: boolean) =>
+    keptRegions.some((r) => (insert ? r.from < pasted[0].at && pasted[0].at <= r.to : r.from <= pasted[pasted.length - 1].at && r.to >= pasted[0].at));
 
   // Track the modifiers while placing; pointer events correct them if they were pressed before.
   useEffect(() => {
@@ -1686,31 +1785,33 @@ export default function EditorPage() {
 
   /** Put `pasted` into the script, inserting or replacing, and select them; returns the new points. */
   const put = (pasted: Action[], insert: boolean) => {
-    const { before, after } = around(pasted, insert);
+    const { before, after, regions } = around(pasted, insert);
     editLabel.current = `${lifted ? "Move" : insert ? "Insert" : "Paste"} ${points(pasted.length)}`;
     const next = [...before, ...pasted, ...after];
-    setScript({ ...script, actions: next });
+    setScript({ ...script, actions: next, regions });
     setSelected(new Set(pasted.map((_, i) => before.length + i)));
     setPlacing(null);
     setLifted(null);
     return next;
   };
 
-  /** Place the points being moved where they were dragged; `boxIn` for selection mode, with the box around them. */
+  /** Place the points being moved where they were dragged, unless refused there; `boxIn` for selection mode, with the box around them. */
   const drop = (boxIn = false) => {
+    if (refused) return;
     const moved = ghost!;
     const next = put(moved, inserting);
     if (boxIn) setBox(boxed(moved.reduce(extended, spanned(moved[0], moved[0]))), next);
   };
 
-  /** A click places pasted points at the pointer; outside their box, it places the points being moved. */
+  /** A click places pasted points at the pointer; outside their box, it places the points being moved. Not where they are refused. */
   const place = (e: PointerEvent<SVGRectElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     if (lifted) return drop();
     const point = pointerAt(e);
-    put(positioned(point.at, point.pos, e.ctrlKey || e.metaKey), insertMode !== e.shiftKey);
+    const [pasted, insert] = [positioned(point.at, point.pos, e.ctrlKey || e.metaKey), insertMode !== e.shiftKey];
+    if (!refuses(pasted, insert)) put(pasted, insert);
   };
 
   /** The toolbox buttons go through the Clipboard API, which may ask for permission to paste. */
@@ -1756,7 +1857,7 @@ export default function EditorPage() {
       editLabel.current = `Open ${file.name}`;
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
       const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, videoDuration));
-      const next = { name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers };
+      const next = { name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers, regions: [] };
       setSaved(next);
       setScript(next);
       setView((v) => ({ ...v, from: 0 }));
@@ -1788,11 +1889,15 @@ export default function EditorPage() {
 
   /** The points being placed where they would go. */
   const ghost = placing && placeAt ? positioned(placeAt.at, placeAt.pos, held.ctrl) : null;
+  /** Whether placing them there is refused, as it would cut into a region; they show red. */
+  const refused = !!ghost && refuses(ghost, inserting);
   /** Whether a point at `at` would be replaced by them. */
   const replaced = (at: number) => !!ghost && !inserting && at >= ghost[0].at && at <= ghost[ghost.length - 1].at;
   /** The points as drawn: while inserting, the later ones where they would move. Same order and indices as `kept`. */
   const moved = ghost && inserting ? around(ghost, true) : null;
   const shown = moved ? [...moved.before, ...moved.after] : preview?.actions ?? kept;
+  /** The regions as drawn, with the points. */
+  const shownRegions = moved?.regions ?? preview?.regions ?? keptRegions;
   /** The selected points as drawn: with a tool open, the affected ones in its result. */
   const marks = preview?.selected ?? selected;
   /** The points being placed joined to the existing points they would sit between. */
@@ -1814,7 +1919,7 @@ export default function EditorPage() {
     let hit = null;
     for (let j = near(-8); j < near(8); j++) {
       const i = first + j;
-      if (replaced(visible[j].at) || Math.hypot(x(visible[j].at) - px, y(visible[j].pos) - py) > (selected.has(i) ? 8 : 5)) continue;
+      if (replaced(visible[j].at) || regionAt(shownRegions, visible[j].at) || Math.hypot(x(visible[j].at) - px, y(visible[j].pos) - py) > (selected.has(i) ? 8 : 5)) continue;
       if (hit === null || selected.has(i) || !selected.has(hit)) hit = i;
     }
     return hit;
@@ -1885,7 +1990,8 @@ export default function EditorPage() {
         return;
       }
       const ring = !tool && marks.has(first + j) && !long[j];
-      if (!ring && !showDots) return;
+      // The regions' points only show their line.
+      if ((!ring && !showDots) || regionAt(shownRegions, a.at)) return;
       const path = ring ? ringed : dots;
       const r = ring ? 7 : 5;
       path.moveTo(cx + r, cy);
@@ -1900,7 +2006,8 @@ export default function EditorPage() {
     // The points being placed, faded, over the rest; only those in view, as a selection to move can be the whole script.
     if (ghostLine) {
       ctx.save();
-      Object.assign(ctx, { globalAlpha: 0.6, lineWidth: 2, strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
+      const color = refused ? css.getPropertyValue("--red-9") : LINE_COLOR;
+      Object.assign(ctx, { globalAlpha: 0.6, lineWidth: 2, strokeStyle: color, fillStyle: color });
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
       const [l0, l1] = [Math.max(byTime(ghostLine, view.from) - 1, 0), Math.min(byTime(ghostLine, view.from + view.span) + 1, ghostLine.length)];
@@ -2075,12 +2182,26 @@ export default function EditorPage() {
           </Flex>
         </Text>
         <Separator size="4" />
+        {/* The selected region, its points locked until unlocked. */}
+        {region && <>
+          <Text size="2" weight="medium">Region</Text>
+          <Text size="2" color="gray">{regionName(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
+          <Flex gap="2">
+            <Button variant="soft" color="gray" style={{ flex: 1 }} title="Make its points ordinary points" onClick={() => unlockRegion(region)}>
+              <LockOpen1Icon /> Unlock
+            </Button>
+            <Button variant="soft" color="red" style={{ flex: 1 }} title="Delete it with its points (Delete)" onClick={() => deleteRegion(region)}>
+              <TrashIcon /> Delete
+            </Button>
+          </Flex>
+          <Separator size="4" />
+        </>}
         </>}
         {!tool ? <>
-          {/* The tools, on the selected points or all, each with a small graph of what it does; Generate needs none. */}
+          {/* The tools, on the selected points or all but the regions', each with a small graph of what it does; Generate needs none. */}
           <Text size="2" weight="medium">Tools</Text>
           {TOOLS.map(({ kind, name, before, after }) => (
-            <Button key={kind} variant="soft" color="gray" disabled={(!actions.length && kind !== "generate") || !!placing} onClick={() => openTool(kind)} style={{ justifyContent: "flex-start" }}>
+            <Button key={kind} variant="soft" color="gray" disabled={(kind !== "generate" && actions.every((a) => regionAt(regions, a.at))) || !!placing} onClick={() => openTool(kind)} style={{ justifyContent: "flex-start" }}>
               <svg width="56" height="24" viewBox="0 0 56 24" fill="none" strokeWidth={1.5} strokeLinejoin="round">
                 <polyline points={before} style={{ stroke: "var(--gray-8)" }} />
                 <polyline points={after} stroke={LINE_COLOR} />
@@ -2296,8 +2417,9 @@ export default function EditorPage() {
             </Flex>
           </>}
           {/* Docked to the panel's bottom while it scrolls, covering what passes under; the padding takes the place of the gap and the panel's own. */}
+          {toolBlocked && <Text size="1" color="red">{toolBlocked}.</Text>}
           <Flex gap="2" py="3" my="-3" style={{ position: "sticky", bottom: 0, background: "var(--color-background)" }}>
-            <Button disabled={!preview} onClick={applyTool} style={{ flex: 1 }}>Apply</Button>
+            <Button disabled={!preview || !!toolBlocked} onClick={applyTool} style={{ flex: 1 }}>Apply</Button>
             <Button variant="soft" color="gray" onClick={() => setTool(null)} style={{ flex: 1 }}>Discard</Button>
           </Flex>
         </>}
@@ -2493,6 +2615,8 @@ export default function EditorPage() {
                         {k > 0 && (() => {
                           const before = timeline.states[k - 1];
                           const markersChanged = before.chapters !== state.chapters || before.bookmarks !== state.bookmarks;
+                          // A change only to the regions has no points to show.
+                          if (before.actions === state.actions && !markersChanged && before.regions !== state.regions) return <Text size="1" color="gray">Regions changed</Text>;
                           return <>
                             {(before.actions !== state.actions || !markersChanged) && <PreviewGraph pieces={diffPieces(before.actions, state.actions)} />}
                             {markersChanged && <MarkerPreview before={before} after={state} />}
@@ -2669,7 +2793,7 @@ export default function EditorPage() {
             onPointerMove={(e) => {
               // Points are drawn on the canvas, so the cursor shows when one can be grabbed; placing, a click places instead.
               if (!placing) {
-                e.currentTarget.style.cursor = tool ? "default" : pointUnder(e) === null ? "crosshair" : "grab";
+                e.currentTarget.style.cursor = tool ? "default" : pointUnder(e) !== null ? "grab" : regionAt(regions, pointerAt(e).at) ? "pointer" : "crosshair";
                 return;
               }
               // Pasted points follow the pointer; moved ones stay where their box is dragged.
@@ -2682,6 +2806,17 @@ export default function EditorPage() {
             {/* The chapters shaded behind the plot, as in the minimap. */}
             {chapters.map((c, i) => inView(c.start, c.end) && (
               <rect key={i} x={x(c.start)} width={x(c.end) - x(c.start)} height={plotHeight} style={{ fill: light[i] ? "var(--gray-a3)" : "var(--gray-a4)" }} />
+            ))}
+            {/* The regions' bands over them, a selected one outlined as the selected markers; their labels are in the box. */}
+            {shownRegions.map((r, i) => inView(r.from, r.to) && (
+              <rect
+                key={`r${i}`}
+                x={x(r.from)}
+                width={x(r.to) - x(r.from)}
+                height={plotHeight}
+                strokeWidth={r === region ? 2 : 1}
+                style={{ fill: REGION_BAND.fill, stroke: r === region ? "var(--accent-9)" : REGION_BAND.stroke }}
+              />
             ))}
             {[0, 50, 100].map((pos) => (
               <line key={pos} x1={0} x2={width} y1={y(pos)} y2={y(pos)} style={{ stroke: "var(--gray-a5)" }} />
@@ -2714,7 +2849,7 @@ export default function EditorPage() {
                 width={Math.max(x(ghost[ghost.length - 1].at) - x(ghost[0].at), 1)}
                 y={0}
                 height={plotHeight}
-                style={{ fill: inserting ? "var(--green-a3)" : "var(--red-a3)", pointerEvents: "none" }}
+                style={{ fill: inserting && !refused ? "var(--green-a3)" : "var(--red-a3)", pointerEvents: "none" }}
               />
             )}
             {/* Kept in the SVG, so the line and points stay between what is drawn under and over them. */}
@@ -2728,7 +2863,7 @@ export default function EditorPage() {
             {/* While placing, a click anywhere places, over points and the playhead alike; moving, outside the time they cover. */}
             {placing && (
               // No menu for Ctrl+click, which is a right-click on a Mac.
-              <rect width={width} height={height} fill="transparent" style={{ cursor: lifted ? "default" : "copy" }} onPointerDown={place} onContextMenu={(e) => e.preventDefault()} />
+              <rect width={width} height={height} fill="transparent" style={{ cursor: refused ? "not-allowed" : lifted ? "default" : "copy" }} onPointerDown={place} onContextMenu={(e) => e.preventDefault()} />
             )}
             {/* Moving, the time the points cover is dragged; at least a grip wide, for a single point. */}
             {lifted && ghost && (() => {
@@ -2858,6 +2993,17 @@ export default function EditorPage() {
             >
               <Icon />
             </IconButton>
+          ))}
+          {/* Each region's label in its band's top corner, kept in view and cut off where there is no room. */}
+          {shownRegions.map((r, i) => inView(r.from, r.to) && (
+            <Text
+              key={i}
+              size="1"
+              truncate
+              style={{ position: "absolute", top: 2, left: Math.max(x(r.from), 0), maxWidth: Math.min(x(r.to), width) - Math.max(x(r.from), 0), boxSizing: "border-box", padding: "0 4px", color: "var(--cyan-11)", pointerEvents: "none" }}
+            >
+              {regionName(r)}
+            </Text>
           ))}
           {/* As in the player: 100 (top) is the shallow end, out towards home. */}
           <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
@@ -3023,6 +3169,9 @@ export default function EditorPage() {
         >
           {chapters.map((c, i) => (
             <rect key={i} x={minimapX(c.start)} width={minimapX(c.end) - minimapX(c.start)} height={MINIMAP_HEIGHT} style={{ fill: light[i] ? "var(--gray-a3)" : "var(--gray-a4)" }} />
+          ))}
+          {regions.map((r, i) => (
+            <rect key={`r${i}`} x={minimapX(r.from)} width={minimapX(r.to) - minimapX(r.from)} height={MINIMAP_HEIGHT} style={{ fill: REGION_BAND.fill }} />
           ))}
           {/* The main script's other points behind the advanced editor's. */}
           {advanced && <path d={minimapContext} fill="none" strokeWidth={1} style={{ stroke: "var(--gray-a7)", pointerEvents: "none" }} />}
