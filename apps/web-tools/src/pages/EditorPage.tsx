@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement } from "react";
 import { AlertDialog, Box, Button, Callout, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -717,7 +717,9 @@ export default function EditorPage() {
    */
   const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null; region?: Generated } | null>(null);
   /** The Snippets panel shows beside the graph, in the main script and the advanced editor alike. */
-  const [snippetsOpen, setSnippetsOpen] = usePersistedState("ossm:editorSnippetsShown", false, localStorage);
+  /** The panel beside the graph, on its other side from the sidebar, and which it shows: the markers list or the snippet library. */
+  const [asideShown, setAsideShown] = usePersistedState("ossm:editorAsideShown", false, localStorage);
+  const [asideTab, setAsideTab] = usePersistedState<"markers" | "snippets">("ossm:editorAsideTab", "snippets", localStorage);
   /** The snippet library, shared by all scripts, as its file holds it. */
   const [libraryFile, setLibraryFile] = usePersistedState<LibraryFile>("ossm:editorSnippets", { ossm: { version: 1, snippets: [] } }, localStorage);
   const library = libraryFile.ossm.snippets;
@@ -1429,25 +1431,15 @@ export default function EditorPage() {
    * A press on a marker selects it, and dragging it moves it: a chapter's
    * `sides`, both to move it, between its neighbours and 0 and at least 1 ms
    * long; a bookmark, with the other selected ones, anywhere from 0, past other
-   * bookmarks. It never draws a chapter. Only bookmarks are selected together:
-   * Ctrl/Cmd+click toggles one in the selection, Shift+click selects the ones
-   * from the last clicked. Pressed twice in a row, it opens the selection's
+   * bookmarks. It never draws a chapter. Only bookmarks are selected together,
+   * as by `markerPicked`. Pressed twice in a row, it opens the selection's
    * name field.
    */
   const markerDown = (e: PointerEvent<HTMLElement>, m: Marker, sides: ("start" | "end")[] = ["start", "end"]) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    if (!isChapter(m) && (e.ctrlKey || e.metaKey)) {
-      markerAnchor.current = m;
-      const next = new Set([...marked].filter((o) => !isChapter(o)));
-      if (!next.delete(m)) next.add(m);
-      return selectMarkers(next);
-    }
-    if (!isChapter(m) && e.shiftKey) {
-      const [i, j] = [bookmarks.indexOf(markerAnchor.current as Bookmark), bookmarks.indexOf(m)];
-      return selectMarkers(i < 0 ? [m] : bookmarks.slice(Math.min(i, j), Math.max(i, j) + 1));
-    }
+    if (markerPicked(e, m)) return;
     markerAnchor.current = m;
     const group = !isChapter(m) && marked.has(m) ? [...marked] : [m];
     selectMarkers(group);
@@ -1489,6 +1481,26 @@ export default function EditorPage() {
       dragging.current = false;
       setDragEnds((k) => k + 1);
     }, scrolls);
+  };
+
+  /**
+   * Select bookmarks together on a click on the bookmark `m` with a modifier:
+   * Ctrl/Cmd toggles it in the selection, Shift selects the ones from the last
+   * clicked. Returns whether it did.
+   */
+  const markerPicked = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, m: Marker) => {
+    if (isChapter(m)) return false;
+    if (e.ctrlKey || e.metaKey) {
+      markerAnchor.current = m;
+      const next = new Set([...marked].filter((o) => !isChapter(o)));
+      if (!next.delete(m)) next.add(m);
+      selectMarkers(next);
+      return true;
+    }
+    if (!e.shiftKey) return false;
+    const [i, j] = [bookmarks.indexOf(markerAnchor.current as Bookmark), bookmarks.indexOf(m)];
+    selectMarkers(i < 0 ? [m] : bookmarks.slice(Math.min(i, j), Math.max(i, j) + 1));
+    return true;
   };
 
   /**
@@ -2718,6 +2730,55 @@ export default function EditorPage() {
     <Button style={{ flex: 1 }} disabled={actions.length < (advanced.snippet || advanced.instance !== undefined ? 2 : 1)} onClick={() => closeAdvanced(true)}>{label}</Button>
   ));
 
+  /** Show the time `t` ms: the view centred on it when it is out of view, and the playhead there. */
+  const goTo = (t: number) => {
+    if (t < view.from || t > view.from + view.span) setView({ ...view, from: clamp(t - view.span / 2, 0, Math.max(total - view.span, 0)) });
+    seek(t);
+  };
+
+  /**
+   * The Markers panel, beside the graph: the chapters and bookmarks in time,
+   * the selected ones marked. A click on one shows it, and selects it;
+   * bookmarks are selected together as on the lane. A double-click renames
+   * it. The advanced editor's document has no markers of its own, so there
+   * they only show their times.
+   */
+  const markerRow = (m: Marker, key: string) => (
+    <Flex
+      key={key}
+      align="center"
+      gap="2"
+      px="1"
+      onClick={(e) => {
+        if (!advanced && markerPicked(e, m)) return;
+        if (!advanced) {
+          markerAnchor.current = m;
+          selectMarkers([m]);
+        }
+        goTo(timeOf(m));
+      }}
+      onDoubleClick={() => !advanced && rename([m])}
+      style={{ minHeight: 28, borderRadius: 4, cursor: "pointer", userSelect: "none", background: marked.has(m) ? "var(--accent-a4)" : undefined }}
+    >
+      {/* A bookmark's colour, as its flag in the lane. */}
+      {!isChapter(m) && <Box flexShrink="0" width="8px" height="8px" style={{ borderRadius: "50%", background: `var(--${markerColor(m.name)}-9)` }} />}
+      <Text size="2" truncate style={{ flexGrow: 1 }}>{m.name}</Text>
+      <Text size="1" color="gray" style={{ flexShrink: 0 }}>
+        {isChapter(m) ? `${formatScriptTime(m.start / 1000)}–${formatScriptTime(m.end / 1000)}` : formatScriptTime(m.time / 1000)}
+      </Text>
+    </Flex>
+  );
+  const markersPanel = <Flex direction="column" gap="3" p="3">
+    <Text size="2" weight="medium">Chapters</Text>
+    <Flex direction="column">
+      {chapters.length ? chapters.map((c, i) => markerRow(c, `c${i}`)) : <Text size="1" color="gray">No chapters. Drag along the lane under the graph to draw one.</Text>}
+    </Flex>
+    <Text size="2" weight="medium">Bookmarks</Text>
+    <Flex direction="column">
+      {bookmarks.length ? bookmarks.map((b, i) => markerRow(b, `b${i}`)) : <Text size="1" color="gray">No bookmarks. Click the lane under the graph, or press B, to add one.</Text>}
+    </Flex>
+  </Flex>;
+
   const sidebar = (
     // At least the panel's height, so the buttons docked at its bottom sit there.
     <Flex direction="column" gap="3" p="3" minHeight="100%">
@@ -3507,16 +3568,17 @@ export default function EditorPage() {
             <VideoIcon /> Player
           </Button>
         </>}
-        <Button
-          variant={snippetsOpen ? "solid" : "soft"}
-          color={snippetsOpen ? undefined : "gray"}
-          aria-pressed={snippetsOpen}
-          title={`${snippetsOpen ? "Hide" : "Show"} the snippet library`}
-          onClick={() => setSnippetsOpen(!snippetsOpen)}
+        <IconButton
+          variant={asideShown ? "solid" : "soft"}
+          color={asideShown ? undefined : "gray"}
+          aria-pressed={asideShown}
+          aria-label="Markers and snippets"
+          title={`${asideShown ? "Hide" : "Show"} the markers and snippets`}
+          onClick={() => setAsideShown(!asideShown)}
           style={{ marginLeft: "auto" }}
         >
-          <ComponentInstanceIcon /> Snippets
-        </Button>
+          <ViewVerticalIcon />
+        </IconButton>
       </Flex>
       {/* The graph with the marker lane under it; the wheel works on both. */}
       <Flex
@@ -3978,7 +4040,18 @@ export default function EditorPage() {
     </Flex>
   );
 
-  return <GraphLayout sidebar={sidebar} content={content} aside={snippetsOpen && snippetsPanel} />;
+  /** Beside the graph: the markers or the snippets, switched at its top as the player's modes. */
+  const asidePanel = <Flex direction="column">
+    <Box p="3" pb="0">
+      <SegmentedControl.Root value={asideTab} onValueChange={(v) => setAsideTab(v as "markers" | "snippets")} style={{ width: "100%" }}>
+        <SegmentedControl.Item value="markers">Markers</SegmentedControl.Item>
+        <SegmentedControl.Item value="snippets">Snippets</SegmentedControl.Item>
+      </SegmentedControl.Root>
+    </Box>
+    {asideTab === "markers" ? markersPanel : snippetsPanel}
+  </Flex>;
+
+  return <GraphLayout sidebar={sidebar} content={content} aside={asideShown && asidePanel} />;
 }
 
 /** Height of a small graph's time axis, in px. */
