@@ -101,9 +101,9 @@ const HISTORY_SIZE = 10;
 /** Edits kept for undo. */
 const UNDO_SIZE = 100;
 
-/** Visible time range, in ms; at most the script or the video, whichever is longer, but at least the floor. */
+/** Visible time range, in ms; at most the script (the main one too, in the advanced editor), Generate's box or the video, whichever is longer, but at least the floor, room to generate into a blank script. */
 const MIN_SPAN = 500;
-const MAX_SPAN_FLOOR = 10_000;
+const MAX_SPAN_FLOOR = 120_000;
 /** Steps of the visible time slider, in s; the first that keeps it to about this many steps is used. */
 const SPAN_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60];
 const SPAN_STEP_COUNT = 240;
@@ -579,8 +579,6 @@ export default function EditorPage() {
   /** Video length, in ms; 0 without one. */
   const [videoDuration, setVideoDuration] = useState(0);
   const end = script.actions.length ? script.actions[script.actions.length - 1].at : 0;
-  const maxSpan = Math.max(end, videoDuration, MAX_SPAN_FLOOR);
-  const spanStep = SPAN_STEPS.find((s) => s * SPAN_STEP_COUNT >= maxSpan / 1000) ?? SPAN_STEPS[SPAN_STEPS.length - 1];
 
   useEffect(() => {
     setVideoUrl(null);
@@ -638,23 +636,6 @@ export default function EditorPage() {
     observer.observe(boxRef.current!);
     return () => observer.disconnect();
   }, []);
-
-  // The wheel scrolls through time, with Ctrl it zooms around the pointer. Not passive, to keep the page from scrolling.
-  useEffect(() => {
-    const el = timeRef.current!;
-    const wheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const fraction = (e.clientX - rect.left) / rect.width;
-      setView((v) => {
-        if (!(e.ctrlKey || e.metaKey)) return { ...v, from: Math.max(v.from + ((e.deltaX || e.deltaY) / rect.width) * v.span, 0) };
-        const span = clamp(v.span * Math.exp(e.deltaY * 0.002), MIN_SPAN, maxSpan);
-        return { from: Math.max(v.from + fraction * (v.span - span), 0), span };
-      });
-    };
-    el.addEventListener("wheel", wheel, { passive: false });
-    return () => el.removeEventListener("wheel", wheel);
-  }, [setView, maxSpan]);
 
   const { actions, chapters, bookmarks } = script;
   /** While the advanced editor is open, the main script's other points, in runs broken where its points were taken out; drawn faintly behind them, never edited. */
@@ -1241,6 +1222,26 @@ export default function EditorPage() {
   const shiftBox = tool?.kind === "shift" ? shiftParams(shift) : null;
   /** Generate's range box while it is open; null while a field is refused. */
   const genBox = tool?.kind === "generate" ? rangeParams(genRange, zero) : null;
+  const maxSpan = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, videoDuration, genBox?.to ?? 0, MAX_SPAN_FLOOR);
+  const spanStep = SPAN_STEPS.find((s) => s * SPAN_STEP_COUNT >= maxSpan / 1000) ?? SPAN_STEPS[SPAN_STEPS.length - 1];
+
+  // The wheel scrolls through time, with Ctrl it zooms around the pointer. Not passive, to keep the page from scrolling.
+  useEffect(() => {
+    const el = timeRef.current!;
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const fraction = (e.clientX - rect.left) / rect.width;
+      setView((v) => {
+        if (!(e.ctrlKey || e.metaKey)) return { ...v, from: Math.max(v.from + ((e.deltaX || e.deltaY) / rect.width) * v.span, 0) };
+        const span = clamp(v.span * Math.exp(e.deltaY * 0.002), MIN_SPAN, maxSpan);
+        return { from: Math.max(v.from + fraction * (v.span - span), 0), span };
+      });
+    };
+    el.addEventListener("wheel", wheel, { passive: false });
+    return () => el.removeEventListener("wheel", wheel);
+  }, [setView, maxSpan]);
+
   /** Times every 2 px across Generate's box's part in view, where its functions are drawn. */
   const genTimes = (() => {
     if (!genBox || !(width > 0)) return [];
