@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
 import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
 import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
@@ -1646,6 +1646,26 @@ export default function EditorPage() {
   const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
   /** The part of Generate's setup shown, whose handles the graph shows; Position on opening. */
   const [genPart, setGenPart] = useState<GenPart>("position");
+  /** A part's header in Generate's list, pressed to expand it: its name, then `right`, the part's controls while it is expanded, else a summary. */
+  const partHeader = (part: GenPart, label: string, right?: ReactNode) => (
+    <Flex gap="2" align="center" justify="between" minHeight="24px">
+      <Flex
+        align="center"
+        gap="2"
+        flexGrow="1"
+        role="button"
+        tabIndex={0}
+        aria-expanded={genPart === part}
+        onClick={() => setGenPart(part)}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setGenPart(part))}
+        style={{ cursor: "pointer", userSelect: "none" }}
+      >
+        <ChevronRightIcon style={{ flexShrink: 0, transform: genPart === part ? "rotate(90deg)" : undefined }} />
+        <Text size="2" weight={genPart === part ? "medium" : undefined}>{label}</Text>
+      </Flex>
+      {genPart === part ? right : <Text size="1" color="gray">{right}</Text>}
+    </Flex>
+  );
 
   /** Open a tool on the selected points, or all but the regions', from their defaults. */
   const openTool = (kind: ToolKind) => {
@@ -1882,14 +1902,14 @@ export default function EditorPage() {
       const scale = own ? (timingHigh - timingLow) / 100 : high > low ? 100 / (high - low) : 0;
       dragHandle(e, (dt, dp) => setGenSetup((s) => ({ ...s, [key]: { ...s[key], ...move(dt, dp * scale) } })), own ? TIMING_HEIGHT - 2 * PAD : undefined);
     };
-    /** A value's line across the box, dragged by it or its grip at the right end. */
+    /** A value's line across the box, dragged by it or its grip at the right end; drawn unless it is a constant's, which its curve shows. */
     const line = (field: ShapeField) => {
       const [v0, ly] = [f(field), yOf(f(field))];
       if (!Number.isFinite(v0)) return null;
       const down = (e: PointerEvent<SVGElement>) => drag(e, (_, dv) => ({ [field]: fit(v0 + dv) }));
       return (
         <g key={field}>
-          <line x1={x(from)} x2={x(to)} y1={ly} y2={ly} strokeDasharray="6 4" strokeWidth={1.5} style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
+          {field !== "value" && <line x1={x(from)} x2={x(to)} y1={ly} y2={ly} strokeDasharray="6 4" strokeWidth={1.5} style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />}
           {grip(`${field}-line`, [x(from), ly - GRIP / 2, x(to) - x(from), GRIP], "ns-resize", down)}
           {grip(`${field}-grip`, [x(to) - GRIP / 2, ly - GRIP / 2, GRIP, GRIP], "ns-resize", down, true)}
         </g>
@@ -3159,14 +3179,9 @@ export default function EditorPage() {
               </SegmentedControl.Root>
             </Flex>
           </>}
-          {/* One part of the setup at a time: Position the range box's fields and First, Timing the timing and its function, High and Low theirs. */}
+          {/* The setup's parts as a list, one expanded at a time: Position the range box's fields and First, Timing the timing and its function, High and Low theirs. */}
           {tool.kind === "generate" && <>
-            <SegmentedControl.Root size="1" value={genPart} onValueChange={(v) => setGenPart(v as GenPart)} title="The part of the setup to edit, here and with its handles in the graph">
-              <SegmentedControl.Item value="position">Position</SegmentedControl.Item>
-              <SegmentedControl.Item value="timing">Timing</SegmentedControl.Item>
-              <SegmentedControl.Item value="high">High</SegmentedControl.Item>
-              <SegmentedControl.Item value="low">Low</SegmentedControl.Item>
-            </SegmentedControl.Root>
+            {partHeader("position", "Position", genPart !== "position" && `${genRange.from}–${genRange.to} s`)}
             {genPart === "position" && ([["from", "to"], ["low", "high"]] as const).map((row) => (
               <Flex key={row[0]} gap="2">
                 {row.map((field) => (
@@ -3192,10 +3207,12 @@ export default function EditorPage() {
                 <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
               </SegmentedControl.Root>
             </Flex>}
-            {genPart === "timing" && <Flex gap="2" align="center" justify="between">
-              <Text size="2">Timing</Text>
+            {partHeader("timing", "Timing", genPart !== "timing" && { interval: "Interval", speed: "Speed", markers: "Markers" }[genSetup.timing])}
+            {/* In a row of its own, across the panel. */}
+            {genPart === "timing" && (
               <SegmentedControl.Root
                 size="1"
+                style={{ width: "100%" }}
                 value={genSetup.timing}
                 // Markers only while the box holds a bookmark.
                 onValueChange={(v) => (v !== "markers" || genMarked) && setGenSetup({ ...genSetup, timing: v as GenerateSetup["timing"] })}
@@ -3212,7 +3229,7 @@ export default function EditorPage() {
                   Markers
                 </SegmentedControl.Item>
               </SegmentedControl.Root>
-            </Flex>}
+            )}
             {/* Markers timing: which bookmark names it puts points at, all at first; in a popover, as there can be many. */}
             {genPart === "timing" && genSetup.timing === "markers" && (() => {
               const names = [...new Set(bookmarks.map((b) => b.name))].sort((a, b) => a.localeCompare(b));
@@ -3263,36 +3280,53 @@ export default function EditorPage() {
               ...(genSetup.timing === "speed" ? [["speed", "Speed", ""] as const] : genSetup.timing === "interval" ? [["interval", "Interval", "s"] as const] : []),
               ["high", "High", "%"] as const,
               ["low", "Low", "%"] as const,
-            ]).filter(([key]) => key === genPart || (genPart === "timing" && (key === "interval" || key === "speed"))).map(([key, label, unit]) => {
+            ]).filter(([key]) => key === "high" || key === "low" || genPart === "timing").map(([key, label, unit]) => {
               const func = genSetup[key];
+              // High and Low as parts, collapsed to a header with their shape.
+              const part = key === "high" || key === "low";
               const set = (next: Func) => setGenSetup({ ...genSetup, [key]: next });
               /** Periods and Interval's values: kept in whole ms, shown in s, above 0. */
               const inSeconds = (field: ShapeField) => field === "period" || (key === "interval" && SPANNED.includes(field));
+              const shapeSelect = (
+                <Select.Root size="1" value={func.shape} onValueChange={(v) => set(part
+                  ? reshaped(func, v as Shape, undefined, key === "high" ? extent(genSetup.low)[1] : extent(genSetup.high)[0])
+                  : reshaped(func, v as Shape, typed(GENERATE_DEFAULTS[key].value ?? "")))}>
+                  <Select.Trigger aria-label={`${label} shape`} />
+                  <Select.Content>
+                    {/* Each with a small graph, which the trigger shows too. */}
+                    {Object.entries(SHAPES).map(([shape, { name, graph }]) => (
+                      <Select.Item key={shape} value={shape}>
+                        <Flex gap="2" align="center">
+                          <svg width="32" height="16" viewBox="0 0 32 16" fill="none" strokeWidth={1.5} strokeLinejoin="round">
+                            <polyline points={graph} stroke={LINE_COLOR} />
+                          </svg>
+                          {name}
+                        </Flex>
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+              );
+              if (part && genPart !== key) return (
+                <Box key={key}>
+                  {partHeader(key, label, <>
+                    <svg width="32" height="16" viewBox="0 0 32 16" fill="none" strokeWidth={1.5} strokeLinejoin="round" style={{ verticalAlign: "middle", marginRight: 4 }}>
+                      <polyline points={SHAPES[func.shape].graph} stroke={LINE_COLOR} />
+                    </svg>
+                    {SHAPES[func.shape].name}
+                  </>)}
+                </Box>
+              );
               return (
                 <Flex key={key} direction="column" gap="2">
-                  <Flex gap="2" align="center" justify="between">
-                    <Text size="2">{label}</Text>
-                    <Select.Root size="1" value={func.shape} onValueChange={(v) => set(key === "high" || key === "low"
-                      ? reshaped(func, v as Shape, undefined, key === "high" ? extent(genSetup.low)[1] : extent(genSetup.high)[0])
-                      : reshaped(func, v as Shape, typed(GENERATE_DEFAULTS[key].value ?? "")))}>
-                      <Select.Trigger aria-label={`${label} shape`} />
-                      <Select.Content>
-                        {/* Each with a small graph, which the trigger shows too. */}
-                        {Object.entries(SHAPES).map(([shape, { name, graph }]) => (
-                          <Select.Item key={shape} value={shape}>
-                            <Flex gap="2" align="center">
-                              <svg width="32" height="16" viewBox="0 0 32 16" fill="none" strokeWidth={1.5} strokeLinejoin="round">
-                                <polyline points={graph} stroke={LINE_COLOR} />
-                              </svg>
-                              {name}
-                            </Flex>
-                          </Select.Item>
-                        ))}
-                      </Select.Content>
-                    </Select.Root>
-                  </Flex>
+                  {part ? partHeader(key, label, shapeSelect) : (
+                    <Flex gap="2" align="center" justify="between">
+                      <Text size="2">{label}</Text>
+                      {shapeSelect}
+                    </Flex>
+                  )}
                   <Text size="1" color="gray">
-                    Drag its handles in the {key === "high" || key === "low" ? "graph" : "view below the graph"}
+                    Drag its handles in the {part ? "graph" : "view below the graph"}
                     {func.shape === "spline" ? "; click its line to add a knot, double-click one to remove it." : "."}
                   </Text>
                   <Flex gap="2" wrap="wrap">
