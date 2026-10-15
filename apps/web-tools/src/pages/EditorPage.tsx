@@ -98,6 +98,8 @@ interface Instance {
 /** A locked stretch of points: a generator region or a snippet instance. */
 type Region = Generated | Instance;
 const isInstance = (r: Region): r is Instance => "snippet" in r;
+/** What the undo history calls `r`: a region, or a snippet by its name. */
+const regionNoun = (r: Region) => (isInstance(r) ? `snippet "${r.snippet.name}"` : "region");
 
 /** An instance named `name` of `clip`'s points and its generator regions: from its first to its last point, widened to their boxes. */
 const instanceOf = (name: string, clip: Clip): Instance => {
@@ -1272,7 +1274,7 @@ export default function EditorPage() {
       const dt = Math.max(p - origin, -r.from);
       const to = movedBy(r, dt);
       const free = (t: Region) => t.from >= 0 && !others.some((o) => o.from <= t.to && o.to >= t.from);
-      editLabel.current = isInstance(r) ? "Move snippet" : "Move region";
+      editLabel.current = `Move ${regionNoun(r)}`;
       if (free(to)) {
         over = false;
         setAstray(null);
@@ -1509,7 +1511,7 @@ export default function EditorPage() {
   /** Unlock the region `r`: it goes, and its points become ordinary points, selected; an instance's regions become regions of their own, their points staying theirs. */
   const unlockRegion = (r: Region) => {
     const inner = isInstance(r) ? r.snippet.regions : [];
-    editLabel.current = isInstance(r) ? "Unlock snippet" : "Unlock region";
+    editLabel.current = `Unlock ${regionNoun(r)}`;
     setScript((s) => ({ ...s, regions: [...s.regions.filter((o) => o !== r), ...inner].sort((a, b) => a.from - b.from) }));
     setSelected(new Set(pointsOf(r).filter((i) => !regionAt(inner, actions[i].at))));
   };
@@ -1520,7 +1522,7 @@ export default function EditorPage() {
   /** Give the instance `r` the name `name`. */
   const renameInstance = (r: Instance, name: string) => {
     const renamed = { ...r, snippet: { ...r.snippet, name } };
-    editLabel.current = "Rename snippet";
+    editLabel.current = `Rename ${regionNoun(r)} to "${name}"`;
     setScript((s) => ({ ...s, regions: s.regions.map((o) => (o === r ? renamed : o)) }));
     setRegionOn(renamed);
   };
@@ -1529,7 +1531,7 @@ export default function EditorPage() {
 
   /** Delete the region `r` with its points, an instance with its regions; `verb` names the edit. */
   const deleteRegion = (r: Region, verb = "Delete") => {
-    editLabel.current = `${verb} ${isInstance(r) ? "snippet" : "region"}`;
+    editLabel.current = `${verb} ${regionNoun(r)}`;
     setScript((s) => ({ ...s, actions: s.actions.filter((a) => a.at < r.from || a.at > r.to), regions: s.regions.filter((o) => o !== r) }));
     setRegionOn(null);
   };
@@ -2259,7 +2261,7 @@ export default function EditorPage() {
     const carried = carriedBy(pasted).map((r) => structuredClone(r));
     const placed = filledIn(pasted);
     // Nothing lifted, the advanced editor's result from empty is new, as a paste.
-    editLabel.current = lifted && liftedRegion ? "Edit snippet" : `${lifted?.size ? "Move" : insert ? "Insert" : "Paste"} ${lifted?.size || !carried.length ? points(placed.length) : carried.length === 1 ? (isInstance(carried[0]) ? "snippet" : "region") : `${carried.length} regions`}`;
+    editLabel.current = lifted && liftedRegion ? `Edit ${regionNoun(liftedRegion)}` : `${lifted?.size ? "Move" : insert ? "Insert" : "Paste"} ${lifted?.size || !carried.length ? points(placed.length) : carried.length === 1 ? regionNoun(carried[0]) : `${carried.length} regions`}`;
     const next = [...before, ...placed, ...after];
     setScript({ ...script, actions: next, regions: carried.length ? [...regions, ...carried].sort((a, b) => a.from - b.from) : regions });
     setSelected(new Set(placed.flatMap((a, i) => (regionAt(carried, a.at) ? [] : [before.length + i]))));
