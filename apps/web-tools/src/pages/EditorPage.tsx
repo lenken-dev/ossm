@@ -250,6 +250,8 @@ const SHAPES = {
 } as const;
 type Shape = keyof typeof SHAPES;
 type ShapeField = "value" | "start" | "end" | "min" | "max" | "period" | "phase" | "width" | "seed";
+/** The fields that hold a function's values, rather than how it moves between them. */
+const SPANNED: readonly ShapeField[] = ["value", "start", "end", "min", "max"];
 
 /** A spline's knots, in time order: their times in % of the range, the first at 0 and the last at 100, and values, for Interval and Speed in % of the way from its Min to its Max. */
 type Knots = [number, number][];
@@ -262,7 +264,7 @@ const newSeed = () => String(Math.floor(Math.random() * 1_000_000));
 
 /** A function's lowest and highest value as typed, a spline's of its knots; 0 and 100 without any. */
 function extent(func: Func): [number, number] {
-  const values = func.shape === "spline" ? func.knots!.map(([, v]) => v) : (["value", "start", "end", "min", "max"] as const).map((f) => typed(func[f] ?? "")).filter(Number.isFinite);
+  const values = func.shape === "spline" ? func.knots!.map(([, v]) => v) : SPANNED.map((f) => typed(func[f] ?? "")).filter(Number.isFinite);
   return values.length ? [Math.min(...values), Math.max(...values)] : [0, 100];
 }
 
@@ -277,35 +279,37 @@ function extent(func: Func): [number, number] {
  * does not drift, Interval and Speed the middle. A new spline goes high, low,
  * high, low on four evenly spaced knots, so it shows what it can do.
  * Interval's and Speed's, on their own scale, given the value `own` to fall
- * back on, keep a wave's or noise's Min and Max for it, else get 0 and twice
- * the middle, or twice `own` when that is not above 0; going back, the scale
- * is the wave's Min and Max.
+ * back on when none is above 0, keep a wave's or noise's Min and Max for it,
+ * else get room past both ends of half the lowest; going back, the scale is
+ * the wave's Min and Max.
  */
 function reshaped(func: Func, shape: Shape, own?: number, toward?: number): Func {
   // An Interval or Speed spline's knots on its scale.
   const knotValue = (v: number) => (func.max === undefined ? v : typed(func.min ?? "") + (v * (typed(func.max) - typed(func.min ?? ""))) / 100);
   const spanned = func.shape === "constant" ? [func.value] : func.shape === "ramp" ? [func.start, func.end] : func.shape === "spline" ? func.knots!.map(([, v]) => String(knotValue(v))) : [func.min, func.max];
-  const values = spanned.map((v) => typed(v ?? "")).filter(Number.isFinite);
-  // Refused: a depth's whole range, Interval's or Speed's own value.
+  // Interval's and Speed's above 0 only.
+  const values = spanned.map((v) => typed(v ?? "")).filter((v) => Number.isFinite(v) && (own === undefined || v > 0));
+  // None: a depth's whole range, Interval's or Speed's own value.
   let [lo, hi] = values.length ? [Math.min(...values), Math.max(...values)] : own === undefined ? [0, 100] : [own, own];
   const value = toward === undefined ? (lo + hi) / 2 : Math.abs(lo - toward) > Math.abs(hi - toward) ? lo : hi;
-  if (lo === hi) [lo, hi] = toward === undefined ? [lo * 0.5, lo * 1.5] : [lo, Math.round(lo + (toward - lo) / 4)].sort((a, b) => a - b);
+  if (lo === hi) [lo, hi] = toward === undefined ? [lo * 0.5, lo * 1.5].map((v) => Math.round(v * 1000) / 1000) : [lo, Math.round(lo + (toward - lo) / 4)].sort((a, b) => a - b);
   if (shape === "spline") {
     const knots = (lo: number, hi: number): Knots => [[0, hi], [100 / 3, lo], [200 / 3, hi], [100, lo]];
     if (own === undefined) return { shape, knots: knots(lo, hi) };
     const kept = typed(func.min ?? "") < typed(func.max ?? "");
-    const [min, max] = kept ? [typed(func.min!), typed(func.max!)] : [0, lo + hi > 0 ? lo + hi : 2 * own];
+    // Else room past both ends, half the lowest, keeping the scale above 0.
+    const [min, max] = kept ? [typed(func.min!), typed(func.max!)] : [lo / 2, hi + lo / 2].map((v) => Math.round(v * 1000) / 1000);
     const scaled = (v: number) => Math.round(clamp(((v - min) / (max - min)) * 100, 0, 100));
     return { shape, min: String(min), max: String(max), knots: knots(scaled(lo), scaled(hi)) };
   }
-  const all: Func = { value: String(value), start: String(lo), end: String(hi), min: String(lo), max: String(hi), period: "10", phase: "0", width: "50", seed: newSeed(), ...func };
+  const all: Func = { value: String(value), start: String(lo), end: String(hi), min: String(lo), max: String(hi), period: shape === "noise" ? "1" : "10", phase: "0", width: "50", seed: newSeed(), ...func };
   return { shape, ...Object.fromEntries(SHAPES[shape].fields.map((f) => [f, all[f]])) };
 }
 
 /**
  * Generate's setup: how the next point's time is found, whether the first
  * point goes on Low (In) or High (Out), and a function for each of
- * Interval (ms), Speed, and High and Low (in % of the box). Only Interval
+ * Interval (s), Speed, and High and Low (in % of the box). Only Interval
  * timing so far.
  */
 interface GenerateSetup {
@@ -320,7 +324,7 @@ interface GenerateSetup {
 type FuncKey = "interval" | "speed" | "high" | "low";
 
 const constant = (value: string): Func => ({ shape: "constant", value });
-const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("500"), speed: constant("200"), high: constant("100"), low: constant("0") };
+const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("0.5"), speed: constant("200"), high: constant("100"), low: constant("0") };
 
 /** A random value, 0–1, for `seed` and `k`. */
 function hashed(seed: number, k: number) {
@@ -403,11 +407,12 @@ function generated(setup: GenerateSetup, range: Area): Action[] | null {
   const out: Action[] = [];
   for (let at = range.from, high = setup.first === "out"; at <= range.to; high = !high) {
     const pos = depthAt(high ? setup.high : setup.low, at);
-    const step = Math.max(funcAt(setup.timing === "speed" ? setup.speed : setup.interval, at - range.from, span), 1);
-    if (Number.isNaN(pos) || Number.isNaN(step)) return null;
+    const step = setup.timing === "speed" ? Math.max(funcAt(setup.speed, at - range.from, span), 1) : funcAt(setup.interval, at - range.from, span) * 1000;
+    // An Interval not above 0 is refused.
+    if (Number.isNaN(pos) || !(step > 0)) return null;
     out.push({ at, pos });
     if (setup.timing === "interval") {
-      at += Math.round(step);
+      at += Math.max(Math.round(step), 1);
       continue;
     }
     // A ms at a time, so no crossing is missed: as many steps in all as the range has ms. Between the rounded depths, as the points get them.
@@ -1165,11 +1170,9 @@ export default function EditorPage() {
   /** Which end Max speed keeps: In only lowers points, keeping the low reversals; Out only raises them. */
   const [speedAnchor, setSpeedAnchor] = usePersistedState<"in" | "out">("ossm:editorSpeedAnchor", "in", localStorage);
   /** Generate's setup, remembered unlike the other tools' fields. */
-  const [genSetup, setGenSetup] = usePersistedState<GenerateSetup>("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage);
+  const [genSetup, setGenSetup] = usePersistedState<GenerateSetup>("ossm:editorGenerateSetup", GENERATE_DEFAULTS, localStorage);
   /** Generate shows its Interval or Speed in a view of its own below the graph. */
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
-  // Setups kept while the functions were chains hold each in an array of one; unwrapped on the loaded object, once.
-  for (const k of ["interval", "speed", "high", "low"] as const) if (Array.isArray(genSetup[k])) genSetup[k] = (genSetup[k] as unknown as Func[])[0];
   /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
   const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
 
@@ -1263,7 +1266,7 @@ export default function EditorPage() {
   const [timingLow, timingHigh] = (() => {
     const func = genSetup[genSetup.timing];
     if (func.shape === "spline") return [typed(func.min ?? ""), typed(func.max ?? "")];
-    const peak = Math.max(...(["value", "start", "end", "min", "max"] as const).map((f) => typed(func[f] ?? "")).filter(Number.isFinite));
+    const peak = Math.max(...SPANNED.map((f) => typed(func[f] ?? "")).filter(Number.isFinite));
     return [0, peak > 0 ? peak * 1.25 : 1];
   })();
   /** Where a value of Generate's Interval or Speed goes in the timing view, in px. */
@@ -2123,9 +2126,10 @@ export default function EditorPage() {
               </Flex>
             </Text>
             {/* Each function: its shape, then its fields, two to a row; values in the function's unit, Speed's none, as Max speed's. */}
-            {([genSetup.timing === "speed" ? (["speed", "Speed", ""] as const) : (["interval", "Interval", "ms"] as const), ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([key, label, unit]) => {
+            {([genSetup.timing === "speed" ? (["speed", "Speed", ""] as const) : (["interval", "Interval", "s"] as const), ["high", "High", "%"], ["low", "Low", "%"]] as const).map(([key, label, unit]) => {
               const func = genSetup[key];
               const set = (next: Func) => setGenSetup({ ...genSetup, [key]: next });
+              const positive = (field: ShapeField) => field === "period" || (key === "interval" && SPANNED.includes(field));
               return (
                 <Flex key={key} direction="column" gap="2">
                   <Flex gap="2" align="center" justify="between">
@@ -2156,13 +2160,14 @@ export default function EditorPage() {
                       <TextField.Root
                         key={field}
                         type="number"
-                        step="any"
+                        // Interval's and a period's seconds by tenths with the wheel and arrows; typed, any.
+                        step={positive(field) ? 0.1 : "any"}
                         aria-label={`${label} ${field}`}
                         value={func[field] ?? ""}
                         onChange={(e) => set({ ...func, [field]: e.target.value })}
-                        // A period can't be typed negative.
-                        min={field === "period" ? 0 : undefined}
-                        onKeyDown={(e) => field === "period" && e.key === "-" && e.preventDefault()}
+                        // Not typed negative; the wheel and arrows keep them to 0.1 or more.
+                        min={positive(field) ? 0.1 : undefined}
+                        onKeyDown={(e) => positive(field) && e.key === "-" && e.preventDefault()}
                         style={{ flex: "1 1 40%", minWidth: 0 }}
                       >
                         <TextField.Slot side="left">{{ value: "Value", start: "Start", end: "End", min: "Min", max: "Max", period: "Period", phase: "Phase", width: "Width", seed: "Seed" }[field]}</TextField.Slot>
@@ -2177,6 +2182,7 @@ export default function EditorPage() {
                     ))}
                   </Flex>
                   {func.period !== undefined && !(typed(func.period) > 0) && <Text size="1" color="red">Period must be above 0.</Text>}
+                  {key === "interval" && SPANNED.some((f) => func[f] !== undefined && !(typed(func[f]) > 0)) && <Text size="1" color="red">Interval must be above 0.</Text>}
                 </Flex>
               );
             })}
