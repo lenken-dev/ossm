@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement } from "react";
 import { Box, Button, Callout, Flex, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, EnterIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
@@ -717,8 +717,13 @@ export default function EditorPage() {
   const setLibrary = (f: (lib: Entry[]) => Entry[]) => setLibraryFile((l) => ({ ossm: { version: 1, snippets: f(l.ossm.snippets) } }));
   /** The library's open folders, by their paths as JSON. */
   const [openFolders, setOpenFolders] = usePersistedState<string[]>("ossm:editorSnippetFolders", [], localStorage);
-  /** The library row being dragged, by its path, and the folder it would go into, by its path as JSON. */
-  const dragged = useRef<string[] | null>(null);
+  /**
+   * The library row being dragged, by its path, with the pointer, and the
+   * folder it would go into, by its path as JSON. Pointer events, not native
+   * drag and drop, so Shift and Ctrl still work over the graph (Wayland
+   * browsers don't report them during a native drag).
+   */
+  const [rowDrag, setRowDrag] = useState<{ at: string[]; x: number; y: number } | null>(null);
   const [dropOn, setDropOn] = useState<string | null>(null);
   const libraryInput = useRef<HTMLInputElement>(null);
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
@@ -2051,8 +2056,9 @@ export default function EditorPage() {
 
   /**
    * Insert the library snippet `s`: it follows the pointer until placed, as
-   * a paste; in the main script as an instance, in the advanced editor as
-   * its points and regions.
+   * a paste, or while its row is dragged until dropped on the graph; in the
+   * main script as an instance, in the advanced editor as its points and
+   * regions.
    */
   const insertSnippet = (s: Snippet) => {
     cancelPlacing();
@@ -2098,17 +2104,40 @@ export default function EditorPage() {
 
   /** A library row or the panel's top area as a place to drop a dragged row into the folder at `to`, the top level for none; only in the main script. */
   const dropInto = (to: string[]) => advanced ? {} : {
-    onDragOver: (e: DragEvent) => {
-      if (!dragged.current || !movable(dragged.current, to)) return;
-      e.preventDefault();
-      setDropOn(JSON.stringify(to));
-    },
-    onDragLeave: (e: DragEvent) => !e.currentTarget.contains(e.relatedTarget as Node) && setDropOn(null),
-    onDrop: (e: DragEvent) => {
-      e.preventDefault();
-      moveEntry(dragged.current!, to);
+    onPointerMove: () => rowDrag && movable(rowDrag.at, to) && setDropOn(JSON.stringify(to)),
+    onPointerLeave: () => setDropOn(null),
+    onPointerUp: () => rowDrag && movable(rowDrag.at, to) && moveEntry(rowDrag.at, to),
+  };
+
+  /**
+   * Drag the library row of `entry` at `at` once the pointer moves from where
+   * it was pressed: a snippet follows the pointer onto the graph, as a paste,
+   * until released there or elsewhere.
+   */
+  const dragRow = (e: PointerEvent, at: string[], entry: Entry) => {
+    if (e.button !== 0) return;
+    const [x, y] = [e.clientX, e.clientY];
+    let started = false;
+    const move = (m: globalThis.PointerEvent) => {
+      if (!started && Math.hypot(m.clientX - x, m.clientY - y) < 4) return;
+      if (!started) {
+        cancelPlacing();
+        if (!isFolder(entry) && !tool) insertSnippet(entry);
+      }
+      started = true;
+      setRowDrag({ at, x: m.clientX, y: m.clientY });
+    };
+    // After the row or graph under the pointer has taken it.
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (!started) return;
+      setRowDrag(null);
       setDropOn(null);
-    },
+      setPlacing(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
   };
 
   /** The library as a file: every snippet and folder. */
@@ -2285,9 +2314,14 @@ export default function EditorPage() {
     e.preventDefault();
     e.stopPropagation();
     if (lifted) return drop();
-    const point = pointerAt(e);
-    const [pasted, insert] = [positioned(point.at, point.pos, e.ctrlKey || e.metaKey), insertMode !== e.shiftKey];
+    const [pasted, insert] = pastedAt(e);
     if (!refuses(pasted, insert)) put(pasted, insert);
+  };
+
+  /** The pasted points at the pointer, and whether they would insert, by the modifiers held. */
+  const pastedAt = (e: { clientX: number; clientY: number; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
+    const point = pointerAt(e);
+    return [positioned(point.at, point.pos, e.ctrlKey || e.metaKey), insertMode !== e.shiftKey] as const;
   };
 
   /** The toolbox buttons go through the Clipboard API, which may ask for permission to paste. */
@@ -2559,7 +2593,8 @@ export default function EditorPage() {
    * The library's rows in the folder at `path`, `depth` deep, an open
    * folder's rows after it. In the main script a row is dragged onto a folder
    * row to move it there, and has Rename and Delete; a folder's New folder, a
-   * snippet's Edit. Insert is a snippet's everywhere.
+   * snippet's Edit. Everywhere a snippet's row is dragged onto the graph to
+   * insert it.
    */
   const libraryRows = (items: Entry[], path: string[], depth: number): ReactElement[] => sortedEntries(items).flatMap((e) => {
     const [name, at] = [entryName(e), [...path, entryName(e)]];
@@ -2571,18 +2606,9 @@ export default function EditorPage() {
         key={key}
         align="center"
         gap="1"
-        draggable={!advanced}
-        onDragStart={(d) => {
-          dragged.current = at;
-          d.dataTransfer.effectAllowed = "move";
-          d.dataTransfer.setData("text/plain", name);
-        }}
-        onDragEnd={() => {
-          dragged.current = null;
-          setDropOn(null);
-        }}
+        onPointerDown={!advanced || !isFolder(e) ? (p) => dragRow(p, at, e) : undefined}
         {...(isFolder(e) ? dropInto(at) : {})}
-        style={{ paddingLeft: depth * 16, minHeight: 28, borderRadius: 4, background: dropOn === key ? "var(--accent-a4)" : undefined }}
+        style={{ paddingLeft: depth * 16, minHeight: 28, borderRadius: 4, userSelect: "none", background: dropOn === key ? "var(--accent-a4)" : undefined }}
       >
         {/* A snippet's name shows a preview beside the panel: its points, its regions' boxes behind, its length and point count. */}
         <HoverCard.Root openDelay={300} closeDelay={0} open={isFolder(e) ? false : undefined}>
@@ -2617,9 +2643,6 @@ export default function EditorPage() {
         {!advanced && !isFolder(e) && (
           <IconButton size="1" variant="ghost" color="gray" disabled={!!placing} aria-label="Edit" title="Edit it in the advanced editor" onClick={() => openAdvanced({ path: at })}><MixerHorizontalIcon /></IconButton>
         )}
-        {!isFolder(e) && (
-          <IconButton size="1" variant="ghost" color="gray" disabled={!!tool} aria-label="Insert" title="Insert: place it with a click (or double-click the row)" onClick={() => insertSnippet(e)}><EnterIcon /></IconButton>
-        )}
         {!advanced && <>
           <NamePopover initial={name} taken={(n) => n !== name && nameTaken(path, n)} onName={(n) => n !== name && renameEntry(at, n)}>
             <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
@@ -2653,6 +2676,13 @@ export default function EditorPage() {
     <Flex direction="column">
       {library.length ? libraryRows(library, [], 0) : <Text size="1" color="gray">No snippets yet.</Text>}
     </Flex>
+    {/* The dragged row's icon and name follow the pointer. */}
+    {rowDrag && (
+      <Flex align="center" gap="2" style={{ position: "fixed", left: rowDrag.x + 12, top: rowDrag.y + 12, pointerEvents: "none", zIndex: 1 }}>
+        {entryAt(library, rowDrag.at) && isFolder(entryAt(library, rowDrag.at)!) ? <ChevronRightIcon /> : <ComponentInstanceIcon />}
+        <Text size="2">{rowDrag.at[rowDrag.at.length - 1]}</Text>
+      </Flex>
+    )}
   </Flex>;
 
   const sidebar = (
@@ -3473,6 +3503,12 @@ export default function EditorPage() {
               setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
             }}
             onPointerLeave={() => !lifted && setPlaceAt(null)}
+            // A snippet's row dragged here goes in where it is released, unless refused there.
+            onPointerUp={(e) => {
+              if (!rowDrag || !placing) return;
+              const [pasted, insert] = pastedAt(e);
+              if (!refuses(pasted, insert)) put(pasted, insert);
+            }}
             style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
           >
             {/* The chapters shaded behind the plot, as in the minimap. */}
