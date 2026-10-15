@@ -1928,7 +1928,7 @@ export default function EditorPage() {
           e.target.value = "";
         }}
       />
-      <Flex gap="2">
+      {!tool && <Flex gap="2">
         <Button variant="soft" style={{ flex: 1 }} onClick={() => videoInput.current?.click()}>
           <VideoIcon /> {videoFile ? "Change media" : "Open video or audio"}
         </Button>
@@ -1944,7 +1944,7 @@ export default function EditorPage() {
             <Cross2Icon /> Close
           </Button>
         )}
-      </Flex>
+      </Flex>}
       {!advanced && <>
       <Box>
         <Text as="label" size="2" weight="medium" mb="1" style={{ display: "block" }} htmlFor="editor-name">Name</Text>
@@ -1976,6 +1976,8 @@ export default function EditorPage() {
           <Callout.Text>{error}</Callout.Text>
         </Callout.Root>
       )}
+      {/* With a tool open, the panel only has the tool. */}
+      {!tool && <>
       <Text size="2" color="gray">
         {actions.length} points{selected.size > 1 && ` · ${selected.size} selected`} · {formatScriptTime((actions.length ? end - zero : 0) / 1000)}
       </Text>
@@ -1993,7 +1995,9 @@ export default function EditorPage() {
           <Switch checked={minimap} onCheckedChange={setMinimap} /> Minimap
         </Flex>
       </Text>
+      </>}
       {advanced && <>
+        {!tool && <>
         <Text as="label" size="2">
           <Flex gap="2" align="center">
             <Switch
@@ -2007,6 +2011,7 @@ export default function EditorPage() {
           </Flex>
         </Text>
         <Separator size="4" />
+        </>}
         {!tool ? <>
           {/* The tools, on the selected points or all, each with a small graph of what it does; Generate needs none. */}
           <Text size="2" weight="medium">Tools</Text>
@@ -2204,7 +2209,8 @@ export default function EditorPage() {
               </Button>
             </Flex>
           </>}
-          <Flex gap="2">
+          {/* Docked to the panel's bottom while it scrolls, covering what passes under; the padding takes the place of the gap and the panel's own. */}
+          <Flex gap="2" py="3" my="-3" style={{ position: "sticky", bottom: 0, background: "var(--color-background)" }}>
             <Button disabled={!preview} onClick={applyTool} style={{ flex: 1 }}>Apply</Button>
             <Button variant="soft" color="gray" onClick={() => setTool(null)} style={{ flex: 1 }}>Discard</Button>
           </Flex>
