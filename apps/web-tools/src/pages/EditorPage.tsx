@@ -1519,6 +1519,8 @@ export default function EditorPage() {
     setTimeline(mainTimeline.current ?? { states: [{ actions: main.actions, chapters, bookmarks, label: "Start" }], index: 0 });
     mainTimeline.current = null;
     setAdvanced(null);
+    // Cancelled, an open tool goes too, unapplied.
+    setTool(null);
     setBox(null);
     setSelected(new Set(done ? [] : from));
     setLifted(done && from ? new Set(from) : null);
@@ -2343,7 +2345,7 @@ export default function EditorPage() {
         <Flex gap="2" align="center" flexShrink="0" px="3" py="2" style={{ borderRadius: 6, background: "var(--accent-a3)" }}>
           <Text size="2" weight="medium" style={{ flexGrow: 1 }}>Advanced editor · {points(actions.length)}</Text>
           <Button size="1" disabled={!actions.length || !!tool} onClick={() => closeAdvanced(true)}>Done</Button>
-          <Button size="1" variant="soft" color="gray" disabled={!!tool} onClick={() => closeAdvanced(false)}>Cancel</Button>
+          <Button size="1" variant="soft" color="gray" onClick={() => closeAdvanced(false)}>Cancel</Button>
         </Flex>
       )}
       {/* Toolbox: convenience buttons for what the keyboard also does. */}
