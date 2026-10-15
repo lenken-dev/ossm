@@ -452,6 +452,8 @@ interface GenerateSetup {
 }
 
 type FuncKey = "interval" | "speed" | "high" | "low";
+/** The parts of Generate's setup, shown one at a time, with their handles in the graph: Position its box and First, Timing its timing and Interval or Speed. */
+type GenPart = "position" | "timing" | "high" | "low";
 
 const constant = (value: string): Func => ({ shape: "constant", value });
 const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("500"), speed: constant("200"), high: constant("100"), low: constant("0") };
@@ -1642,6 +1644,8 @@ export default function EditorPage() {
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
   /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
   const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
+  /** The part of Generate's setup shown, whose handles the graph shows; Position on opening. */
+  const [genPart, setGenPart] = useState<GenPart>("position");
 
   /** Open a tool on the selected points, or all but the regions', from their defaults. */
   const openTool = (kind: ToolKind) => {
@@ -1655,6 +1659,7 @@ export default function EditorPage() {
     // Over the selected points' time, or the view's.
     const [from, to] = selected.size ? [actions[picked[0]].at, actions[picked[picked.length - 1]].at] : [Math.round(view.from), Math.round(view.from + view.span)];
     setGenRange(rangeFields({ from, to, low: 0, high: 100 }, zero));
+    setGenPart("position");
     setBox(null);
   };
 
@@ -1665,6 +1670,7 @@ export default function EditorPage() {
     setTool({ kind: "generate", actions, picked: [], fastest: null, region: r });
     setRegionSetup(r.generate);
     setGenRange(rangeFields(r, zero));
+    setGenPart("position");
     setBox(null);
   };
 
@@ -1852,6 +1858,103 @@ export default function EditorPage() {
     dragKnot(e, key, next, i);
     // Not the first press of a double-click on the new knot.
     knotPress.current = null;
+  };
+
+  /**
+   * The handles of Generate's function `key` in the box or, for Interval and
+   * Speed, the timing view, `yOf` placing its values: a constant's line and a
+   * noise's Min and Max drag up and down, as do a ramp's ends; a wave's line
+   * moves its Phase, and its Min and Max together; its first peak in the box
+   * moves its Max, the trough after it its Min, and either the Period, the
+   * other staying; a pulse's falling edge its Width, around the peak; a spline's knots and line as dragKnot's and
+   * addKnot's. Values in whole steps: High's and Low's within 0–100,
+   * Interval's (ms) and Speed's from 1; none while a field they move is refused.
+   */
+  const funcHandles = (key: FuncKey, yOf: (v: number) => number) => {
+    const func = genSetup[key];
+    const { from, to, low, high } = genBox!;
+    const own = key === "interval" || key === "speed";
+    const f = (field: ShapeField) => typed(func[field] ?? "");
+    const curve = genCurve(func, own ? timingY : (v) => yOf(clamp(v, 0, 100)));
+    const fit = (v: number) => String(own ? Math.max(Math.round(v), 1) : clamp(Math.round(v), 0, 100));
+    /** Drag a handle; `move` gets how far the pointer has gone in ms and in the function's value, and gives the fields it changes. */
+    const drag = (e: PointerEvent<SVGElement>, move: (dt: number, dv: number) => Partial<Func>) => {
+      const scale = own ? (timingHigh - timingLow) / 100 : high > low ? 100 / (high - low) : 0;
+      dragHandle(e, (dt, dp) => setGenSetup((s) => ({ ...s, [key]: { ...s[key], ...move(dt, dp * scale) } })), own ? TIMING_HEIGHT - 2 * PAD : undefined);
+    };
+    /** A value's line across the box, dragged by it or its grip at the right end. */
+    const line = (field: ShapeField) => {
+      const [v0, ly] = [f(field), yOf(f(field))];
+      if (!Number.isFinite(v0)) return null;
+      const down = (e: PointerEvent<SVGElement>) => drag(e, (_, dv) => ({ [field]: fit(v0 + dv) }));
+      return (
+        <g key={field}>
+          <line x1={x(from)} x2={x(to)} y1={ly} y2={ly} strokeDasharray="6 4" strokeWidth={1.5} style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
+          {grip(`${field}-line`, [x(from), ly - GRIP / 2, x(to) - x(from), GRIP], "ns-resize", down)}
+          {grip(`${field}-grip`, [x(to) - GRIP / 2, ly - GRIP / 2, GRIP, GRIP], "ns-resize", down, true)}
+        </g>
+      );
+    };
+    /** A square grip `t` ms into the box at value `v`. */
+    const point = (k: string, t: number, v: number, cursor: string, down: (e: PointerEvent<SVGElement>) => void) => (Number.isFinite(t + v) ? grip(k, [x(from + t) - GRIP / 2, yOf(v) - GRIP / 2, GRIP, GRIP], cursor, down, true) : null);
+    switch (func.shape) {
+      case "constant":
+        return line("value");
+      case "noise":
+        return <>{line("min")}{line("max")}</>;
+      case "ramp":
+        return <>
+          {point("start", 0, f("start"), "ns-resize", (e) => drag(e, (_, dv) => ({ start: fit(f("start") + dv) })))}
+          {point("end", to - from, f("end"), "ns-resize", (e) => drag(e, (_, dv) => ({ end: fit(f("end") + dv) })))}
+        </>;
+      case "spline": {
+        // An Interval or Speed spline's knots on its scale, the timing view's.
+        const knotY = (v: number) => yOf(own ? timingLow + (v / 100) * (timingHigh - timingLow) : v);
+        return <>
+          {/* Its line, wider and unseen, adds a knot where clicked. */}
+          <polyline points={curve} fill="none" strokeWidth={GRIP} stroke="transparent" style={{ cursor: "copy" }} onPointerDown={(e) => addKnot(e, key)} />
+          {func.knots!.map(([t, v], i, knots) => grip(
+            `${key}-${i}`,
+            [x(from + (t / 100) * (to - from)) - GRIP / 2, knotY(v) - GRIP / 2, GRIP, GRIP],
+            i === 0 || i === knots.length - 1 ? "ns-resize" : "move",
+            (e) => dragKnot(e, key, knots, i),
+            true,
+          ))}
+        </>;
+      }
+    }
+    // A wave: Max on its first peak, a pulse's in the middle of its Width, Min on the trough half a period after.
+    const period = f("period");
+    if (!(period > 0)) return null;
+    const half = func.shape === "pulse" ? f("width") / 200 : 0.25;
+    /** The Phase, in %, that puts a peak `t` ms into the box with a period of `p`, and for a pulse half its Width `h`. */
+    const phaseAt = (t: number, p: number, h = half) => String(Math.round((((h - t / p) % 1) + 1) % 1 * 1000) / 10);
+    const peak = ((((half - f("phase") / 100) % 1) + 1) % 1) * period;
+    // Moved together, Min and Max stop where either would leave its range, keeping the wave's height.
+    const [lo, hi] = [Math.min(f("min"), f("max")), Math.max(f("min"), f("max"))];
+    const shift = (dv: number) => (own ? Math.max(dv, 1 - lo) : clamp(dv, -lo, 100 - hi));
+    return <>
+      {/* Its line, wider and unseen, under the grips. */}
+      <polyline points={curve} fill="none" strokeWidth={GRIP} stroke="transparent" style={{ cursor: "move" }} onPointerDown={(e) => drag(e, (dt, dv) => ({
+        min: fit(f("min") + shift(dv)),
+        max: fit(f("max") + shift(dv)),
+        phase: phaseAt(peak + dt, period),
+      }))} />
+      {/* The peak and the trough each set the Period with the other staying. */}
+      {point("max", peak, f("max"), "move", (e) => drag(e, (dt, dv) => {
+        const p = Math.max(Math.round(period - 2 * dt), 2);
+        return { max: fit(f("max") + dv), period: String(p), phase: phaseAt(peak + period / 2 - p / 2, p) };
+      }))}
+      {point("min", peak + period / 2, f("min"), "move", (e) => drag(e, (dt, dv) => {
+        const p = Math.max(Math.round(period + 2 * dt), 2);
+        return { min: fit(f("min") + dv), period: String(p), phase: phaseAt(peak, p) };
+      }))}
+      {/* A pulse's falling edge after the peak, halfway up, sets its Width around the peak, which stays, as does the trough. */}
+      {func.shape === "pulse" && point("width", peak + period * half, (f("min") + f("max")) / 2, "ew-resize", (e) => drag(e, (dt) => {
+        const w = clamp(Math.round(((2 * (period * half + dt)) / period) * 100), 1, 99);
+        return { width: String(w), phase: phaseAt(peak, period, w / 200) };
+      }))}
+    </>;
   };
 
   /** A grip of a tool's handle in the graph, at `x`, `y` and as wide and high as given; `square` shows it, as the selection box's corners. */
@@ -3056,9 +3159,15 @@ export default function EditorPage() {
               </SegmentedControl.Root>
             </Flex>
           </>}
-          {/* The range box's fields, then the setup: only Interval timing and constants so far. */}
+          {/* One part of the setup at a time: Position the range box's fields and First, Timing the timing and its function, High and Low theirs. */}
           {tool.kind === "generate" && <>
-            {([["from", "to"], ["low", "high"]] as const).map((row) => (
+            <SegmentedControl.Root size="1" value={genPart} onValueChange={(v) => setGenPart(v as GenPart)} title="The part of the setup to edit, here and with its handles in the graph">
+              <SegmentedControl.Item value="position">Position</SegmentedControl.Item>
+              <SegmentedControl.Item value="timing">Timing</SegmentedControl.Item>
+              <SegmentedControl.Item value="high">High</SegmentedControl.Item>
+              <SegmentedControl.Item value="low">Low</SegmentedControl.Item>
+            </SegmentedControl.Root>
+            {genPart === "position" && ([["from", "to"], ["low", "high"]] as const).map((row) => (
               <Flex key={row[0]} gap="2">
                 {row.map((field) => (
                   <TextField.Root
@@ -3076,14 +3185,14 @@ export default function EditorPage() {
                 ))}
               </Flex>
             ))}
-            <Flex gap="2" align="center" justify="between">
+            {genPart === "position" && <Flex gap="2" align="center" justify="between">
               <Text size="2">First</Text>
               <SegmentedControl.Root size="1" value={genSetup.first} onValueChange={(v) => setGenSetup({ ...genSetup, first: v as "in" | "out" })} title="Start on Low (In) or High (Out)">
                 <SegmentedControl.Item value="in">In</SegmentedControl.Item>
                 <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
               </SegmentedControl.Root>
-            </Flex>
-            <Flex gap="2" align="center" justify="between">
+            </Flex>}
+            {genPart === "timing" && <Flex gap="2" align="center" justify="between">
               <Text size="2">Timing</Text>
               <SegmentedControl.Root
                 size="1"
@@ -3103,9 +3212,9 @@ export default function EditorPage() {
                   Markers
                 </SegmentedControl.Item>
               </SegmentedControl.Root>
-            </Flex>
+            </Flex>}
             {/* Markers timing: which bookmark names it puts points at, all at first; in a popover, as there can be many. */}
-            {genSetup.timing === "markers" && (() => {
+            {genPart === "timing" && genSetup.timing === "markers" && (() => {
               const names = [...new Set(bookmarks.map((b) => b.name))].sort((a, b) => a.localeCompare(b));
               const skip = genSetup.skip ?? [];
               const used = names.filter((n) => !skip.includes(n)).length;
@@ -3142,19 +3251,19 @@ export default function EditorPage() {
                 </Flex>
               );
             })()}
-            {genSetup.timing !== "markers" && (
+            {genPart === "timing" && genSetup.timing !== "markers" && (
               <Text as="label" size="2">
                 <Flex gap="2" align="center">
                   <Switch checked={timingView} onCheckedChange={setTimingView} /> Show {genSetup.timing === "speed" ? "Speed" : "Interval"} below the graph
                 </Flex>
               </Text>
             )}
-            {/* Each function: its shape, then its fields, two to a row; values in the function's unit, Speed's none, as Max speed's. Markers timing has none. */}
+            {/* The shown part's function: its shape, then its fields, two to a row; values in the function's unit, Speed's none, as Max speed's. Markers timing has none. */}
             {([
               ...(genSetup.timing === "speed" ? [["speed", "Speed", ""] as const] : genSetup.timing === "interval" ? [["interval", "Interval", "s"] as const] : []),
               ["high", "High", "%"] as const,
               ["low", "Low", "%"] as const,
-            ]).map(([key, label, unit]) => {
+            ]).filter(([key]) => key === genPart || (genPart === "timing" && (key === "interval" || key === "speed"))).map(([key, label, unit]) => {
               const func = genSetup[key];
               const set = (next: Func) => setGenSetup({ ...genSetup, [key]: next });
               /** Periods and Interval's values: kept in whole ms, shown in s, above 0. */
@@ -3182,7 +3291,10 @@ export default function EditorPage() {
                       </Select.Content>
                     </Select.Root>
                   </Flex>
-                  {func.shape === "spline" && <Text size="1" color="gray">Drag its knots in the {key === "high" || key === "low" ? "graph" : "view below the graph"}; click its line to add one, double-click one to remove it.</Text>}
+                  <Text size="1" color="gray">
+                    Drag its handles in the {key === "high" || key === "low" ? "graph" : "view below the graph"}
+                    {func.shape === "spline" ? "; click its line to add a knot, double-click one to remove it." : "."}
+                  </Text>
                   <Flex gap="2" wrap="wrap">
                     {/* An Interval or Speed spline's scale too. */}
                     {[...SHAPES[func.shape].fields, ...(func.shape !== "spline" || func.max === undefined ? [] : (["min", "max"] as const))].map((field) => (
@@ -3804,37 +3916,25 @@ export default function EditorPage() {
                 </g>
               );
             })()}
-            {/* Generate's range box, like the selection box: its edges and corners resize it, its body moves it. High and Low's curves dashed in it. */}
+            {/* Generate's range box, like the selection box: with Position shown its edges and corners resize it, its body moves it. High and Low's curves dashed in it, the shown one's bolder, with its handles. */}
             {genBox && (() => {
               const b = { from: x(genBox.from), to: x(genBox.to), low: y(genBox.low), high: y(genBox.high) };
-              const curve = (func: Func) => genCurve(func, (v) => y(genBox.low + (clamp(v, 0, 100) * (genBox.high - genBox.low)) / 100));
+              const depth = (v: number) => y(genBox.low + (v * (genBox.high - genBox.low)) / 100);
+              const position = genPart === "position";
               return (
                 <g>
-                  <rect x={b.from} y={b.high} width={b.to - b.from} height={b.low - b.high} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "move" }} onPointerDown={(e) => dragGenerate(e, ["from", "to", "low", "high"])} />
-                  {/* A spline's line, wider and unseen, adds a knot where clicked; under the box's edges. */}
+                  <rect x={b.from} y={b.high} width={b.to - b.from} height={b.low - b.high} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "move", pointerEvents: position ? undefined : "none" }} onPointerDown={(e) => dragGenerate(e, ["from", "to", "low", "high"])} />
                   {(["high", "low"] as const).map((key) => (
-                    <g key={key}>
-                      <polyline points={curve(genSetup[key])} fill="none" strokeWidth={1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
-                      {genSetup[key].shape === "spline" && (
-                        <polyline points={curve(genSetup[key])} fill="none" strokeWidth={GRIP} stroke="transparent" style={{ cursor: "copy" }} onPointerDown={(e) => addKnot(e, key)} />
-                      )}
-                    </g>
+                    <polyline key={key} points={genCurve(genSetup[key], (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
                   ))}
-                  {GRIPS.map(([h, v]) => grip(
+                  {position && GRIPS.map(([h, v]) => grip(
                     `${h}-${v}`,
                     [h ? b[h] - GRIP / 2 : b.from, v ? b[v] - GRIP / 2 : b.high, h ? GRIP : b.to - b.from, v ? GRIP : b.low - b.high],
                     h && v ? ((h === "from") === (v === "high") ? "nwse-resize" : "nesw-resize") : h ? "ew-resize" : "ns-resize",
                     (e) => dragGenerate(e, [h, v].filter((s) => s !== null)),
                     !!(h && v),
                   ))}
-                  {/* The splines' knots on top, at their own values; the ends only move in value. */}
-                  {(["high", "low"] as const).map((key) => genSetup[key].shape === "spline" && genSetup[key].knots!.map(([t, v], i, knots) => grip(
-                    `${key}-${i}`,
-                    [x(genBox.from + (t / 100) * (genBox.to - genBox.from)) - GRIP / 2, y(genBox.low + (v / 100) * (genBox.high - genBox.low)) - GRIP / 2, GRIP, GRIP],
-                    i === 0 || i === knots.length - 1 ? "ns-resize" : "move",
-                    (e) => dragKnot(e, key, knots, i),
-                    true,
-                  )))}
+                  {(genPart === "high" || genPart === "low") && funcHandles(genPart, depth)}
                 </g>
               );
             })()}
@@ -3878,7 +3978,7 @@ export default function EditorPage() {
           <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
           <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
         </Box>
-        {/* Generate's Interval or Speed in the graph's time, over the box's, on a scale of its own from 0 at the bottom; a spline's knots and line take the same gestures as in the box. */}
+        {/* Generate's Interval or Speed in the graph's time, over the box's, on a scale of its own from 0 at the bottom; with Timing shown, its handles as High's and Low's in the box. */}
         {timingShown && (() => {
           const key = genSetup.timing as "interval" | "speed";
           const func = genSetup[key];
@@ -3897,16 +3997,7 @@ export default function EditorPage() {
                     </g>
                   ))}
                   <polyline points={genCurve(func, timingY)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--blue-9)", pointerEvents: "none" }} />
-                  {func.shape === "spline" && <>
-                    <polyline points={genCurve(func, timingY)} fill="none" strokeWidth={GRIP} stroke="transparent" style={{ cursor: "copy" }} onPointerDown={(e) => addKnot(e, key)} />
-                    {func.knots!.map(([t, v], i, knots) => grip(
-                      `${key}-${i}`,
-                      [x(genBox.from + (t / 100) * (genBox.to - genBox.from)) - GRIP / 2, timingY(timingLow + (v / 100) * (timingHigh - timingLow)) - GRIP / 2, GRIP, GRIP],
-                      i === 0 || i === knots.length - 1 ? "ns-resize" : "move",
-                      (e) => dragKnot(e, key, knots, i),
-                      true,
-                    ))}
-                  </>}
+                  {genPart === "timing" && funcHandles(key, timingY)}
                 </>}
               </svg>
             </Box>
