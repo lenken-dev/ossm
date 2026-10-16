@@ -110,6 +110,16 @@ const DEFAULT_SPEED_LIMIT = 5;
 const DEPTH_ENDS: [string, string] = ["Out", "In"];
 const STROKE_ENDS: [string, string] = ["In", "Out"];
 
+/** The media's time moves on: it plays and is not seeking or waiting for data. */
+const advancing = (media: HTMLMediaElement) =>
+  !media.paused && !media.seeking && media.readyState >= media.HAVE_FUTURE_DATA && media.playbackRate > 0;
+
+/** The script playhead, in script ms. */
+interface Playhead {
+  get(): number;
+  set(ms: number): void;
+}
+
 const isHomed = (state: OssmState | null) => state?.state === "ready" || state?.state === "streaming";
 
 /** Why the machine does not follow the funscript, or `null` when it does. */
@@ -235,6 +245,43 @@ export default function PlayerPage() {
   const [offset, setOffset] = usePersistedState("ossm:playerOffset", -50);
   /** How fast the script plays against the video, which keeps its own speed. */
   const [scriptSpeed, setScriptSpeed] = usePersistedState("ossm:playerScriptSpeed", 1);
+  /** The script follows the media's playhead; otherwise it keeps its own and only plays and pauses with the media. */
+  const [synced, setSynced] = usePersistedState("ossm:playerSynced", true);
+  /**
+   * The script's own clock while not synced: script time `at` in ms, moving
+   * on at `rate` script ms per ms from `since` (`performance.now()`) while
+   * the media advances, else `since` is `null`.
+   */
+  const clock = useRef<{ at: number; since: number | null; rate: number }>({ at: 0, since: null, rate: 1 });
+  const clockTime = () => {
+    const { at, since, rate } = clock.current;
+    return since === null ? at : at + (performance.now() - since) * rate;
+  };
+  /** Restart the clock from now, running whenever the media advances. */
+  const retimeClock = () => {
+    const media = videoRef.current;
+    clock.current = {
+      at: clockTime(),
+      since: media && advancing(media) ? performance.now() : null,
+      rate: (media?.playbackRate ?? 1) * scriptSpeed,
+    };
+  };
+  const playhead = useRef<Playhead>(null!);
+  playhead.current = synced ? {
+    get: () => (videoRef.current?.currentTime ?? 0) * 1000 * scriptSpeed,
+    set: (ms) => {
+      const media = videoRef.current;
+      if (media) media.currentTime = Math.min(Math.max(ms / scriptSpeed / 1000, 0), media.duration || 0);
+    },
+  } : {
+    get: clockTime,
+    set: (ms) => {
+      clock.current.at = Math.min(Math.max(ms, 0), played ? played.at[played.at.length - 1] : 0);
+      if (clock.current.since !== null) clock.current.since = performance.now();
+    },
+  };
+  /** Script time in ms the machine plays at, `offset` ahead of the playhead. */
+  const streamTime = () => playhead.current.get() + offset * scriptSpeed;
   /** Script time in ms to put the silent clock back at once it reloads at a new length. */
   const silentResume = useRef<number | null>(null);
   const stream = useRef(new FunscriptStream());
@@ -259,8 +306,7 @@ export default function PlayerPage() {
   /** Send `stream:end` if a stream is open. */
   const endStream = (reason: string) => {
     if (!stream.current.end()) return;
-    const media = ((videoRef.current?.currentTime ?? 0) * 1000 + offset) * scriptSpeed;
-    void ossm?.command("stream:end", `(${reason}, media=${Math.round(media)})`);
+    void ossm?.command("stream:end", `(${reason}, media=${Math.round(streamTime())})`);
   };
 
   // Entering funscript mode (or connecting in it) sends `go:streaming`.
@@ -319,18 +365,18 @@ export default function PlayerPage() {
     if (mode !== "funscript" || paused || blocked || !ossm || !played) return;
     const id = setInterval(() => {
       const video = videoRef.current;
-      if (!video || video.seeking || video.readyState < video.HAVE_FUTURE_DATA || video.playbackRate <= 0) return;
-      const media = (video.currentTime * 1000 + offset) * scriptSpeed;
-      for (const p of stream.current.tick(played, media, video.playbackRate * scriptSpeed, reverse, ossm.lookahead)) {
+      if (!video || !advancing(video)) return;
+      for (const p of stream.current.tick(played, streamTime(), video.playbackRate * scriptSpeed, reverse, ossm.lookahead)) {
         void ossm.streamPoint(p.position, p.duration);
       }
     }, TICK_MS);
     return () => clearInterval(id);
-  }, [mode, paused, blocked, ossm, played, offset, scriptSpeed, reverse]);
+  }, [mode, paused, blocked, ossm, played, offset, scriptSpeed, synced, reverse]);
 
   // Video events that matter; in funscript mode all but `playing` end the stream.
   const videoEvent = (e: SyntheticEvent<HTMLMediaElement>) => {
     log(`video ${e.type}`);
+    retimeClock();
     if (mode === "funscript" && e.type !== "playing") endStream(e.type);
   };
 
@@ -637,6 +683,20 @@ export default function PlayerPage() {
             </Text>
             <Text as="label" size="2" weight="medium">
               <Flex align="center" justify="between" gap="2">
+                Sync with media
+                <Switch
+                  checked={synced}
+                  disabled={!paused}
+                  onCheckedChange={(on) => {
+                    // The script's own playhead starts where the media's left it.
+                    if (!on) clock.current = { at: playhead.current.get(), since: null, rate: 1 };
+                    setSynced(on);
+                  }}
+                />
+              </Flex>
+            </Text>
+            <Text as="label" size="2" weight="medium">
+              <Flex align="center" justify="between" gap="2">
                 Loop
                 <Switch checked={looped} onCheckedChange={setLooped} />
               </Flex>
@@ -696,6 +756,7 @@ export default function PlayerPage() {
     },
     onPlaying: videoEvent,
     onSeeking: videoEvent,
+    onSeeked: retimeClock,
     onWaiting: videoEvent,
     onRateChange: videoEvent,
     onEnded: videoEvent,
@@ -780,7 +841,7 @@ export default function PlayerPage() {
                   }}
                   onPointerDown={(e) => dragOverlay(e, "nsew")}
                 >
-                  <ScriptPreview script={played} speed={scriptSpeed} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
+                  <ScriptPreview script={played} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
                   {arranging &&
                     RESIZE_HANDLES.map((h) => <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />)}
                   {/* Stops the pointer here, so pressing Done does not start a drag. */}
@@ -887,7 +948,7 @@ export default function PlayerPage() {
               </Flex>
             </Flex>
             <Box position="relative" flexShrink="0">
-              <ScriptPreview script={played} speed={scriptSpeed} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
+              <ScriptPreview script={played} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
               <Box
                 title="Drag to resize"
                 style={{
@@ -1175,10 +1236,11 @@ const POSITION_INTERVAL_MS = 100;
  * not follow. The machine's planned position is a dot on the playhead, and
  * with `machineLine` also a line trailing it.
  */
-function ScriptPreview({ script, speed, reverse, videoRef, ossm, machineLine, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
+function ScriptPreview({ script, speed, playhead, reverse, videoRef, ossm, machineLine, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
   script: Funscript;
   /** Script time per video time; the script's points show at their video time. */
   speed: number;
+  playhead: RefObject<Playhead>;
   reverse: boolean;
   videoRef: RefObject<HTMLMediaElement | null>;
   ossm: Ossm | null;
@@ -1227,7 +1289,7 @@ function ScriptPreview({ script, speed, reverse, videoRef, ossm, machineLine, no
     // The notified machine positions, at the video times in ms they arrived, for the machine line.
     const trail: { at: number[]; pos: number[] } = { at: [], pos: [] };
     const record = () => {
-      const now = (videoRef.current?.currentTime ?? 0) * 1000;
+      const now = playhead.current.get() / speed;
       const pos = ossm?.streamPosition() ?? null;
       // Seeking back starts the trail over.
       if (now < trail.at[trail.at.length - 1]) trail.at.length = trail.pos.length = 0;
@@ -1245,7 +1307,7 @@ function ScriptPreview({ script, speed, reverse, videoRef, ossm, machineLine, no
       frame = requestAnimationFrame(draw);
       const elapsed = performance.now() - drawnAt;
       drawnAt += elapsed;
-      const now = (videoRef.current?.currentTime ?? 0) * 1000;
+      const now = playhead.current.get() / speed;
       const from = now - before;
       const to = now + after;
       const x = (at: number) => ((at - from) / (to - from)) * width;
@@ -1325,7 +1387,7 @@ function ScriptPreview({ script, speed, reverse, videoRef, ossm, machineLine, no
       cancelAnimationFrame(frame);
       ossm?.removeEventListener("position", record);
     };
-  }, [script, speed, reverse, appearance, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
+  }, [script, speed, playhead, reverse, appearance, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
 
   /**
    * Drag the graph sideways to seek, as if grabbing the line; playback pauses
@@ -1336,12 +1398,10 @@ function ScriptPreview({ script, speed, reverse, videoRef, ossm, machineLine, no
     if (!media) return;
     e.preventDefault();
     const target = e.currentTarget;
-    const [startX, startTime, wasPlaying] = [e.clientX, media.currentTime, !media.paused];
+    const [startX, startTime, wasPlaying] = [e.clientX, playhead.current.get(), !media.paused];
     media.pause();
-    const move = (m: globalThis.PointerEvent) => {
-      const t = startTime - (((m.clientX - startX) / width) * (before + after)) / 1000;
-      media.currentTime = Math.min(Math.max(t, 0), media.duration || 0);
-    };
+    const move = (m: globalThis.PointerEvent) =>
+      playhead.current.set(startTime - ((m.clientX - startX) / width) * (before + after) * speed);
     target.setPointerCapture(e.pointerId);
     target.addEventListener("pointermove", move);
     target.addEventListener("lostpointercapture", () => {
