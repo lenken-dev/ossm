@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type RefObject, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
-import { Box, Button, Callout, Dialog, Flex, IconButton, Popover, SegmentedControl, Select, Separator, Switch, Text, Theme, Tooltip } from "@radix-ui/themes";
+import { Box, Button, Callout, Dialog, Flex, Heading, IconButton, SegmentedControl, Select, Separator, Switch, Text, Theme, Tooltip } from "@radix-ui/themes";
 import {
   CheckIcon,
   Cross2Icon,
@@ -417,53 +417,7 @@ export default function PlayerPage() {
     }
   };
 
-  const lineWidthSlider = (
-    <LabeledSlider
-      label="Line width"
-      value={overlay.lineWidth}
-      display={`${overlay.lineWidth} px`}
-      min={1}
-      max={8}
-      step={0.5}
-      onChange={(lineWidth) => setOverlay({ ...overlay, lineWidth })}
-    />
-  );
-  const windowSliders = (
-    <>
-      <Text as="label" size="2" weight="medium">
-        <Flex align="center" justify="between" gap="2">
-          Show machine line
-          <Switch checked={machineLine} onCheckedChange={setMachineLine} />
-        </Flex>
-      </Text>
-      <Text as="label" size="2" weight="medium">
-        <Flex align="center" justify="between" gap="2">
-          Show minimap
-          <Switch checked={minimap} onCheckedChange={setMinimap} />
-        </Flex>
-      </Text>
-      <LabeledSlider
-        label="Before playhead"
-        value={graphWindow.before}
-        display={`${graphWindow.before / 1000} s`}
-        min={0}
-        max={10000}
-        step={1000}
-        onChange={(before) => setGraphWindow({ ...graphWindow, before })}
-      />
-      <LabeledSlider
-        label="After playhead"
-        value={Math.max(AFTER_STOPS.findIndex((s) => s * 1000 >= graphWindow.after), 0)}
-        display={`${graphWindow.after / 1000} s`}
-        min={0}
-        max={AFTER_STOPS.length - 1}
-        step={1}
-        onChange={(i) => setGraphWindow({ ...graphWindow, after: AFTER_STOPS[i] * 1000 })}
-      />
-    </>
-  );
-
-  /** Show and hide the controls pane, and the graph and its settings, in theater mode; in the pane while it is shown. */
+  /** Show and hide the controls pane in theater mode; in the pane while it is shown. */
   const theaterToggles = (style?: CSSProperties) => (
     <Flex gap="2" style={style}>
       <IconButton
@@ -473,56 +427,6 @@ export default function PlayerPage() {
       >
         <HamburgerMenuIcon />
       </IconButton>
-      {mode === "funscript" && played && (
-        <Popover.Root>
-          <Popover.Trigger>
-            <IconButton variant="surface" aria-label="Settings">
-              <GearIcon />
-            </IconButton>
-          </Popover.Trigger>
-          <Popover.Content width="260px">
-            <Flex direction="column" gap="3">
-              <Text as="label" size="2" weight="medium">
-                <Flex align="center" justify="between" gap="2">
-                  Show graph
-                  <Switch checked={showGraph} onCheckedChange={setShowGraph} />
-                </Flex>
-              </Text>
-              {showGraph && (
-                <>
-                  <Separator size="4" />
-                  {lineWidthSlider}
-                  {windowSliders}
-                  <LabeledSlider
-                    label="Background"
-                    value={overlay.background}
-                    display={`${overlay.background}%`}
-                    min={0}
-                    max={100}
-                    step={5}
-                    onChange={(background) => setOverlay({ ...overlay, background })}
-                  />
-                  <Popover.Close>
-                    <Button variant="soft" onClick={() => setArranging(true)}>
-                      <MoveIcon /> Move and resize
-                    </Button>
-                  </Popover.Close>
-                  <Button
-                    variant="soft"
-                    color="gray"
-                    onClick={() => {
-                      setOverlay(DEFAULT_OVERLAY);
-                      setGraphWindow(DEFAULT_WINDOW);
-                    }}
-                  >
-                    Reset
-                  </Button>
-                </>
-              )}
-            </Flex>
-          </Popover.Content>
-        </Popover.Root>
-      )}
     </Flex>
   );
 
@@ -578,6 +482,7 @@ export default function PlayerPage() {
             {paused ? <><PlayIcon /> Play</> : <><PauseIcon /> Pause</>}
           </Button>
         )}
+        {mode === "funscript" && <Heading size="3">Machine</Heading>}
         {!navigator.bluetooth ? (
           <Text size="2" color="gray">
             Web Bluetooth is not supported in this browser (use Chrome or Edge).
@@ -624,7 +529,6 @@ export default function PlayerPage() {
         )}
         {mode === "funscript" && (
           <>
-            <Separator size="4" />
             {ossm && ossm.lookahead === 0 ? (
               <Text size="2" color="gray">This firmware cannot stream.</Text>
             ) : ossm && state && isHomed(state) && (
@@ -663,6 +567,23 @@ export default function PlayerPage() {
                 onChange={setOffset}
               />
             )}
+            {ready && (
+              <Button
+                variant="soft"
+                color="red"
+                size="3"
+                style={{ height: 64 }}
+                onClick={() => {
+                  videoRef.current?.pause();
+                  endStream("stop");
+                  void ossm.command("go:menu");
+                }}
+              >
+                <StopIcon /> Stop
+              </Button>
+            )}
+            <Separator size="4" />
+            <Heading size="3">Funscript</Heading>
             <LabeledSlider
               label="Script speed"
               value={scriptSpeed}
@@ -709,20 +630,89 @@ export default function PlayerPage() {
                 <Switch checked={looped} onCheckedChange={setLooped} />
               </Flex>
             </Text>
-            {ready && (
-              <Button
-                variant="soft"
-                color="red"
-                size="3"
-                style={{ height: 64 }}
-                onClick={() => {
-                  videoRef.current?.pause();
-                  endStream("stop");
-                  void ossm.command("go:menu");
-                }}
-              >
-                <StopIcon /> Stop
-              </Button>
+            <Separator size="4" />
+            <Heading size="3">Graph</Heading>
+            {inTheater && (
+              <Text as="label" size="2" weight="medium">
+                <Flex align="center" justify="between" gap="2">
+                  Show graph
+                  <Switch checked={showGraph} onCheckedChange={setShowGraph} />
+                </Flex>
+              </Text>
+            )}
+            {(!inTheater || showGraph) && (
+              <>
+                <LabeledSlider
+                  label="Line width"
+                  value={overlay.lineWidth}
+                  display={`${overlay.lineWidth} px`}
+                  min={1}
+                  max={8}
+                  step={0.5}
+                  onChange={(lineWidth) => setOverlay({ ...overlay, lineWidth })}
+                />
+                <Text as="label" size="2" weight="medium">
+                  <Flex align="center" justify="between" gap="2">
+                    Show machine line
+                    <Switch checked={machineLine} onCheckedChange={setMachineLine} />
+                  </Flex>
+                </Text>
+                {!inTheater && (
+                  <Text as="label" size="2" weight="medium">
+                    <Flex align="center" justify="between" gap="2">
+                      Show minimap
+                      <Switch checked={minimap} onCheckedChange={setMinimap} />
+                    </Flex>
+                  </Text>
+                )}
+                <LabeledSlider
+                  label="Before playhead"
+                  value={graphWindow.before}
+                  display={`${graphWindow.before / 1000} s`}
+                  min={0}
+                  max={10000}
+                  step={1000}
+                  onChange={(before) => setGraphWindow({ ...graphWindow, before })}
+                />
+                <LabeledSlider
+                  label="After playhead"
+                  value={Math.max(AFTER_STOPS.findIndex((s) => s * 1000 >= graphWindow.after), 0)}
+                  display={`${graphWindow.after / 1000} s`}
+                  min={0}
+                  max={AFTER_STOPS.length - 1}
+                  step={1}
+                  onChange={(i) => setGraphWindow({ ...graphWindow, after: AFTER_STOPS[i] * 1000 })}
+                />
+                {inTheater ? (
+                  <>
+                    <LabeledSlider
+                      label="Background"
+                      value={overlay.background}
+                      display={`${overlay.background}%`}
+                      min={0}
+                      max={100}
+                      step={5}
+                      onChange={(background) => setOverlay({ ...overlay, background })}
+                    />
+                    <Button variant="soft" disabled={!played} onClick={() => setArranging(true)}>
+                      <MoveIcon /> Move and resize
+                    </Button>
+                  </>
+                ) : (
+                  <Text size="1" color="gray">Drag the top edge of the graph to change its height.</Text>
+                )}
+                <Button
+                  variant="soft"
+                  color="gray"
+                  onClick={() => {
+                    setOverlay(DEFAULT_OVERLAY);
+                    setGraphHeight(PREVIEW_HEIGHT);
+                    setGraphWindow(DEFAULT_WINDOW);
+                  }}
+                >
+                  Reset
+                </Button>
+              </>
             )}
           </>
         )}
@@ -913,31 +903,6 @@ export default function PlayerPage() {
             <Flex align="center" justify="between" gap="2">
               <Text size="2" weight="medium" truncate title={script.name}>{script.name}</Text>
               <Flex gap="2">
-                <Popover.Root>
-                  <Popover.Trigger>
-                    <IconButton variant="soft" color="gray" aria-label="Graph settings">
-                      <GearIcon />
-                    </IconButton>
-                  </Popover.Trigger>
-                  <Popover.Content width="260px">
-                    <Flex direction="column" gap="3">
-                      {lineWidthSlider}
-                      {windowSliders}
-                      <Text size="1" color="gray">Drag the top edge of the graph to change its height.</Text>
-                      <Button
-                        variant="soft"
-                        color="gray"
-                        onClick={() => {
-                          setOverlay({ ...overlay, lineWidth: DEFAULT_OVERLAY.lineWidth });
-                          setGraphHeight(PREVIEW_HEIGHT);
-                          setGraphWindow(DEFAULT_WINDOW);
-                        }}
-                      >
-                        Reset
-                      </Button>
-                    </Flex>
-                  </Popover.Content>
-                </Popover.Root>
                 <Button variant="soft" onClick={() => scriptInput.current?.click()}>
                   <UploadIcon /> Open
                 </Button>
