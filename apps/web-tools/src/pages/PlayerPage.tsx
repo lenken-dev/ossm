@@ -233,6 +233,10 @@ export default function PlayerPage() {
   const played = useMemo(() => script && simplified ? simplify(script) : script, [script, simplified]);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
   const [offset, setOffset] = usePersistedState("ossm:playerOffset", -50);
+  /** How fast the script plays against the video, which keeps its own speed. */
+  const [scriptSpeed, setScriptSpeed] = usePersistedState("ossm:playerScriptSpeed", 1);
+  /** Script time in ms to put the silent clock back at once it reloads at a new length. */
+  const silentResume = useRef<number | null>(null);
   const stream = useRef(new FunscriptStream());
   /** Depth and stroke set since connecting or entering funscript mode. */
   const [configured, setConfigured] = useState(false);
@@ -255,7 +259,7 @@ export default function PlayerPage() {
   /** Send `stream:end` if a stream is open. */
   const endStream = (reason: string) => {
     if (!stream.current.end()) return;
-    const media = (videoRef.current?.currentTime ?? 0) * 1000 + offset;
+    const media = ((videoRef.current?.currentTime ?? 0) * 1000 + offset) * scriptSpeed;
     void ossm?.command("stream:end", `(${reason}, media=${Math.round(media)})`);
   };
 
@@ -316,13 +320,13 @@ export default function PlayerPage() {
     const id = setInterval(() => {
       const video = videoRef.current;
       if (!video || video.seeking || video.readyState < video.HAVE_FUTURE_DATA || video.playbackRate <= 0) return;
-      const media = video.currentTime * 1000 + offset;
-      for (const p of stream.current.tick(played, media, video.playbackRate, reverse, ossm.lookahead)) {
+      const media = (video.currentTime * 1000 + offset) * scriptSpeed;
+      for (const p of stream.current.tick(played, media, video.playbackRate * scriptSpeed, reverse, ossm.lookahead)) {
         void ossm.streamPoint(p.position, p.duration);
       }
     }, TICK_MS);
     return () => clearInterval(id);
-  }, [mode, paused, blocked, ossm, played, offset, reverse]);
+  }, [mode, paused, blocked, ossm, played, offset, scriptSpeed, reverse]);
 
   // Video events that matter; in funscript mode all but `playing` end the stream.
   const videoEvent = (e: SyntheticEvent<HTMLMediaElement>) => {
@@ -338,7 +342,7 @@ export default function PlayerPage() {
     return () => URL.revokeObjectURL(url);
   }, [videoFile]);
 
-  const silentMs = mode === "funscript" && !videoFile && script ? script.at[script.at.length - 1] : null;
+  const silentMs = mode === "funscript" && !videoFile && script ? script.at[script.at.length - 1] / scriptSpeed : null;
   useEffect(() => {
     setSilentUrl(null);
     if (silentMs == null) return;
@@ -605,6 +609,20 @@ export default function PlayerPage() {
                 onChange={setOffset}
               />
             )}
+            <LabeledSlider
+              label="Script speed"
+              value={scriptSpeed}
+              display={`x${scriptSpeed}`}
+              min={0.25}
+              max={2}
+              step={0.05}
+              disabled={!paused}
+              onChange={(v) => {
+                // The silent clock's length follows the speed; keep the playhead at the same script time.
+                if (silentUrl) silentResume.current ??= (videoRef.current?.currentTime ?? 0) * 1000 * scriptSpeed;
+                setScriptSpeed(Math.round(v * 100) / 100);
+              }}
+            />
             <Text as="label" size="2" weight="medium">
               <Flex align="center" justify="between" gap="2">
                 Reverse
@@ -762,7 +780,7 @@ export default function PlayerPage() {
                   }}
                   onPointerDown={(e) => dragOverlay(e, "nsew")}
                 >
-                  <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
+                  <ScriptPreview script={played} speed={scriptSpeed} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
                   {arranging &&
                     RESIZE_HANDLES.map((h) => <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />)}
                   {/* Stops the pointer here, so pressing Done does not start a drag. */}
@@ -803,7 +821,15 @@ export default function PlayerPage() {
           </Button>
         </Flex>
       )}
-      {silentUrl && <audio {...mediaProps} src={silentUrl} style={{ width: "100%", flexShrink: 0 }} />}
+      {silentUrl && <audio
+        {...mediaProps}
+        src={silentUrl}
+        onLoadedMetadata={(e) => {
+          if (silentResume.current === null) return;
+          e.currentTarget.currentTime = silentResume.current / 1000 / scriptSpeed;
+          silentResume.current = null;
+        }}
+        style={{ width: "100%", flexShrink: 0 }} />}
       {mode === "funscript" && scriptError && (
         <Callout.Root color="red" size="1">
           <Callout.Icon>
@@ -861,7 +887,7 @@ export default function PlayerPage() {
               </Flex>
             </Flex>
             <Box position="relative" flexShrink="0">
-              <ScriptPreview script={played} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
+              <ScriptPreview script={played} speed={scriptSpeed} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
               <Box
                 title="Drag to resize"
                 style={{
@@ -1149,8 +1175,10 @@ const POSITION_INTERVAL_MS = 100;
  * not follow. The machine's planned position is a dot on the playhead, and
  * with `machineLine` also a line trailing it.
  */
-function ScriptPreview({ script, reverse, videoRef, ossm, machineLine, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
+function ScriptPreview({ script, speed, reverse, videoRef, ossm, machineLine, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
   script: Funscript;
+  /** Script time per video time; the script's points show at their video time. */
+  speed: number;
   reverse: boolean;
   videoRef: RefObject<HTMLMediaElement | null>;
   ossm: Ossm | null;
@@ -1221,6 +1249,7 @@ function ScriptPreview({ script, reverse, videoRef, ossm, machineLine, notice, l
       const from = now - before;
       const to = now + after;
       const x = (at: number) => ((at - from) / (to - from)) * width;
+      const sx = (i: number) => x(script.at[i] / speed);
       ctx.clearRect(0, 0, width, height);
 
       ctx.strokeStyle = gridColor;
@@ -1234,19 +1263,19 @@ function ScriptPreview({ script, reverse, videoRef, ossm, machineLine, notice, l
       ctx.stroke();
 
       // The points in the window and one beyond each edge, so the line reaches the edges.
-      const first = Math.max(bisectLeft(script.at, from) - 1, 0);
+      const first = Math.max(bisectLeft(script.at, from * speed) - 1, 0);
       let last = first;
-      while (last < script.at.length - 1 && script.at[last] <= to) last++;
+      while (last < script.at.length - 1 && script.at[last] <= to * speed) last++;
       ctx.strokeStyle = lineColor;
       ctx.fillStyle = lineColor;
       ctx.lineWidth = lineWidth;
       ctx.lineJoin = "round";
       ctx.beginPath();
-      for (let i = first; i <= last; i++) ctx.lineTo(x(script.at[i]), y(script.pos[i]));
+      for (let i = first; i <= last; i++) ctx.lineTo(sx(i), y(script.pos[i]));
       ctx.stroke();
       for (let i = first; i <= last; i++) {
         ctx.beginPath();
-        ctx.arc(x(script.at[i]), y(script.pos[i]), lineWidth + 1, 0, Math.PI * 2);
+        ctx.arc(sx(i), y(script.pos[i]), lineWidth + 1, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -1296,7 +1325,7 @@ function ScriptPreview({ script, reverse, videoRef, ossm, machineLine, notice, l
       cancelAnimationFrame(frame);
       ossm?.removeEventListener("position", record);
     };
-  }, [script, reverse, appearance, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
+  }, [script, speed, reverse, appearance, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
 
   /**
    * Drag the graph sideways to seek, as if grabbing the line; playback pauses
