@@ -241,6 +241,8 @@ export default function PlayerPage() {
   const [machineLine, setMachineLine] = usePersistedState("ossm:playerMachineLine", false, localStorage);
   /** A minimap of the whole script below the graph. */
   const [minimap, setMinimap] = usePersistedState("ossm:playerMinimap", true, localStorage);
+  /** A minimap of the whole script below the video in theater mode. */
+  const [theaterMinimap, setTheaterMinimap] = usePersistedState("ossm:playerTheaterMinimap", true, localStorage);
   /** The script as streamed and previewed. */
   const played = useMemo(() => script && simplified ? simplify(script) : script, [script, simplified]);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
@@ -640,6 +642,12 @@ export default function PlayerPage() {
                 </Flex>
               </Text>
             )}
+            <Text as="label" size="2" weight="medium">
+              <Flex align="center" justify="between" gap="2">
+                Show minimap
+                <Switch checked={inTheater ? theaterMinimap : minimap} onCheckedChange={inTheater ? setTheaterMinimap : setMinimap} />
+              </Flex>
+            </Text>
             {(!inTheater || showGraph) && (
               <>
                 <LabeledSlider
@@ -657,14 +665,6 @@ export default function PlayerPage() {
                     <Switch checked={machineLine} onCheckedChange={setMachineLine} />
                   </Flex>
                 </Text>
-                {!inTheater && (
-                  <Text as="label" size="2" weight="medium">
-                    <Flex align="center" justify="between" gap="2">
-                      Show minimap
-                      <Switch checked={minimap} onCheckedChange={setMinimap} />
-                    </Flex>
-                  </Text>
-                )}
                 <LabeledSlider
                   label="Before playhead"
                   value={graphWindow.before}
@@ -868,6 +868,9 @@ export default function PlayerPage() {
                 </Button>
               )}
             </Box>
+          )}
+          {inTheater && mode === "funscript" && played && theaterMinimap && (
+            <ScriptMinimap script={played} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />
           )}
         </>
       ) : (
