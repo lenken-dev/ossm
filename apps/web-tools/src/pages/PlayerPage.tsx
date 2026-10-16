@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Box, Button, Callout, Dialog, Flex, Heading, IconButton, SegmentedControl, Select, Separator, Switch, Text, Theme, Tooltip } from "@radix-ui/themes";
 import {
   CheckIcon,
+  ChevronRightIcon,
   Cross2Icon,
   EnterFullScreenIcon,
   ExclamationTriangleIcon,
@@ -447,6 +448,26 @@ export default function PlayerPage() {
   // Leaving the page takes the controls with it.
   useEffect(() => () => popout?.close(), [popout]);
 
+  /** The Funscript and Graph sections of the controls show only their titles until expanded. */
+  const [funscriptOpen, setFunscriptOpen] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
+  /** A section's title, pressed to expand or collapse it. */
+  const sectionHeader = (title: string, open: boolean, setOpen: (open: boolean) => void) => (
+    <Flex
+      align="center"
+      gap="2"
+      role="button"
+      tabIndex={0}
+      aria-expanded={open}
+      onClick={() => setOpen(!open)}
+      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpen(!open))}
+      style={{ cursor: "pointer", userSelect: "none" }}
+    >
+      <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} />
+      <Heading size="3">{title}</Heading>
+    </Flex>
+  );
+
   const media = videoUrl || silentUrl;
   const controls = (inPopout: boolean) => (
     <>
@@ -585,135 +606,139 @@ export default function PlayerPage() {
               </Button>
             )}
             <Separator size="4" />
-            <Heading size="3">Funscript</Heading>
-            <LabeledSlider
-              label="Script speed"
-              value={scriptSpeed}
-              display={`x${scriptSpeed}`}
-              min={0.25}
-              max={2}
-              step={0.05}
-              disabled={!paused}
-              onChange={(v) => {
-                // The silent clock's length follows the speed; keep the playhead at the same script time.
-                if (silentUrl) silentResume.current ??= (videoRef.current?.currentTime ?? 0) * 1000 * scriptSpeed;
-                setScriptSpeed(Math.round(v * 100) / 100);
-              }}
-            />
-            <Text as="label" size="2" weight="medium">
-              <Flex align="center" justify="between" gap="2">
-                Reverse
-                <Switch checked={reverse} disabled={!paused} onCheckedChange={setReverse} />
-              </Flex>
-            </Text>
-            <Text as="label" size="2" weight="medium">
-              <Flex align="center" justify="between" gap="2">
-                Simplify
-                <Switch checked={simplified} disabled={!paused} onCheckedChange={setSimplified} />
-              </Flex>
-            </Text>
-            <Text as="label" size="2" weight="medium">
-              <Flex align="center" justify="between" gap="2">
-                Sync with media
-                <Switch
-                  checked={synced}
-                  disabled={!paused}
-                  onCheckedChange={(on) => {
-                    // The script's own playhead starts where the media's left it.
-                    if (!on) clock.current = { at: playhead.current.get(), since: null, rate: 1 };
-                    setSynced(on);
-                  }}
-                />
-              </Flex>
-            </Text>
-            <Text as="label" size="2" weight="medium">
-              <Flex align="center" justify="between" gap="2">
-                Loop
-                <Switch checked={looped} onCheckedChange={setLooped} />
-              </Flex>
-            </Text>
-            <Separator size="4" />
-            <Heading size="3">Graph</Heading>
-            {inTheater && (
+            {sectionHeader("Funscript", funscriptOpen, setFunscriptOpen)}
+            {funscriptOpen && <>
+              <LabeledSlider
+                label="Script speed"
+                value={scriptSpeed}
+                display={`x${scriptSpeed}`}
+                min={0.25}
+                max={2}
+                step={0.05}
+                disabled={!paused}
+                onChange={(v) => {
+                  // The silent clock's length follows the speed; keep the playhead at the same script time.
+                  if (silentUrl) silentResume.current ??= (videoRef.current?.currentTime ?? 0) * 1000 * scriptSpeed;
+                  setScriptSpeed(Math.round(v * 100) / 100);
+                }}
+              />
               <Text as="label" size="2" weight="medium">
                 <Flex align="center" justify="between" gap="2">
-                  Show graph
-                  <Switch checked={showGraph} onCheckedChange={setShowGraph} />
+                  Reverse
+                  <Switch checked={reverse} disabled={!paused} onCheckedChange={setReverse} />
                 </Flex>
               </Text>
-            )}
-            <Text as="label" size="2" weight="medium">
-              <Flex align="center" justify="between" gap="2">
-                Show minimap
-                <Switch checked={inTheater ? theaterMinimap : minimap} onCheckedChange={inTheater ? setTheaterMinimap : setMinimap} />
-              </Flex>
-            </Text>
-            {(!inTheater || showGraph) && (
-              <>
-                <LabeledSlider
-                  label="Line width"
-                  value={overlay.lineWidth}
-                  display={`${overlay.lineWidth} px`}
-                  min={1}
-                  max={8}
-                  step={0.5}
-                  onChange={(lineWidth) => setOverlay({ ...overlay, lineWidth })}
-                />
+              <Text as="label" size="2" weight="medium">
+                <Flex align="center" justify="between" gap="2">
+                  Simplify
+                  <Switch checked={simplified} disabled={!paused} onCheckedChange={setSimplified} />
+                </Flex>
+              </Text>
+              <Text as="label" size="2" weight="medium">
+                <Flex align="center" justify="between" gap="2">
+                  Sync with media
+                  <Switch
+                    checked={synced}
+                    disabled={!paused}
+                    onCheckedChange={(on) => {
+                      // The script's own playhead starts where the media's left it.
+                      if (!on) clock.current = { at: playhead.current.get(), since: null, rate: 1 };
+                      setSynced(on);
+                    }}
+                  />
+                </Flex>
+              </Text>
+              <Text as="label" size="2" weight="medium">
+                <Flex align="center" justify="between" gap="2">
+                  Loop
+                  <Switch checked={looped} onCheckedChange={setLooped} />
+                </Flex>
+              </Text>
+            </>}
+            <Separator size="4" />
+            {sectionHeader("Graph", graphOpen, setGraphOpen)}
+            {graphOpen && <>
+              {inTheater && (
                 <Text as="label" size="2" weight="medium">
                   <Flex align="center" justify="between" gap="2">
-                    Show machine line
-                    <Switch checked={machineLine} onCheckedChange={setMachineLine} />
+                    Show graph
+                    <Switch checked={showGraph} onCheckedChange={setShowGraph} />
                   </Flex>
                 </Text>
-                <LabeledSlider
-                  label="Before playhead"
-                  value={graphWindow.before}
-                  display={`${graphWindow.before / 1000} s`}
-                  min={0}
-                  max={10000}
-                  step={1000}
-                  onChange={(before) => setGraphWindow({ ...graphWindow, before })}
-                />
-                <LabeledSlider
-                  label="After playhead"
-                  value={Math.max(AFTER_STOPS.findIndex((s) => s * 1000 >= graphWindow.after), 0)}
-                  display={`${graphWindow.after / 1000} s`}
-                  min={0}
-                  max={AFTER_STOPS.length - 1}
-                  step={1}
-                  onChange={(i) => setGraphWindow({ ...graphWindow, after: AFTER_STOPS[i] * 1000 })}
-                />
-                {inTheater ? (
-                  <>
-                    <LabeledSlider
-                      label="Background"
-                      value={overlay.background}
-                      display={`${overlay.background}%`}
-                      min={0}
-                      max={100}
-                      step={5}
-                      onChange={(background) => setOverlay({ ...overlay, background })}
-                    />
-                    <Button variant="soft" disabled={!played} onClick={() => setArranging(true)}>
-                      <MoveIcon /> Move and resize
-                    </Button>
-                  </>
-                ) : (
-                  <Text size="1" color="gray">Drag the top edge of the graph to change its height.</Text>
-                )}
-                <Button
-                  variant="soft"
-                  color="gray"
-                  onClick={() => {
-                    setOverlay(DEFAULT_OVERLAY);
-                    setGraphHeight(PREVIEW_HEIGHT);
-                    setGraphWindow(DEFAULT_WINDOW);
-                  }}
-                >
-                  Reset
-                </Button>
-              </>
-            )}
+              )}
+              <Text as="label" size="2" weight="medium">
+                <Flex align="center" justify="between" gap="2">
+                  Show minimap
+                  <Switch checked={inTheater ? theaterMinimap : minimap} onCheckedChange={inTheater ? setTheaterMinimap : setMinimap} />
+                </Flex>
+              </Text>
+              {(!inTheater || showGraph) && (
+                <>
+                  <LabeledSlider
+                    label="Line width"
+                    value={overlay.lineWidth}
+                    display={`${overlay.lineWidth} px`}
+                    min={1}
+                    max={8}
+                    step={0.5}
+                    onChange={(lineWidth) => setOverlay({ ...overlay, lineWidth })}
+                  />
+                  <Text as="label" size="2" weight="medium">
+                    <Flex align="center" justify="between" gap="2">
+                      Show machine line
+                      <Switch checked={machineLine} onCheckedChange={setMachineLine} />
+                    </Flex>
+                  </Text>
+                  <LabeledSlider
+                    label="Before playhead"
+                    value={graphWindow.before}
+                    display={`${graphWindow.before / 1000} s`}
+                    min={0}
+                    max={10000}
+                    step={1000}
+                    onChange={(before) => setGraphWindow({ ...graphWindow, before })}
+                  />
+                  <LabeledSlider
+                    label="After playhead"
+                    value={Math.max(AFTER_STOPS.findIndex((s) => s * 1000 >= graphWindow.after), 0)}
+                    display={`${graphWindow.after / 1000} s`}
+                    min={0}
+                    max={AFTER_STOPS.length - 1}
+                    step={1}
+                    onChange={(i) => setGraphWindow({ ...graphWindow, after: AFTER_STOPS[i] * 1000 })}
+                  />
+                  {inTheater ? (
+                    <>
+                      <LabeledSlider
+                        label="Background"
+                        value={overlay.background}
+                        display={`${overlay.background}%`}
+                        min={0}
+                        max={100}
+                        step={5}
+                        onChange={(background) => setOverlay({ ...overlay, background })}
+                      />
+                      <Button variant="soft" disabled={!played} onClick={() => setArranging(true)}>
+                        <MoveIcon /> Move and resize
+                      </Button>
+                    </>
+                  ) : (
+                    <Text size="1" color="gray">Drag the top edge of the graph to change its height.</Text>
+                  )}
+                  <Button
+                    variant="soft"
+                    color="gray"
+                    onClick={() => {
+                      setOverlay(DEFAULT_OVERLAY);
+                      setGraphHeight(PREVIEW_HEIGHT);
+                      setGraphWindow(DEFAULT_WINDOW);
+                    }}
+                  >
+                    Reset
+                  </Button>
+                </>
+              )}
+            </>}
           </>
         )}
       </Flex>
