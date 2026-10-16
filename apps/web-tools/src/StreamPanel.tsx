@@ -26,8 +26,11 @@ export interface Funscript {
 
 const MAX_AT_MS = 0xffff_ffff;
 
+/** localStorage key of the script the editor sends to the player, as a .funscript's JSON with its `name`. */
+export const SENT_SCRIPT_KEY = "ossm:playerSent";
+
 /** Parse a .funscript file. Throws an `Error` with a readable message. */
-function parseFunscript(name: string, text: string): Funscript {
+export function parseFunscript(name: string, text: string): Funscript {
   let json: unknown;
   try {
     json = JSON.parse(text);

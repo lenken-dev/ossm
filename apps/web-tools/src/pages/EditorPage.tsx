@@ -3,6 +3,7 @@ import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, 
 import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, ColumnSpacingIcon, CopyIcon, MoveIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PinLeftIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
+import { SENT_SCRIPT_KEY } from "../StreamPanel";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
@@ -2860,6 +2861,15 @@ export default function EditorPage() {
     <Button style={{ flex: 1 }} disabled={actions.length < (advanced.snippet || advanced.instance !== undefined ? 2 : 1)} onClick={() => closeAdvanced(true)}>{label}</Button>
   ));
 
+  /** What the advanced editor is editing, in place of the script's name. */
+  const advancedTitle = advanced && (advanced.instance !== undefined ? `Snippet · ${(main.regions[advanced.instance] as Instance).snippet.name}` : !advanced.snippet ? "Advanced editor" : advanced.snippet.path ? `Snippet · ${advanced.snippet.path[advanced.snippet.path.length - 1]}` : "New snippet");
+
+  /** Send the points to the player, which loads them at once in other tabs and here on switching to it; the advanced editor's from 0. */
+  const sendToPlayer = () => {
+    const sent = advanced ? actions.map((a) => ({ ...a, at: a.at - actions[0].at })) : actions;
+    localStorage.setItem(SENT_SCRIPT_KEY, JSON.stringify({ name: advancedTitle || script.name || "untitled", actions: sent, sent: Date.now() }));
+  };
+
   /** Show the time `t` ms: the view centred on it when it is out of view, and the playhead there. */
   const goTo = (t: number) => {
     if (t < view.from || t > view.from + view.span) setView({ ...view, from: clamp(t - view.span / 2, 0, Math.max(total - view.span, 0)) });
@@ -2924,11 +2934,7 @@ export default function EditorPage() {
         }}
       />
       {/* The advanced editor's document is not a file of its own: in its place, what is being edited; how to leave is at the bottom. */}
-      {advanced && (
-        <Heading size="4" truncate>
-          {advanced.instance !== undefined ? `Snippet · ${(main.regions[advanced.instance] as Instance).snippet.name}` : !advanced.snippet ? "Advanced editor" : advanced.snippet.path ? `Snippet · ${advanced.snippet.path[advanced.snippet.path.length - 1]}` : "New snippet"}
-        </Heading>
-      )}
+      {advanced && <Heading size="4" truncate>{advancedTitle}</Heading>}
       {!advanced && <Flex gap="2">
         <Button
           variant="soft"
@@ -3389,18 +3395,24 @@ export default function EditorPage() {
         </>}
       </>}
       {/* At the panel's bottom as a tool's Apply, which takes its place while a tool is open. */}
-      {advanced && !tool && (
+      {!tool && (
         <Flex direction="column" gap="2" py="3" mb="-3" style={{ marginTop: "auto", position: "sticky", bottom: 0, background: "var(--color-background)" }}>
-          {/* At the top level of the library; the editor stays open. */}
-          <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions, regions })}>
-            <Button variant="soft" disabled={actions.length < 2} title="Save the whole document to the snippet library">
-              <ComponentInstanceIcon /> Save as snippet
-            </Button>
-          </NamePopover>
-          <Flex gap="2">
-            {doneButton("Done")}
-            <Button variant="soft" color="gray" style={{ flex: 1 }} onClick={() => (!advancedChanged() || confirm("Discard the advanced editor's changes?")) && closeAdvanced(false)}>Cancel</Button>
-          </Flex>
+          {/* The sent stamp makes every send a change, which other tabs hear of. */}
+          <Button variant="soft" disabled={actions.length < 2} title="Play these points in the player" onClick={sendToPlayer}>
+            <PlayIcon /> Send to player
+          </Button>
+          {advanced && <>
+            {/* At the top level of the library; the editor stays open. */}
+            <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions, regions })}>
+              <Button variant="soft" disabled={actions.length < 2} title="Save the whole document to the snippet library">
+                <ComponentInstanceIcon /> Save as snippet
+              </Button>
+            </NamePopover>
+            <Flex gap="2">
+              {doneButton("Done")}
+              <Button variant="soft" color="gray" style={{ flex: 1 }} onClick={() => (!advancedChanged() || confirm("Discard the advanced editor's changes?")) && closeAdvanced(false)}>Cancel</Button>
+            </Flex>
+          </>}
         </Flex>
       )}
     </Flex>

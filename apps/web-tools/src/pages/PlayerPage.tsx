@@ -24,7 +24,7 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm, type Ossm, type OssmState, type PatternInfo } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
-import { readFunscript, type Funscript } from "../StreamPanel";
+import { parseFunscript, readFunscript, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 
@@ -419,6 +419,30 @@ export default function PlayerPage() {
       setScriptError((e as Error).message);
     }
   };
+
+  /** Load a script the editor sent, `raw` from `SENT_SCRIPT_KEY`. */
+  const loadSent = (raw: string | null) => {
+    if (!raw) return;
+    try {
+      const parsed = parseFunscript((JSON.parse(raw) as { name: string }).name, raw);
+      endStream("script");
+      setScript(parsed);
+      setScriptError(null);
+    } catch (e) {
+      setScriptError((e as Error).message);
+    }
+  };
+  // A sent script loads on opening the page, once, and at once from editors in other tabs.
+  useEffect(() => {
+    const raw = localStorage.getItem(SENT_SCRIPT_KEY);
+    localStorage.removeItem(SENT_SCRIPT_KEY);
+    loadSent(raw);
+  }, []);
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => e.key === SENT_SCRIPT_KEY && loadSent(e.newValue);
+    addEventListener("storage", onStorage);
+    return () => removeEventListener("storage", onStorage);
+  });
 
   /** Show and hide the controls pane in theater mode; in the pane while it is shown. */
   const theaterToggles = (style?: CSSProperties) => (
