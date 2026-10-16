@@ -239,6 +239,8 @@ export default function PlayerPage() {
   const [looped, setLooped] = usePersistedState("ossm:playerLoop", false, localStorage);
   /** Trace the machine's position on the graph as a second line. */
   const [machineLine, setMachineLine] = usePersistedState("ossm:playerMachineLine", false, localStorage);
+  /** A minimap of the whole script below the graph. */
+  const [minimap, setMinimap] = usePersistedState("ossm:playerMinimap", true, localStorage);
   /** The script as streamed and previewed. */
   const played = useMemo(() => script && simplified ? simplify(script) : script, [script, simplified]);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
@@ -432,6 +434,12 @@ export default function PlayerPage() {
         <Flex align="center" justify="between" gap="2">
           Show machine line
           <Switch checked={machineLine} onCheckedChange={setMachineLine} />
+        </Flex>
+      </Text>
+      <Text as="label" size="2" weight="medium">
+        <Flex align="center" justify="between" gap="2">
+          Show minimap
+          <Switch checked={minimap} onCheckedChange={setMinimap} />
         </Flex>
       </Text>
       <LabeledSlider
@@ -964,6 +972,7 @@ export default function PlayerPage() {
                 onPointerDown={dragGraphHeight}
               />
             </Box>
+            {minimap && <ScriptMinimap script={played} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />}
           </>
         ) : (
           <Flex align="center" justify="center" flexShrink="0" height={`${graphHeight}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
@@ -1439,5 +1448,95 @@ function ScriptPreview({ script, speed, playhead, reverse, videoRef, ossm, machi
       <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8 }}>Out</Text>
       <Text size="1" color="gray" style={{ position: "absolute", bottom: 4, right: 8 }}>In</Text>
     </Box>
+  );
+}
+
+/** Height of the minimap of the whole script below the graph, in px. */
+const MINIMAP_HEIGHT = 40;
+
+/**
+ * The whole script with the graph's time and the playhead, as in the
+ * editor's minimap. Dragging moves the graph's time and with it the
+ * playhead; pressed outside the graph's time, it centres on the pointer
+ * first. Playback pauses while dragging, as in the graph.
+ */
+function ScriptMinimap({ script, speed, playhead, reverse, videoRef, span: { before, after } }: {
+  script: Funscript;
+  speed: number;
+  playhead: RefObject<Playhead>;
+  reverse: boolean;
+  videoRef: RefObject<HTMLMediaElement | null>;
+  span: { before: number; after: number };
+}) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const shownRef = useRef<SVGGElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    observer.observe(svgRef.current!);
+    return () => observer.disconnect();
+  }, []);
+
+  const total = script.at[script.at.length - 1] || 1;
+  const x = (at: number) => (at / total) * width;
+  const points = useMemo(
+    () => Array.from(script.at, (at, i) => `${(at / total) * width},${2 + (1 - (reverse ? 100 - script.pos[i] : script.pos[i]) / 100) * (MINIMAP_HEIGHT - 4)}`).join(" "),
+    [script, reverse, total, width],
+  );
+
+  // The graph's time and the playhead follow the playhead every frame, without rendering.
+  useEffect(() => {
+    let frame = 0;
+    const draw = () => {
+      frame = requestAnimationFrame(draw);
+      shownRef.current?.setAttribute("transform", `translate(${(playhead.current.get() / total) * width},0)`);
+    };
+    draw();
+    return () => cancelAnimationFrame(frame);
+  }, [playhead, total, width]);
+
+  const drag = (e: PointerEvent<SVGSVGElement>) => {
+    const media = videoRef.current;
+    if (e.button !== 0 || !media) return;
+    e.preventDefault();
+    const target = e.currentTarget;
+    const left = target.getBoundingClientRect().left;
+    const at = (m: { clientX: number }) => ((m.clientX - left) / width) * total;
+    const now = playhead.current.get();
+    const pressed = at(e);
+    const grab = pressed >= now - before * speed && pressed <= now + after * speed ? pressed - now : ((after - before) * speed) / 2;
+    const wasPlaying = !media.paused;
+    media.pause();
+    const move = (m: { clientX: number }) => playhead.current.set(at(m) - grab);
+    move(e);
+    target.setPointerCapture(e.pointerId);
+    target.addEventListener("pointermove", move);
+    target.addEventListener("lostpointercapture", () => {
+      target.removeEventListener("pointermove", move);
+      if (wasPlaying) void media.play();
+    }, { once: true });
+  };
+
+  return (
+    <svg
+      ref={svgRef}
+      height={MINIMAP_HEIGHT}
+      aria-label="Minimap"
+      onPointerDown={drag}
+      style={{ display: "block", flexShrink: 0, width: "100%", borderRadius: 6, background: "var(--gray-a2)", touchAction: "none", userSelect: "none" }}
+    >
+      <polyline points={points} fill="none" stroke="#ec4899" strokeWidth={1} />
+      <g ref={shownRef}>
+        <rect
+          x={-x(before * speed)}
+          width={Math.max(x((before + after) * speed), 4)}
+          height={MINIMAP_HEIGHT}
+          rx={4}
+          style={{ fill: "var(--gray-a5)", stroke: "var(--gray-a8)", cursor: "grab" }}
+        />
+        <line y1={0} y2={MINIMAP_HEIGHT} style={{ stroke: "var(--gray-12)" }} />
+      </g>
+    </svg>
   );
 }
