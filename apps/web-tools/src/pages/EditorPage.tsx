@@ -387,6 +387,7 @@ const SHAPES = {
   ramp: { name: "Ramp", graph: "2,14 30,2", fields: ["start", "end"] },
   sine: { name: "Sine", graph: "2,8 5.5,3.8 9,2 12.5,3.8 16,8 19.5,12.2 23,14 26.5,12.2 30,8", fields: ["min", "max", "period", "phase"] },
   triangle: { name: "Triangle", graph: "2,8 9,2 23,14 30,8", fields: ["min", "max", "period", "phase"] },
+  trapezoid: { name: "Trapezoid", graph: "2,8 5.5,2 12.5,2 19.5,14 26.5,14 30,8", fields: ["min", "max", "period", "phase", "width"] },
   square: { name: "Square", graph: "2,2 9,2 9,14 16,14 16,2 23,2 23,14 30,14", fields: ["min", "max", "period", "phase"] },
   pulse: { name: "Pulse", graph: "2,2 5,2 5,14 16,14 16,2 19,2 19,14 30,14", fields: ["min", "max", "period", "phase", "width"] },
   noise: { name: "Noise", graph: "2,9 6,6 10,7 14,3 18,8 22,11 26,6 30,8", fields: ["min", "max", "period", "seed"] },
@@ -517,8 +518,9 @@ function splineAt(knots: Knots, u: number) {
 /**
  * A function's value `t` ms into a range `span` ms long; NaN while a field
  * is refused, or a period is not above 0. A ramp runs across the range; waves
- * start with it, Sine and Triangle halfway up and rising, Square and Pulse on
- * Max; Noise eases between random values one Period apart.
+ * start with it, Sine, Triangle and Trapezoid halfway up and rising, Square
+ * and Pulse on Max; a trapezoid holds Width % of each period, half on Max and
+ * half on Min. Noise eases between random values one Period apart.
  */
 function funcAt(func: Func, t: number, span: number) {
   const f = (field: ShapeField) => typed(func[field] ?? "");
@@ -540,7 +542,10 @@ function funcAt(func: Func, t: number, span: number) {
   }
   const u = (((t / period + f("phase") / 100) % 1) + 1) % 1;
   if (func.shape === "sine") return along((1 + Math.sin(2 * Math.PI * u)) / 2);
-  if (func.shape === "triangle") return along(Math.abs(2 * ((u + 0.75) % 1) - 1));
+  const triangle = Math.abs(2 * ((u + 0.75) % 1) - 1);
+  if (func.shape === "triangle") return along(triangle);
+  // A triangle made steeper about its middle, clipped to Min and Max; held near all the period at Width 100.
+  if (func.shape === "trapezoid") return along(clamp((triangle - 0.5) / (1 - clamp(f("width") / 100, 0, 0.99)) + 0.5, 0, 1));
   const edge = func.shape === "square" ? 0.5 : f("width") / 100;
   return Number.isNaN(u + edge) ? NaN : along(u < edge ? 1 : 0);
 }
@@ -2096,7 +2101,8 @@ export default function EditorPage() {
    * noise's Min and Max drag up and down, as do a ramp's ends; a wave's line
    * moves its Phase, and its Min and Max together; its first peak in the box
    * moves its Max, the trough after it its Min, and either the Period, the
-   * other staying; a pulse's falling edge its Width, around the peak; a spline's knots and line as dragKnot's and
+   * other staying; a pulse's falling edge its Width, around the peak, as does
+   * the end of a trapezoid's hold on Max; a spline's knots and line as dragKnot's and
    * addKnot's. Values in whole steps: High's and Low's within 0–100,
    * Interval's (ms), Speed's and Time's from 1; none while a field they move is refused.
    */
@@ -2180,6 +2186,10 @@ export default function EditorPage() {
         return { min: fit(f("min") + dv), period: String(p), phase: phaseAt(peak, p) };
       }))}
       {/* A pulse's falling edge after the peak, halfway up, sets its Width around the peak, which stays, as does the trough. */}
+      {/* A trapezoid's hold on Max ends a quarter of its Width after the peak. */}
+      {func.shape === "trapezoid" && point("width", peak + (period * clamp(f("width"), 0, 99)) / 400, f("max"), "ew-resize", (e) => drag(e, (dt) => ({
+        width: String(clamp(Math.round(clamp(f("width"), 0, 99) + (400 * dt) / period), 0, 99)),
+      })))}
       {func.shape === "pulse" && point("width", peak + period * half, (f("min") + f("max")) / 2, "ew-resize", (e) => drag(e, (dt) => {
         const w = clamp(Math.round(((2 * (period * half + dt)) / period) * 100), 1, 99);
         return { width: String(w), phase: phaseAt(peak, period, w / 200) };
