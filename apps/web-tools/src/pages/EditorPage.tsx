@@ -84,6 +84,17 @@ interface Generated extends Area {
 }
 
 /**
+ * A stretch of points made by Repeat: the copies' time, in whole ms, and its
+ * own copy of the setup with the pattern it repeats. Locked as a Generate
+ * region.
+ */
+interface Repeated {
+  from: number;
+  to: number;
+  repeat: RepeatKept;
+}
+
+/**
  * An inserted snippet: its own copies of the snippet's points, the ones in
  * its time, and generator regions, inside it, with its name; times in whole
  * ms. Its time runs from its first to its last point, widened to its
@@ -93,12 +104,17 @@ interface Generated extends Area {
 interface Instance {
   from: number;
   to: number;
-  snippet: { name: string; regions: Generated[] };
+  snippet: { name: string; regions: Inner[] };
 }
 
+/** A region made by a tool, which an instance can hold: Generate's or Repeat's. */
+type Inner = Generated | Repeated;
 /** A locked stretch of points: a generator region or a snippet instance. */
-type Region = Generated | Instance;
+type Region = Inner | Instance;
 const isInstance = (r: Region): r is Instance => "snippet" in r;
+const isRepeat = (r: Region): r is Repeated => "repeat" in r;
+/** The Markers regions of `regions` and in their instances: those that put points on the bookmarks. */
+const markersRegions = (regions: Region[]) => generators(regions).filter((r): r is Generated => "generate" in r && r.generate.timing === "markers");
 /** What the undo history calls `r`: a region, or a snippet by its name. */
 const regionNoun = (r: Region) => (isInstance(r) ? `snippet "${r.snippet.name}"` : "region");
 
@@ -109,7 +125,7 @@ const instanceOf = (name: string, clip: Clip): Instance => {
   return { from: Math.min(actions[0].at, ...inner.map((r) => r.from)), to: Math.max(actions[actions.length - 1].at, ...inner.map((r) => r.to)), snippet: { name, regions: inner } };
 };
 
-/** The generator regions of `regions` and in their instances: those that put points on the bookmarks. */
+/** The generator regions of `regions` and in their instances. */
 const generators = (regions: Region[]) => regions.flatMap((r) => (isInstance(r) ? r.snippet.regions : [r]));
 
 /** The region of `regions` whose time holds `at`; none outside them. */
@@ -184,15 +200,15 @@ const matching = (items: Entry[], q: string): Entry[] => items.flatMap((e) => {
 const sortedEntries = (items: Entry[]) => [...items].sort((a, b) => Number(isFolder(b)) - Number(isFolder(a)) || entryName(a).localeCompare(entryName(b)));
 
 /** A region's label, after the timing that placed its points. */
-const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}` : `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`);
+const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}` : isRepeat(r) ? `Repeat · ×${r.repeat.count}` : `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`);
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
 /** How the selection box and the tools' boxes in the graph fill and outline. */
 const TOOL_BOX = { fill: "var(--accent-a3)", stroke: "var(--accent-9)" };
-/** How a region's band behind the graph fills and outlines, and its label's colour: cyan, an instance's violet; selected, it outlines as the selected markers. */
+/** How a region's band behind the graph fills and outlines, and its label's colour: cyan, an instance's violet, a Repeat one's orange; selected, it outlines as the selected markers. */
 const bandOf = (r: Region) => {
-  const c = isInstance(r) ? "violet" : "cyan";
+  const c = isInstance(r) ? "violet" : isRepeat(r) ? "orange" : "cyan";
   return { fill: `var(--${c}-a3)`, stroke: `var(--${c}-a8)`, label: `var(--${c}-11)` };
 };
 /** Size of the selection box's grips, in px. */
@@ -452,7 +468,10 @@ interface GenerateSetup {
   low: Func;
 }
 
-type FuncKey = "interval" | "speed" | "high" | "low";
+/** A function of Generate's setup or Repeat's Time. */
+type FuncKey = "interval" | "speed" | "high" | "low" | "time";
+/** Whether the function `key` is on a scale of its own, in the timing view, rather than in % of the box. */
+const ownScale = (key: FuncKey) => key !== "high" && key !== "low";
 /** The parts of Generate's setup, shown one at a time, with their handles in the graph: Position its box and First, Timing its timing and Interval or Speed. */
 type GenPart = "position" | "timing" | "high" | "low";
 
@@ -582,8 +601,76 @@ function withBookmarks<T extends Content>(s: T, bookmarks: Bookmark[]): T {
   const key = (b: Bookmark) => JSON.stringify([b.time, b.name]);
   const [was, now] = [new Set(s.bookmarks.map(key)), new Set(bookmarks.map(key))];
   const changed = [...s.bookmarks.filter((b) => !now.has(key(b))), ...bookmarks.filter((b) => !was.has(key(b)))].map((b) => b.time);
-  const touched = generators(s.regions).filter((r) => r.generate.timing === "markers" && changed.some((t) => t >= r.from && t <= r.to));
+  const touched = markersRegions(s.regions).filter((r) => changed.some((t) => t >= r.from && t <= r.to));
   return { ...s, bookmarks, actions: touched.reduce((list, r) => refilled(list, r, bookmarks), s.actions) };
+}
+
+/**
+ * Repeat's setup: how many copies in all, as typed, the pattern being the
+ * first, and a function each for Time, in % of the pattern's Length, and
+ * High and Low, in % of its box's height.
+ */
+interface RepeatSetup {
+  count: string;
+  time: Func;
+  high: Func;
+  low: Func;
+}
+
+/** What a Repeat region keeps: its setup and its pattern, the points timed from the box's start, the box's Length in whole ms and its Bottom and Top. */
+type RepeatKept = RepeatSetup & { pattern: Action[]; length: number; bottom: number; top: number };
+
+const REPEAT_DEFAULTS: RepeatSetup = { count: "4", time: constant("100"), high: constant("100"), low: constant("0") };
+
+/** The shapes that run across a function's range, rather than in time. */
+const RANGED: Shape[] = ["ramp", "spline"];
+
+/**
+ * Repeat's copies of the points of `pattern` in its box from `from`,
+ * `length` ms long, from `bottom` to `top`: each the box stretched to Length
+ * by Time, read at the copy's start, end to end, a point at the box's end
+ * left to the next copy's first but the last's; their depths mapped from the
+ * box's Bottom–Top onto Low–High, read at each point's time. Points on the
+ * same ms merge, the later kept. Time's ramp and spline run across the copies
+ * by number, first to last, as the copies' time depends on them; its waves
+ * and High and Low in time. Gives the copies' starts and their end, and their
+ * points, null while a field is refused: the starts then as at 100%; null
+ * without a valid Count or Length.
+ */
+function repeated(setup: RepeatSetup, from: number, pattern: Action[], length: number, bottom: number, top: number) {
+  const count = typed(setup.count);
+  if (!(Number.isInteger(count) && count >= 1 && length > 0)) return null;
+  const starts = [from];
+  let refused = false;
+  for (let k = 0; k < count; k++) {
+    const time = RANGED.includes(setup.time.shape) ? funcAt(setup.time, k, count - 1) : funcAt(setup.time, starts[k] - from, 0);
+    refused ||= !(time > 0);
+    starts.push(starts[k] + (length * (time > 0 ? time : 100)) / 100);
+  }
+  const end = Math.round(starts[count]);
+  const inBox = pattern.filter((a) => a.at >= from && a.at <= from + length);
+  if (refused || !inBox.length) return { starts, end, actions: null };
+  const span = end - from;
+  const out: Action[] = [];
+  for (let k = 0; k < count; k++) {
+    for (const a of inBox) {
+      if (a.at === from + length && k < count - 1) continue;
+      const at = Math.round(starts[k] + ((a.at - from) * (starts[k + 1] - starts[k])) / length);
+      const [low, high] = [clamp(funcAt(setup.low, at - from, span), 0, 100), clamp(funcAt(setup.high, at - from, span), 0, 100)];
+      const v = top > bottom ? (a.pos - bottom) / (top - bottom) : 0.5;
+      const pos = Math.round(clamp(bottom + ((low + v * (high - low)) * (top - bottom)) / 100, 0, 100));
+      if (Number.isNaN(pos)) return { starts, end, actions: null };
+      if (out[out.length - 1]?.at === at) out.pop();
+      out.push({ at, pos });
+    }
+  }
+  return { starts, end, actions: out };
+}
+
+/** Repeat's box fields as numbers, Length in whole ms from shown seconds; null while one is refused: a Length not above 0, or depths outside 0–100 or Bottom above Top. */
+function repeatParams(fields: { length: string; low: string; high: string }) {
+  const [length, bottom, top] = [Math.round(typed(fields.length) * 1000), typed(fields.low), typed(fields.high)];
+  return length > 0 && bottom >= 0 && bottom <= top && top <= 100 ? { length, bottom, top } : null;
 }
 
 /** Generate's range fields as numbers, its times in ms from shown seconds; null while one is refused: times before 0, To before From, or depths outside 0–100 or Bottom above Top. */
@@ -596,7 +683,7 @@ function rangeParams(fields: { from: string; to: string; low: string; high: stri
 /** Generate's range fields for `area`, its times in seconds from `zero`. */
 const rangeFields = (area: Area, zero: number) => ({ from: String((area.from - zero) / 1000), to: String((area.to - zero) / 1000), low: String(area.low), high: String(area.high) });
 
-type ToolKind = "scale" | "shift" | "speed" | "generate";
+type ToolKind = "scale" | "shift" | "speed" | "generate" | "repeat";
 
 /** The advanced editor's tools: their names, undo labels, and the before and after strokes of their small graphs, 56×24. */
 const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after: string }[] = [
@@ -605,6 +692,8 @@ const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after
   { kind: "speed", name: "Max speed", verb: "Limit speed of", before: "4,20 12,4 20,20 28,4 36,20 44,4 52,20", after: "4,20 12,12 20,20 28,12 36,20 44,12 52,20" },
   // Strokes up to a sine for High, down to a constant Low; the sine faint behind them.
   { kind: "generate", name: "Generate", verb: "Generate", before: "4,8 6,7 8,6 10,5.2 12,4.5 14,4.1 16,4 18,4.1 20,4.5 22,5.2 24,6 26,7 28,8 30,9 32,10 34,10.8 36,11.5 38,11.9 40,12 42,11.9 44,11.5 46,10.8 48,10 50,9 52,8", after: "4,20 8,6 12,20 16,4 20,20 24,6 28,20 32,10 36,20 40,12 44,20 48,10 52,20" },
+  // The pattern in pink, then its two copies in grey.
+  { kind: "repeat", name: "Repeat", verb: "Repeat", before: "20,20 24,6 28,20 32,12 36,20 40,6 44,20 48,12 52,20", after: "4,20 8,6 12,20 16,12 20,20" },
 ];
 
 /** A marker time from a file, in ms: ms as a number or `"HH:MM:SS.mmm"`; null when unusable. */
@@ -646,8 +735,9 @@ function readMarkers(file: Record<string, unknown>, end: number) {
  * The regions in `list`, from a file's or the clipboard's `"ossmRsWebTools"`, sorted.
  * Lenient: one is left out, its points staying ordinary, when its times are
  * not numbers with From before To, or it has neither a setup that is an
- * object with a known timing and known shapes, a spline's with knots, nor a
- * snippet with a name; of overlapping ones, all but the first. An instance's
+ * object with a known timing and known shapes, a spline's with knots, a
+ * Repeat setup with a pattern of two points or more, a Length and known
+ * shapes, nor a snippet with a name; of overlapping ones, all but the first. An instance's
  * regions are read alike, those not inside it left out alone. Field values
  * are not checked.
  */
@@ -657,10 +747,13 @@ function readRegions(list: unknown): Region[] {
     if (typeof r?.from !== "number" || typeof r.to !== "number" || !(r.from < r.to)) return [];
     const g = r.generate as GenerateSetup | undefined;
     if (!!g && typeof g === "object" && ["interval", "speed", "markers"].includes(g.timing) && known(g.interval) && known(g.speed) && known(g.high) && known(g.low)) return [r];
+    const p = r.repeat as RepeatKept | undefined;
+    const pattern = Array.isArray(p?.pattern) && p.pattern.every((a) => Number.isFinite(a?.at) && Number.isFinite(a?.pos)) ? p.pattern : [];
+    if (pattern.length > 1 && typeof p?.length === "number" && known(p.time) && known(p.high) && known(p.low)) return [r];
     const snippet = r.snippet as { name?: unknown; regions?: unknown } | undefined;
     if (typeof snippet?.name !== "string") return [];
     // Not nested: an instance's own instances go.
-    const inner = readRegions(snippet.regions).filter((i): i is Generated => !isInstance(i) && i.from >= r.from && i.to <= r.to);
+    const inner = readRegions(snippet.regions).filter((i): i is Inner => !isInstance(i) && i.from >= r.from && i.to <= r.to);
     return [{ ...r, snippet: { ...snippet, name: snippet.name, regions: inner } }];
   });
   const regions: Region[] = [];
@@ -725,7 +818,7 @@ export default function EditorPage() {
    * was opened on, and their fastest segment; its result shows until applied.
    * Generate on a `region`, in the main script too, edits it in place.
    */
-  const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null; region?: Generated } | null>(null);
+  const [tool, setTool] = useState<{ kind: ToolKind; actions: Action[]; picked: number[]; fastest: number | null; region?: Inner } | null>(null);
   /** The Snippets panel shows beside the graph, in the main script and the advanced editor alike. */
   /** The panel beside the graph, on its other side from the sidebar, and which it shows: the markers list or the snippet library. */
   const [asideShown, setAsideShown] = usePersistedState("ossm:editorAsideShown", true, localStorage);
@@ -961,7 +1054,7 @@ export default function EditorPage() {
     const [lo, hi] = [Math.min(...lifted), Math.max(...lifted)];
     const span = actions[hi].at - actions[lo].at;
     const closed = [...actions.slice(0, lo), ...actions.slice(hi + 1).map((a) => ({ at: a.at - span, pos: a.pos }))];
-    const shifted = span ? generators(keptRegions).filter((r) => r.from > actions[lo].at && r.generate.timing === "markers") : [];
+    const shifted = span ? markersRegions(keptRegions).filter((r) => r.from > actions[lo].at) : [];
     return shifted.reduce((list, r) => refilled(list, r, bookmarks), closed);
   }, [actions, lifted, closeGap, keptRegions, bookmarks]);
 
@@ -1278,7 +1371,7 @@ export default function EditorPage() {
     /** Its points with it moved to `to`, `dt` from where it started: a Markers one's, or an instance's Markers regions', on the bookmarks there. */
     const pointsAt = (to: Region, dt: number) => {
       const shifted = own.map((a) => ({ at: a.at + dt, pos: a.pos }));
-      return generators([to]).filter((g) => g.generate.timing === "markers").reduce((list, g) => refilled(list, g, bookmarks), shifted);
+      return markersRegions([to]).reduce((list, g) => refilled(list, g, bookmarks), shifted);
     };
     /** Put it `dt` from where it started; back there, the script as it was. */
     const land = (dt: number) => {
@@ -1645,8 +1738,14 @@ export default function EditorPage() {
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
   /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
   const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
-  /** The part of Generate's setup shown, whose handles the graph shows; Position on opening. */
+  /** The part of Generate's or Repeat's setup shown, whose handles the graph shows; Position, Repeat's Pattern, on opening. */
   const [genPart, setGenPart] = useState<GenPart>("position");
+  /** Repeat's setup for new runs, remembered as Generate's; a region's own while editing it. */
+  const [rememberedRepeat, setRememberedRepeat] = usePersistedState<RepeatSetup>("ossm:editorRepeat", REPEAT_DEFAULTS, localStorage);
+  const [regionRepeat, setRegionRepeat] = useState(REPEAT_DEFAULTS);
+  const [repSetup, setRepSetup] = tool?.region ? [regionRepeat, setRegionRepeat] : [rememberedRepeat, setRememberedRepeat];
+  /** Repeat's pattern: its box's start, in ms, its points, edited while it is open, in the script's times, and the box's fields as typed: Length in s, Bottom and Top. */
+  const [repBox, setRepBox] = useState({ from: 0, pattern: [] as Action[], length: "1", low: "0", high: "100" });
   /** A part's header in Generate's list, pressed to expand it: its name, then `right`, the part's controls while it is expanded, else a summary. */
   const partHeader = (part: GenPart, label: string, right?: ReactNode) => (
     <Flex gap="2" align="center" justify="between" minHeight="24px">
@@ -1680,20 +1779,39 @@ export default function EditorPage() {
     // Over the selected points' time, or the view's.
     const [from, to] = selected.size ? [actions[picked[0]].at, actions[picked[picked.length - 1]].at] : [Math.round(view.from), Math.round(view.from + view.span)];
     setGenRange(rangeFields({ from, to, low: 0, high: 100 }, zero));
+    // Repeat's pattern, the selected points: its Length their span, and their average spacing unless they end where they start, so the copies don't meet on one ms.
+    const pattern = picked.map((i) => actions[i]);
+    if (kind === "repeat") {
+      const span = pattern[pattern.length - 1].at - pattern[0].at;
+      const length = span + (pattern[0].pos === pattern[pattern.length - 1].pos ? 0 : Math.round(span / (pattern.length - 1)));
+      setRepBox({ from: pattern[0].at, pattern, length: String(length / 1000), low: String(Math.min(...depths)), high: String(Math.max(...depths)) });
+    }
     setGenPart("position");
     setBox(null);
   };
 
-  /** Edit the region `r` in place: Generate on its own setup and box; not while placing. */
+  /** Edit the region `r` in place: Generate or Repeat on its own setup and box; not while placing. */
   const editRegion = (r: Region) => {
     if (placing) return;
     if (isInstance(r)) return openAdvanced(undefined, r);
-    setTool({ kind: "generate", actions, picked: [], fastest: null, region: r });
-    setRegionSetup(r.generate);
-    setGenRange(rangeFields(r, zero));
+    if (isRepeat(r)) {
+      const { pattern, length, bottom, top, ...setup } = r.repeat;
+      setTool({ kind: "repeat", actions, picked: [], fastest: null, region: r });
+      setRegionRepeat(setup);
+      setRepBox({ from: r.from, pattern: pattern.map((a) => ({ at: a.at + r.from, pos: a.pos })), length: String(length / 1000), low: String(bottom), high: String(top) });
+    } else {
+      setTool({ kind: "generate", actions, picked: [], fastest: null, region: r });
+      setRegionSetup(r.generate);
+      setGenRange(rangeFields(r, zero));
+    }
     setGenPart("position");
     setBox(null);
   };
+
+  /** Repeat's box fields as numbers while it is open; null while one is refused. */
+  const repParams = tool?.kind === "repeat" ? repeatParams(repBox) : null;
+  /** Repeat's copies, their starts and end, while it is open; null while its box or Count is refused. */
+  const repRun = useMemo(() => repParams && repeated(repSetup, repBox.from, repBox.pattern, repParams.length, repParams.bottom, repParams.top), [repSetup, repBox, tool]);
 
   /** The open tool's result, from the points it was opened on, as its fields stand; null while one is invalid. */
   const preview = useMemo(() => {
@@ -1717,9 +1835,18 @@ export default function EditorPage() {
       const [before, after] = [rest.slice(0, byTime(rest, range.from)), rest.slice(afterTime(rest, range.to))];
       return { actions: [...before, ...made, ...after], selected: new Set(made.map((_, i) => before.length + i)), regions: region && regions.filter((r) => r !== region) };
     }
+    if (kind === "repeat") {
+      // The pattern's own points go, and every point in the copies' time; editing a region, its old points and band too.
+      if (!repRun?.actions) return null;
+      const { region } = tool;
+      const hit = new Set(picked);
+      const rest = actions.filter((a, i) => !hit.has(i) && (a.at < repBox.from || a.at > repRun.end) && (!region || a.at < region.from || a.at > region.to));
+      const at = byTime(rest, repBox.from);
+      return { actions: [...rest.slice(0, at), ...repRun.actions, ...rest.slice(at)], selected: new Set(repRun.actions.map((_, i) => at + i)), regions: region && regions.filter((r) => r !== region) };
+    }
     const limit = typed(maxSpeed);
     return limit > 0 ? speedLimited(actions, picked, limit, speedAnchor === "out") : null;
-  }, [tool, scale, shift, maxSpeed, speedAnchor, genSetup, genRange, zero, bookmarks, regions]);
+  }, [tool, scale, shift, maxSpeed, speedAnchor, genSetup, genRange, zero, bookmarks, regions, repRun, repBox.from]);
 
   /** The open tool's affected points as it was opened on them: the first's time `t0`, the last's `t1`, their lowest depth `lo` and highest `hi`; null without any. */
   const toolSpan = useMemo(() => {
@@ -1737,16 +1864,52 @@ export default function EditorPage() {
   const shiftBox = tool?.kind === "shift" ? shiftParams(shift) : null;
   /** Generate's range box while it is open; null while a field is refused. */
   const genBox = tool?.kind === "generate" ? rangeParams(genRange, zero) : null;
+  /** The box the open tool's functions run across: Generate's, or Repeat's copies' time over its pattern box's depths. */
+  const fnBox = genBox ?? (repRun && repParams && { from: repBox.from, to: repRun.end, low: repParams.bottom, high: repParams.top });
+  /** The open tool's functions, Generate's or Repeat's, as shown, and a change to one of them. */
+  const fnSetup: Partial<Record<FuncKey, Func>> = tool?.kind === "repeat" ? repSetup : genSetup;
+  const setFunc = (key: FuncKey, f: (func: Func) => Func) => (tool?.kind === "repeat"
+    ? setRepSetup((s) => ({ ...s, [key]: f(s[key as "time"]) }))
+    : setGenSetup((s) => ({ ...s, [key]: f(s[key as "interval"]) })));
+  /** The open tool's timing function, shown in its own view below the graph: Generate's Interval or Speed, none with Markers timing, or Repeat's Time. */
+  const timingKey: FuncKey | null = tool?.kind === "repeat" ? "time" : tool?.kind === "generate" && genSetup.timing !== "markers" ? genSetup.timing : null;
+  /**
+   * Where `u` % of a function's range is, in ms, and back: across the box,
+   * but Repeat's Time's by copy, from the first's start to the last's, between
+   * them in step with the copies' time.
+   */
+  const rangeTime = (key: FuncKey, u: number) => {
+    if (key !== "time" || !repRun) return fnBox!.from + (u / 100) * (fnBox!.to - fnBox!.from);
+    const s = repRun.starts;
+    const k = (u / 100) * (s.length - 2);
+    const j = clamp(Math.floor(k), 0, Math.max(s.length - 3, 0));
+    return s[j] + (k - j) * (s[j + 1] - s[j]);
+  };
+  const rangeU = (key: FuncKey, t: number) => {
+    if (key !== "time" || !repRun) return fnBox!.to > fnBox!.from ? ((t - fnBox!.from) / (fnBox!.to - fnBox!.from)) * 100 : 0;
+    const s = repRun.starts;
+    if (s.length < 3) return 0;
+    const next = s.findIndex((at) => at > t);
+    const j = clamp((next < 0 ? s.length : next) - 1, 0, s.length - 3);
+    return clamp(((j + (t - s[j]) / (s[j + 1] - s[j])) / (s.length - 2)) * 100, 0, 100);
+  };
+  /** A function's value at `t` ms, a ramp's or spline's along its range, the rest from the box's start. */
+  const valueAt = (key: FuncKey, t: number) => {
+    const func = fnSetup[key]!;
+    return RANGED.includes(func.shape) ? funcAt(func, rangeU(key, t), 100) : funcAt(func, t - fnBox!.from, fnBox!.to - fnBox!.from);
+  };
   /** Why the open tool's result, though shown, cannot be applied: it would put points into a region or stretch one. */
   const toolBlocked = genBox && regions.some((r) => r !== tool!.region && r.from <= genBox.to && r.to >= genBox.from) ? "The box overlaps a region"
     : genBox && tool!.region && genBox.to <= genBox.from ? "A region's box needs a length"
+    : repRun && regions.some((r) => r !== tool!.region && r.from <= repRun.end && r.to >= repBox.from) ? "The copies overlap a region"
+    : repRun && repRun.end <= repBox.from ? "The copies need a length"
     : scaleBox && scaleBox.time !== 100 && regions.some((r) => r.from > scaleBox.t0 && r.to < scaleBox.t1) ? "Time cannot be scaled across a region"
     : null;
   /** Whether Generate's box holds a bookmark, so Markers timing can be chosen. */
   const genMarked = !!genBox && bookmarks.some((b) => b.time >= genBox.from && b.time <= genBox.to);
-  /** Generate's Interval or Speed shows in its own view below the graph; with Markers timing there is none. */
-  const timingShown = !!genBox && timingView && genSetup.timing !== "markers";
-  const maxSpan = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, videoDuration, genBox?.to ?? 0, MAX_SPAN_FLOOR);
+  /** The timing function shows in its own view below the graph. */
+  const timingShown = !!fnBox && timingView && !!timingKey;
+  const maxSpan = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, videoDuration, fnBox?.to ?? 0, MAX_SPAN_FLOOR);
   const spanStep = SPAN_STEPS.find((s) => s * SPAN_STEP_COUNT >= maxSpan / 1000) ?? SPAN_STEPS[SPAN_STEPS.length - 1];
 
   // The wheel scrolls through time, with Ctrl it zooms around the pointer. Not passive, to keep the page from scrolling.
@@ -1766,21 +1929,21 @@ export default function EditorPage() {
     return () => el.removeEventListener("wheel", wheel);
   }, [setView, maxSpan]);
 
-  /** Times every 2 px across Generate's box's part in view, where its functions are drawn. */
+  /** Times every 2 px across the functions' box's part in view, where they are drawn. */
   const genTimes = (() => {
-    if (!genBox || !(width > 0)) return [];
-    const [t0, t1, step] = [Math.max(genBox.from, view.from), Math.min(genBox.to, view.from + view.span), (2 / width) * view.span];
+    if (!fnBox || !(width > 0)) return [];
+    const [t0, t1, step] = [Math.max(fnBox.from, view.from), Math.min(fnBox.to, view.from + view.span), (2 / width) * view.span];
     return t1 < t0 ? [] : Array.from({ length: Math.ceil((t1 - t0) / step) + 1 }, (_, i) => Math.min(t0 + i * step, t1));
   })();
-  /** A Generate function's curve across its box, as polyline points, `at` placing its values; none while a field is refused. */
-  const genCurve = (func: Func, at: (v: number) => number) => {
-    const values = genTimes.map((t) => funcAt(func, t - genBox!.from, genBox!.to - genBox!.from));
+  /** The function `key`'s curve across its box, as polyline points, `at` placing its values; none while a field is refused. */
+  const genCurve = (key: FuncKey, at: (v: number) => number) => {
+    const values = genTimes.map((t) => valueAt(key, t));
     return values.some(Number.isNaN) ? "" : genTimes.map((t, i) => `${x(t)},${at(values[i])}`).join(" ");
   };
   /** The timing view's scale, bottom and top: a spline's Min and Max, else 0 to a quarter above the highest of the function's fields, so it stays put while dragging. */
   const [timingLow, timingHigh] = (() => {
-    if (genSetup.timing === "markers") return [0, 1];
-    const func = genSetup[genSetup.timing];
+    if (!timingKey) return [0, 1];
+    const func = fnSetup[timingKey]!;
     if (func.shape === "spline") return [typed(func.min ?? ""), typed(func.max ?? "")];
     const peak = Math.max(...SPANNED.map((f) => typed(func[f] ?? "")).filter(Number.isFinite));
     return [0, peak > 0 ? peak * 1.25 : 1];
@@ -1840,14 +2003,61 @@ export default function EditorPage() {
     });
   };
 
-  /** The knot of a Generate spline last pressed and when, to tell a double-click: the drag's pointer capture keeps the browser's own from reaching it. */
+  /** Drag the `sides` of Repeat's pattern box: its right edge sets Length, from 1 ms; its top and bottom its depths, within 0–100, which may pass each other. */
+  const dragRepeat = (e: PointerEvent<SVGRectElement>, sides: ("to" | "low" | "high")[]) => {
+    const start = repParams!;
+    dragHandle(e, (dt, dp) => {
+      const [a, b] = [start.bottom + (sides.includes("low") ? dp : 0), start.top + (sides.includes("high") ? dp : 0)].map((v) => clamp(v, 0, 100));
+      const length = sides.includes("to") ? Math.max(start.length + dt, 1) : start.length;
+      setRepBox((f) => ({ ...f, length: String(length / 1000), low: String(Math.min(a, b)), high: String(Math.max(a, b)) }));
+    });
+  };
+
+  /** The pattern point last pressed and when, to tell a double-click, as a knot's. */
+  const patternPress = useRef<{ i: number; at: number } | null>(null);
+
+  /**
+   * Drag point `i` of Repeat's pattern `pattern`: in time between its
+   * neighbours and within the box, in depth within 0–100. Pressed twice in a
+   * row, it goes instead, while the pattern keeps two.
+   */
+  const dragPattern = (e: PointerEvent<SVGElement>, i: number, pattern = repBox.pattern) => {
+    if (e.button !== 0) return;
+    const twice = patternPress.current?.i === i && e.timeStamp - patternPress.current.at < 500;
+    patternPress.current = twice ? null : { i, at: e.timeStamp };
+    if (twice) {
+      e.stopPropagation();
+      if (pattern.length > 2) setRepBox((f) => ({ ...f, pattern: f.pattern.filter((_, j) => j !== i) }));
+      return;
+    }
+    const a0 = pattern[i];
+    const [lo, hi] = [i > 0 ? pattern[i - 1].at + 1 : repBox.from, Math.min(i < pattern.length - 1 ? pattern[i + 1].at - 1 : Infinity, repBox.from + repParams!.length)];
+    dragHandle(e, (dt, dp) => setRepBox((f) => ({ ...f, pattern: f.pattern.map((a, j) => (j === i ? { at: clamp(a0.at + dt, lo, hi), pos: clamp(a0.pos + dp, 0, 100) } : a)) })));
+  };
+
+  /** Add a point to Repeat's pattern under the pointer, in its box's time, and drag it. */
+  const addPattern = (e: PointerEvent<SVGRectElement>) => {
+    if (e.button !== 0) return;
+    const p = pointerAt(e);
+    p.at = clamp(p.at, repBox.from, repBox.from + repParams!.length);
+    const { pattern } = repBox;
+    if (pattern.some((a) => a.at === p.at)) return;
+    const i = byTime(pattern, p.at);
+    const next = [...pattern.slice(0, i), p, ...pattern.slice(i)];
+    setRepBox((f) => ({ ...f, pattern: next }));
+    dragPattern(e, i, next);
+    // Not the first press of a double-click on the new point.
+    patternPress.current = null;
+  };
+
+  /** The knot of a spline last pressed and when, to tell a double-click: the drag's pointer capture keeps the browser's own from reaching it. */
   const knotPress = useRef<{ key: string; i: number; at: number } | null>(null);
-  const setKnots = (key: FuncKey, knots: Knots) => setGenSetup((s) => ({ ...s, [key]: { ...s[key], knots } }));
+  const setKnots = (key: FuncKey, knots: Knots) => setFunc(key, (f) => ({ ...f, knots }));
 
   /**
    * Drag knot `i` of `knots`, the spline `key`'s: in value within 0–100 (%),
-   * in the box or, for Interval and Speed, the timing view; in time between
-   * its neighbours, the end knots only in value.
+   * in the box or, for Interval, Speed and Time, the timing view; in time
+   * between its neighbours, the end knots only in value.
    * Pressed twice in a row, it goes instead, unless it is an end.
    */
   const dragKnot = (e: PointerEvent<SVGElement>, key: FuncKey, knots: Knots, i: number) => {
@@ -1856,11 +2066,11 @@ export default function EditorPage() {
     knotPress.current = twice ? null : { key, i, at: e.timeStamp };
     const end = i === 0 || i === knots.length - 1;
     if (twice && !end) return setKnots(key, knots.filter((_, j) => j !== i));
-    const { from, to, low, high } = genBox!;
+    const { low, high } = fnBox!;
     const [t0, v0] = knots[i];
-    const own = key === "interval" || key === "speed";
+    const own = ownScale(key);
     dragHandle(e, (dt, dp) => {
-      const t = end ? t0 : clamp(Math.round((t0 + (to > from ? (dt / (to - from)) * 100 : 0)) * 100) / 100, knots[i - 1][0] + KNOT_GAP, knots[i + 1][0] - KNOT_GAP);
+      const t = end ? t0 : clamp(Math.round(rangeU(key, rangeTime(key, t0) + dt) * 100) / 100, knots[i - 1][0] + KNOT_GAP, knots[i + 1][0] - KNOT_GAP);
       const v = clamp(Math.round(v0 + (own ? dp : high > low ? (dp / (high - low)) * 100 : 0)), 0, 100);
       setKnots(key, knots.map((k, j) => (j === i ? [t, v] : k)));
     }, own ? TIMING_HEIGHT - 2 * PAD : undefined);
@@ -1869,9 +2079,8 @@ export default function EditorPage() {
   /** Add a knot to the spline `key` where its line is under the pointer, and drag it. */
   const addKnot = (e: PointerEvent<SVGElement>, key: FuncKey) => {
     if (e.button !== 0) return;
-    const { from, to } = genBox!;
-    const knots = genSetup[key].knots!;
-    const u = Math.round(((pointerAt(e).at - from) / (to - from)) * 10_000) / 100;
+    const knots = fnSetup[key]!.knots!;
+    const u = Math.round(rangeU(key, pointerAt(e).at) * 100) / 100;
     const i = knots.findIndex(([t]) => t > u);
     if (i <= 0 || u - knots[i - 1][0] < KNOT_GAP || knots[i][0] - u < KNOT_GAP) return;
     const next: Knots = [...knots.slice(0, i), [u, Math.round(clamp(splineAt(knots, u), 0, 100))], ...knots.slice(i)];
@@ -1882,26 +2091,26 @@ export default function EditorPage() {
   };
 
   /**
-   * The handles of Generate's function `key` in the box or, for Interval and
-   * Speed, the timing view, `yOf` placing its values: a constant's line and a
+   * The handles of the function `key` in the box or, for Interval, Speed and
+   * Time, the timing view, `yOf` placing its values: a constant's line and a
    * noise's Min and Max drag up and down, as do a ramp's ends; a wave's line
    * moves its Phase, and its Min and Max together; its first peak in the box
    * moves its Max, the trough after it its Min, and either the Period, the
    * other staying; a pulse's falling edge its Width, around the peak; a spline's knots and line as dragKnot's and
    * addKnot's. Values in whole steps: High's and Low's within 0–100,
-   * Interval's (ms) and Speed's from 1; none while a field they move is refused.
+   * Interval's (ms), Speed's and Time's from 1; none while a field they move is refused.
    */
   const funcHandles = (key: FuncKey, yOf: (v: number) => number) => {
-    const func = genSetup[key];
-    const { from, to, low, high } = genBox!;
-    const own = key === "interval" || key === "speed";
+    const func = fnSetup[key]!;
+    const { from, to, low, high } = fnBox!;
+    const own = ownScale(key);
     const f = (field: ShapeField) => typed(func[field] ?? "");
-    const curve = genCurve(func, own ? timingY : (v) => yOf(clamp(v, 0, 100)));
+    const curve = genCurve(key, own ? timingY : (v) => yOf(clamp(v, 0, 100)));
     const fit = (v: number) => String(own ? Math.max(Math.round(v), 1) : clamp(Math.round(v), 0, 100));
     /** Drag a handle; `move` gets how far the pointer has gone in ms and in the function's value, and gives the fields it changes. */
     const drag = (e: PointerEvent<SVGElement>, move: (dt: number, dv: number) => Partial<Func>) => {
       const scale = own ? (timingHigh - timingLow) / 100 : high > low ? 100 / (high - low) : 0;
-      dragHandle(e, (dt, dp) => setGenSetup((s) => ({ ...s, [key]: { ...s[key], ...move(dt, dp * scale) } })), own ? TIMING_HEIGHT - 2 * PAD : undefined);
+      dragHandle(e, (dt, dp) => setFunc(key, (s) => ({ ...s, ...move(dt, dp * scale) })), own ? TIMING_HEIGHT - 2 * PAD : undefined);
     };
     /** A value's line across the box, dragged by it or its grip at the right end; drawn unless it is a constant's, which its curve shows. */
     const line = (field: ShapeField) => {
@@ -1926,7 +2135,7 @@ export default function EditorPage() {
       case "ramp":
         return <>
           {point("start", 0, f("start"), "ns-resize", (e) => drag(e, (_, dv) => ({ start: fit(f("start") + dv) })))}
-          {point("end", to - from, f("end"), "ns-resize", (e) => drag(e, (_, dv) => ({ end: fit(f("end") + dv) })))}
+          {point("end", rangeTime(key, 100) - from, f("end"), "ns-resize", (e) => drag(e, (_, dv) => ({ end: fit(f("end") + dv) })))}
         </>;
       case "spline": {
         // An Interval or Speed spline's knots on its scale, the timing view's.
@@ -1936,7 +2145,7 @@ export default function EditorPage() {
           <polyline points={curve} fill="none" strokeWidth={GRIP} stroke="transparent" style={{ cursor: "copy" }} onPointerDown={(e) => addKnot(e, key)} />
           {func.knots!.map(([t, v], i, knots) => grip(
             `${key}-${i}`,
-            [x(from + (t / 100) * (to - from)) - GRIP / 2, knotY(v) - GRIP / 2, GRIP, GRIP],
+            [x(rangeTime(key, t)) - GRIP / 2, knotY(v) - GRIP / 2, GRIP, GRIP],
             i === 0 || i === knots.length - 1 ? "ns-resize" : "move",
             (e) => dragKnot(e, key, knots, i),
             true,
@@ -1995,17 +2204,23 @@ export default function EditorPage() {
    * Apply the open tool's result as one edit, unless it leaves the points as
    * they are, and go back to the tools. Generate's box becomes a region of its
    * points, with its own copy of the setup, and selected; not a box without
-   * length, whose point stays ordinary. Editing a region, it takes the old
-   * one's place.
+   * length, whose point stays ordinary. Repeat's copies become a region too,
+   * with its pattern. Editing a region, it takes the old one's place.
    */
   const applyTool = () => {
     const { kind, picked, region } = tool!;
     const next = preview!;
     setTool(null);
-    const made: Generated | null = kind === "generate" && genBox!.to > genBox!.from ? { ...genBox!, generate: structuredClone(genSetup) } : null;
+    // Repeat's pattern, the points in its box, timed from its start.
+    const pattern = repBox.pattern.filter((a) => a.at <= repBox.from + (repParams?.length ?? 0)).map((a) => ({ at: a.at - repBox.from, pos: a.pos }));
+    const made: Inner | null = kind === "generate" && genBox!.to > genBox!.from ? { ...genBox!, generate: structuredClone(genSetup) }
+      : kind === "repeat" ? { from: repBox.from, to: repRun!.end, repeat: { ...structuredClone(repSetup), pattern, length: repParams!.length, bottom: repParams!.bottom, top: repParams!.top } }
+      : null;
     const same = next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos);
     if (same && (!made || JSON.stringify(made) === JSON.stringify(region))) return;
-    editLabel.current = region ? "Edit region" : `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(kind === "generate" ? next.selected.size : picked.length)}`;
+    editLabel.current = region ? "Edit region"
+      : kind === "repeat" ? `Repeat ${points(pattern.length)} ×${repSetup.count}`
+      : `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(kind === "generate" ? next.selected.size : picked.length)}`;
     setScript((s) => ({ ...s, actions: next.actions, regions: made ? [...(next.regions ?? s.regions), made].sort((a, b) => a.from - b.from) : next.regions ?? s.regions }));
     if (made) selectRegion(made);
     else setSelected(next.selected);
@@ -2387,8 +2602,7 @@ export default function EditorPage() {
    * again on the bookmarks under them: none without any there; as they are
    * while a setup is refused. Placed from `pasted`'s first point, as before.
    */
-  const filledIn = (pasted: Action[]) => generators(carriedBy(pasted))
-    .filter((r) => r.generate.timing === "markers")
+  const filledIn = (pasted: Action[]) => markersRegions(carriedBy(pasted))
     .reduce((list, r) => refilled(list, r, bookmarks), pasted);
 
   /** The time `pasted` covers, with the regions they carry. */
@@ -2414,7 +2628,7 @@ export default function EditorPage() {
     const next = Math.min(later[0]?.at ?? Infinity, ...keptRegions.filter((r) => r.from >= start).map((r) => r.from));
     const shift = Number.isFinite(next) ? Math.max(end - start, end + 1 - next) : 0;
     const regions = keptRegions.map((r) => (r.from >= start ? movedBy(r, shift) : r));
-    const shifted = shift ? generators(regions).filter((r) => r.from >= start + shift && r.generate.timing === "markers") : [];
+    const shifted = shift ? markersRegions(regions).filter((r) => r.from >= start + shift) : [];
     const after = shifted.reduce((list, r) => refilled(list, r, bookmarks), later.map((a) => ({ at: a.at + shift, pos: a.pos })));
     return { before, after, regions };
   };
@@ -2919,6 +3133,98 @@ export default function EditorPage() {
     </Flex>
   </Flex>;
 
+  /**
+   * The open tool's functions as parts of its panel: those of its `timing`,
+   * shown with the Timing part, then High and Low, each its own part,
+   * collapsed to a header with its shape; expanded, its shape, then its
+   * fields, two to a row, values in the function's unit, Speed's none, as Max
+   * speed's.
+   */
+  const funcParts = (timing: [FuncKey, string, string][]) => ([...timing, ["high", "High", "%"], ["low", "Low", "%"]] as [FuncKey, string, string][])
+    .filter(([key]) => !ownScale(key) || genPart === "timing")
+    .map(([key, label, unit]) => {
+      const func = fnSetup[key]!;
+      // High and Low as parts, collapsed to a header with their shape.
+      const part = key === "high" || key === "low";
+      const set = (next: Func) => setFunc(key, () => next);
+      /** Periods and Interval's values: kept in whole ms, shown in s, above 0. */
+      const inSeconds = (field: ShapeField) => field === "period" || (key === "interval" && SPANNED.includes(field));
+      const shapeSelect = (
+        <Select.Root size="1" value={func.shape} onValueChange={(v) => set(part
+          ? reshaped(func, v as Shape, undefined, key === "high" ? extent(fnSetup.low!)[1] : extent(fnSetup.high!)[0])
+          : reshaped(func, v as Shape, typed((tool?.kind === "repeat" ? REPEAT_DEFAULTS.time : GENERATE_DEFAULTS[key as "interval"]).value ?? "")))}>
+          <Select.Trigger aria-label={`${label} shape`} />
+          <Select.Content>
+            {/* Each with a small graph, which the trigger shows too. */}
+            {Object.entries(SHAPES).map(([shape, { name, graph }]) => (
+              <Select.Item key={shape} value={shape}>
+                <Flex gap="2" align="center">
+                  <svg width="32" height="16" viewBox="0 0 32 16" fill="none" strokeWidth={1.5} strokeLinejoin="round">
+                    <polyline points={graph} stroke={LINE_COLOR} />
+                  </svg>
+                  {name}
+                </Flex>
+              </Select.Item>
+            ))}
+          </Select.Content>
+        </Select.Root>
+      );
+      if (part && genPart !== key) return (
+        <Box key={key}>
+          {partHeader(key, label, <>
+            <svg width="32" height="16" viewBox="0 0 32 16" fill="none" strokeWidth={1.5} strokeLinejoin="round" style={{ verticalAlign: "middle", marginRight: 4 }}>
+              <polyline points={SHAPES[func.shape].graph} stroke={LINE_COLOR} />
+            </svg>
+            {SHAPES[func.shape].name}
+          </>)}
+        </Box>
+      );
+      return (
+        <Flex key={key} direction="column" gap="2">
+          {part ? partHeader(key, label, shapeSelect) : (
+            <Flex gap="2" align="center" justify="between">
+              <Text size="2">{label}</Text>
+              {shapeSelect}
+            </Flex>
+          )}
+          <Text size="1" color="gray">
+            Drag its handles in the {part ? "graph" : "view below the graph"}
+            {func.shape === "spline" ? "; click its line to add a knot, double-click one to remove it." : "."}
+          </Text>
+          <Flex gap="2" wrap="wrap">
+            {/* An Interval, Speed or Time spline's scale too. */}
+            {[...SHAPES[func.shape].fields, ...(func.shape !== "spline" || func.max === undefined ? [] : (["min", "max"] as const))].map((field) => (
+              <TextField.Root
+                key={field}
+                type="number"
+                // Interval's and a period's seconds by tenths with the wheel and arrows; typed, any.
+                step={inSeconds(field) ? 0.1 : "any"}
+                aria-label={`${label} ${field}`}
+                // Shown in s: a number, so React leaves what is being typed ("0.0") alone.
+                value={inSeconds(field) ? (Number.isFinite(typed(func[field] ?? "")) ? typed(func[field]!) / 1000 : "") : func[field] ?? ""}
+                onChange={(e) => set({ ...func, [field]: inSeconds(field) && e.target.value ? String(Math.round(Number(e.target.value) * 1000)) : e.target.value })}
+                // Not typed negative; the wheel and arrows keep them to 0.1 or more.
+                min={inSeconds(field) ? 0.1 : undefined}
+                onKeyDown={(e) => inSeconds(field) && e.key === "-" && e.preventDefault()}
+                style={{ flex: "1 1 40%", minWidth: 0 }}
+              >
+                <TextField.Slot side="left">{{ value: "Value", start: "Start", end: "End", min: "Min", max: "Max", period: "Period", phase: "Phase", width: "Width", seed: "Seed" }[field]}</TextField.Slot>
+                <TextField.Slot side="right">
+                  {field === "seed" ? (
+                    <IconButton size="1" variant="ghost" color="gray" aria-label="Reroll" title="Reroll" onClick={() => set({ ...func, seed: newSeed() })}>
+                      <ShuffleIcon />
+                    </IconButton>
+                  ) : { period: "s", phase: "%", width: "%" }[field as string] ?? unit}
+                </TextField.Slot>
+              </TextField.Root>
+            ))}
+          </Flex>
+          {func.period !== undefined && !(typed(func.period) > 0) && <Text size="1" color="red">Period must be above 0.</Text>}
+          {(key === "interval" || key === "time") && SPANNED.some((f) => func[f] !== undefined && !(typed(func[f]) > 0)) && <Text size="1" color="red">{label} must be above 0.</Text>}
+        </Flex>
+      );
+    });
+
   const sidebar = (
     // At least the panel's height, so the buttons docked at its bottom sit there.
     <Flex direction="column" gap="3" p="3" minHeight="100%">
@@ -3070,7 +3376,7 @@ export default function EditorPage() {
         )}
         <Text size="2" color="gray">{isInstance(region) ? "Snippet" : regionName(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
         <Flex gap="2">
-          <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title={isInstance(region) ? "Edit its points and regions in the advanced editor (E, or double-click it)" : "Edit its setup and box with Generate (E, or double-click it)"} onClick={() => editRegion(region)}>
+          <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title={isInstance(region) ? "Edit its points and regions in the advanced editor (E, or double-click it)" : isRepeat(region) ? "Edit its pattern and setup with Repeat (E, or double-click it)" : "Edit its setup and box with Generate (E, or double-click it)"} onClick={() => editRegion(region)}>
             <Pencil1Icon /> Edit
           </Button>
           <Button variant="soft" color="gray" style={{ flex: 1 }} title="Make its points ordinary points" onClick={() => unlockRegion(region)}>
@@ -3105,10 +3411,18 @@ export default function EditorPage() {
         <Separator size="4" />
         </>}
         {!tool ? <>
-          {/* The tools, on the selected points or all but the regions', each with a small graph of what it does; Generate needs none. */}
+          {/* The tools, on the selected points or all but the regions', each with a small graph of what it does; Generate needs none, Repeat a pattern of two selected. */}
           <Text size="2" weight="medium">Tools</Text>
           {TOOLS.map(({ kind, name, before, after }) => (
-            <Button key={kind} variant="soft" color="gray" disabled={(kind !== "generate" && actions.every((a) => regionAt(regions, a.at))) || !!placing} onClick={() => openTool(kind)} style={{ justifyContent: "flex-start" }}>
+            <Button
+              key={kind}
+              variant="soft"
+              color="gray"
+              disabled={(kind === "repeat" ? selected.size < 2 : kind !== "generate" && actions.every((a) => regionAt(regions, a.at))) || !!placing}
+              title={kind === "repeat" ? "Repeat the selected points, two or more" : undefined}
+              onClick={() => openTool(kind)}
+              style={{ justifyContent: "flex-start" }}
+            >
               <svg width="56" height="24" viewBox="0 0 56 24" fill="none" strokeWidth={1.5} strokeLinejoin="round">
                 <polyline points={before} style={{ stroke: "var(--gray-8)" }} />
                 <polyline points={after} stroke={LINE_COLOR} />
@@ -3281,93 +3595,8 @@ export default function EditorPage() {
                 </Flex>
               </Text>
             )}
-            {/* The shown part's function: its shape, then its fields, two to a row; values in the function's unit, Speed's none, as Max speed's. Markers timing has none. */}
-            {([
-              ...(genSetup.timing === "speed" ? [["speed", "Speed", ""] as const] : genSetup.timing === "interval" ? [["interval", "Interval", "s"] as const] : []),
-              ["high", "High", "%"] as const,
-              ["low", "Low", "%"] as const,
-            ]).filter(([key]) => key === "high" || key === "low" || genPart === "timing").map(([key, label, unit]) => {
-              const func = genSetup[key];
-              // High and Low as parts, collapsed to a header with their shape.
-              const part = key === "high" || key === "low";
-              const set = (next: Func) => setGenSetup({ ...genSetup, [key]: next });
-              /** Periods and Interval's values: kept in whole ms, shown in s, above 0. */
-              const inSeconds = (field: ShapeField) => field === "period" || (key === "interval" && SPANNED.includes(field));
-              const shapeSelect = (
-                <Select.Root size="1" value={func.shape} onValueChange={(v) => set(part
-                  ? reshaped(func, v as Shape, undefined, key === "high" ? extent(genSetup.low)[1] : extent(genSetup.high)[0])
-                  : reshaped(func, v as Shape, typed(GENERATE_DEFAULTS[key].value ?? "")))}>
-                  <Select.Trigger aria-label={`${label} shape`} />
-                  <Select.Content>
-                    {/* Each with a small graph, which the trigger shows too. */}
-                    {Object.entries(SHAPES).map(([shape, { name, graph }]) => (
-                      <Select.Item key={shape} value={shape}>
-                        <Flex gap="2" align="center">
-                          <svg width="32" height="16" viewBox="0 0 32 16" fill="none" strokeWidth={1.5} strokeLinejoin="round">
-                            <polyline points={graph} stroke={LINE_COLOR} />
-                          </svg>
-                          {name}
-                        </Flex>
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-              );
-              if (part && genPart !== key) return (
-                <Box key={key}>
-                  {partHeader(key, label, <>
-                    <svg width="32" height="16" viewBox="0 0 32 16" fill="none" strokeWidth={1.5} strokeLinejoin="round" style={{ verticalAlign: "middle", marginRight: 4 }}>
-                      <polyline points={SHAPES[func.shape].graph} stroke={LINE_COLOR} />
-                    </svg>
-                    {SHAPES[func.shape].name}
-                  </>)}
-                </Box>
-              );
-              return (
-                <Flex key={key} direction="column" gap="2">
-                  {part ? partHeader(key, label, shapeSelect) : (
-                    <Flex gap="2" align="center" justify="between">
-                      <Text size="2">{label}</Text>
-                      {shapeSelect}
-                    </Flex>
-                  )}
-                  <Text size="1" color="gray">
-                    Drag its handles in the {part ? "graph" : "view below the graph"}
-                    {func.shape === "spline" ? "; click its line to add a knot, double-click one to remove it." : "."}
-                  </Text>
-                  <Flex gap="2" wrap="wrap">
-                    {/* An Interval or Speed spline's scale too. */}
-                    {[...SHAPES[func.shape].fields, ...(func.shape !== "spline" || func.max === undefined ? [] : (["min", "max"] as const))].map((field) => (
-                      <TextField.Root
-                        key={field}
-                        type="number"
-                        // Interval's and a period's seconds by tenths with the wheel and arrows; typed, any.
-                        step={inSeconds(field) ? 0.1 : "any"}
-                        aria-label={`${label} ${field}`}
-                        // Shown in s: a number, so React leaves what is being typed ("0.0") alone.
-                        value={inSeconds(field) ? (Number.isFinite(typed(func[field] ?? "")) ? typed(func[field]!) / 1000 : "") : func[field] ?? ""}
-                        onChange={(e) => set({ ...func, [field]: inSeconds(field) && e.target.value ? String(Math.round(Number(e.target.value) * 1000)) : e.target.value })}
-                        // Not typed negative; the wheel and arrows keep them to 0.1 or more.
-                        min={inSeconds(field) ? 0.1 : undefined}
-                        onKeyDown={(e) => inSeconds(field) && e.key === "-" && e.preventDefault()}
-                        style={{ flex: "1 1 40%", minWidth: 0 }}
-                      >
-                        <TextField.Slot side="left">{{ value: "Value", start: "Start", end: "End", min: "Min", max: "Max", period: "Period", phase: "Phase", width: "Width", seed: "Seed" }[field]}</TextField.Slot>
-                        <TextField.Slot side="right">
-                          {field === "seed" ? (
-                            <IconButton size="1" variant="ghost" color="gray" aria-label="Reroll" title="Reroll" onClick={() => set({ ...func, seed: newSeed() })}>
-                              <ShuffleIcon />
-                            </IconButton>
-                          ) : { period: "s", phase: "%", width: "%" }[field as string] ?? unit}
-                        </TextField.Slot>
-                      </TextField.Root>
-                    ))}
-                  </Flex>
-                  {func.period !== undefined && !(typed(func.period) > 0) && <Text size="1" color="red">Period must be above 0.</Text>}
-                  {key === "interval" && SPANNED.some((f) => func[f] !== undefined && !(typed(func[f]) > 0)) && <Text size="1" color="red">Interval must be above 0.</Text>}
-                </Flex>
-              );
-            })}
+            {/* Markers timing has no function. */}
+            {funcParts(genSetup.timing === "speed" ? [["speed", "Speed", ""]] : genSetup.timing === "interval" ? [["interval", "Interval", "s"]] : [])}
             <Flex gap="2" align="center" justify="between">
               {/* Of the generated points: their fastest segment and the shortest time between two. */}
               {(() => {
@@ -3380,6 +3609,62 @@ export default function EditorPage() {
                 );
               })()}
               <Button size="1" variant="soft" color="gray" onClick={() => setGenSetup(GENERATE_DEFAULTS)}>
+                <ResetIcon /> Reset
+              </Button>
+            </Flex>
+          </>}
+          {/* Count, then the setup's parts as Generate's: Pattern its box's fields, Time, High and Low their functions. */}
+          {tool.kind === "repeat" && <>
+            <TextField.Root
+              type="number"
+              min={1}
+              step={1}
+              aria-label="Count"
+              value={repSetup.count}
+              onChange={(e) => setRepSetup({ ...repSetup, count: e.target.value })}
+              onKeyDown={(e) => e.key === "-" && e.preventDefault()}
+            >
+              <TextField.Slot side="left">Count</TextField.Slot>
+            </TextField.Root>
+            {!repRun && repParams && <Text size="1" color="red">Count must be a whole number, at least 1.</Text>}
+            {partHeader("position", "Pattern", genPart !== "position" && `${points(repBox.pattern.length)} · ${repBox.length} s`)}
+            {genPart === "position" && <>
+              <Text size="1" color="gray">Drag its points in the graph; click in its box to add one, double-click one to remove it. The box's right edge sets its Length.</Text>
+              {([["length"], ["low", "high"]] as const).map((row) => (
+                <Flex key={row[0]} gap="2">
+                  {row.map((field) => (
+                    <TextField.Root
+                      key={field}
+                      type="number"
+                      step={field === "length" ? 0.1 : "any"}
+                      min={field === "length" ? 0.1 : undefined}
+                      aria-label={{ length: "Pattern length", low: "Pattern bottom", high: "Pattern top" }[field]}
+                      value={repBox[field]}
+                      onChange={(e) => setRepBox({ ...repBox, [field]: e.target.value })}
+                      style={{ flex: 1, minWidth: 0 }}
+                    >
+                      <TextField.Slot side="left">{{ length: "Length", low: "Bottom", high: "Top" }[field]}</TextField.Slot>
+                      {field === "length" && <TextField.Slot side="right">s</TextField.Slot>}
+                    </TextField.Root>
+                  ))}
+                </Flex>
+              ))}
+            </>}
+            {partHeader("timing", "Time", genPart !== "timing" && SHAPES[repSetup.time.shape].name)}
+            {genPart === "timing" && <>
+              <Text size="1" color="gray">Each copy's length, in % of the pattern's; a ramp's or spline's from the first copy to the last.</Text>
+              <Text as="label" size="2">
+                <Flex gap="2" align="center">
+                  <Switch checked={timingView} onCheckedChange={setTimingView} /> Show Time below the graph
+                </Flex>
+              </Text>
+            </>}
+            {funcParts([["time", "Time", "%"]])}
+            <Flex gap="2" align="center" justify="between">
+              <Text size="1" color="gray">
+                Copies: {repRun ? repRun.starts.length - 1 : "—"} · Ends at: {repRun ? formatScriptTime((repRun.end - zero) / 1000) : "—"}
+              </Text>
+              <Button size="1" variant="soft" color="gray" onClick={() => setRepSetup(REPEAT_DEFAULTS)}>
                 <ResetIcon /> Reset
               </Button>
             </Flex>
@@ -3971,7 +4256,7 @@ export default function EditorPage() {
                 <g>
                   <rect x={b.from} y={b.high} width={b.to - b.from} height={b.low - b.high} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "move", pointerEvents: position ? undefined : "none" }} onPointerDown={(e) => dragGenerate(e, ["from", "to", "low", "high"])} />
                   {(["high", "low"] as const).map((key) => (
-                    <polyline key={key} points={genCurve(genSetup[key], (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
+                    <polyline key={key} points={genCurve(key, (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
                   ))}
                   {position && GRIPS.map(([h, v]) => grip(
                     `${h}-${v}`,
@@ -3981,6 +4266,31 @@ export default function EditorPage() {
                     !!(h && v),
                   ))}
                   {(genPart === "high" || genPart === "low") && funcHandles(genPart, depth)}
+                </g>
+              );
+            })()}
+            {/*
+              Repeat: the copies' time shaded over the pattern box's depths, High's and Low's curves dashed across it, the shown one's bolder, with its handles.
+              The pattern box, a click in its time adding a point, its right edge setting Length, its top and bottom its depths; its points over it, dragged.
+            */}
+            {tool?.kind === "repeat" && repParams && (() => {
+              const [left, right, top, bottom] = [x(repBox.from), x(repBox.from + repParams.length), y(repParams.top), y(repParams.bottom)];
+              const depth = (v: number) => y(repParams.bottom + (v * (repParams.top - repParams.bottom)) / 100);
+              return (
+                <g>
+                  {fnBox && <rect x={left} y={top} width={x(fnBox.to) - left} height={bottom - top} style={{ fill: TOOL_BOX.fill, pointerEvents: "none" }} />}
+                  {fnBox && (["high", "low"] as const).map((key) => (
+                    <polyline key={key} points={genCurve(key, (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
+                  ))}
+                  <rect x={left} width={right - left} height={plotHeight} fill="transparent" style={{ cursor: "copy" }} onPointerDown={addPattern} />
+                  <rect x={left} y={top} width={right - left} height={bottom - top} strokeDasharray="4 2" style={{ fill: "none", stroke: TOOL_BOX.stroke, pointerEvents: "none" }} />
+                  {(["low", "high"] as const).map((v) => grip(v, [left, y(repParams[v === "low" ? "bottom" : "top"]) - GRIP / 2, right - left, GRIP], "ns-resize", (e) => dragRepeat(e, [v])))}
+                  {grip("to", [right - GRIP / 2, top, GRIP, Math.max(bottom - top, GRIP)], "ew-resize", (e) => dragRepeat(e, ["to"]))}
+                  {(["low", "high"] as const).map((v) => grip(`to-${v}`, [right - GRIP / 2, (v === "low" ? bottom : top) - GRIP / 2, GRIP, GRIP], v === "high" ? "nesw-resize" : "nwse-resize", (e) => dragRepeat(e, ["to", v]), true))}
+                  {repBox.pattern.map((a, i) => a.at <= repBox.from + repParams.length && (
+                    <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={5} style={{ fill: LINE_COLOR, stroke: "var(--gray-12)", cursor: "move" }} onPointerDown={(e) => dragPattern(e, i)} />
+                  ))}
+                  {fnBox && (genPart === "high" || genPart === "low") && funcHandles(genPart, depth)}
                 </g>
               );
             })()}
@@ -4024,25 +4334,24 @@ export default function EditorPage() {
           <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
           <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
         </Box>
-        {/* Generate's Interval or Speed in the graph's time, over the box's, on a scale of its own from 0 at the bottom; with Timing shown, its handles as High's and Low's in the box. */}
+        {/* The timing function, Generate's Interval or Speed or Repeat's Time, in the graph's time, over the box's, on a scale of its own from 0 at the bottom; with Timing shown, its handles as High's and Low's in the box. */}
         {timingShown && (() => {
-          const key = genSetup.timing as "interval" | "speed";
-          const func = genSetup[key];
+          const key = timingKey!;
           return (
             <Box flexShrink="0" height={`${TIMING_HEIGHT}px`} style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
               <svg width={width} height={TIMING_HEIGHT} style={{ display: "block", touchAction: "none", userSelect: "none" }}>
-                <rect x={x(genBox.from)} width={x(genBox.to) - x(genBox.from)} height={TIMING_HEIGHT} style={{ fill: TOOL_BOX.fill, pointerEvents: "none" }} />
+                <rect x={x(fnBox.from)} width={x(fnBox.to) - x(fnBox.from)} height={TIMING_HEIGHT} style={{ fill: TOOL_BOX.fill, pointerEvents: "none" }} />
                 {timingLow < timingHigh && <>
                   {[0, 0.5, 1].map((f) => (
                     <g key={f} style={{ pointerEvents: "none" }}>
                       <line x1={0} x2={width} y1={PAD + (1 - f) * (TIMING_HEIGHT - 2 * PAD)} y2={PAD + (1 - f) * (TIMING_HEIGHT - 2 * PAD)} style={{ stroke: "var(--gray-a5)" }} />
                       <text x={width - 4} y={PAD + (1 - f) * (TIMING_HEIGHT - 2 * PAD) + (f === 0 ? -3 : f === 1 ? 10 : 3)} textAnchor="end" fontSize={10} style={{ fill: "var(--blue-11)" }}>
-                        {/* Interval's in s, as its fields. */}
-                        {key === "interval" ? +((timingLow + f * (timingHigh - timingLow)) / 1000).toFixed(2) : Math.round(timingLow + f * (timingHigh - timingLow))}
+                        {/* Interval's in s, as its fields, Time's in %. */}
+                        {key === "interval" ? +((timingLow + f * (timingHigh - timingLow)) / 1000).toFixed(2) : `${Math.round(timingLow + f * (timingHigh - timingLow))}${key === "time" ? "%" : ""}`}
                       </text>
                     </g>
                   ))}
-                  <polyline points={genCurve(func, timingY)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--blue-9)", pointerEvents: "none" }} />
+                  <polyline points={genCurve(key, timingY)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--blue-9)", pointerEvents: "none" }} />
                   {genPart === "timing" && funcHandles(key, timingY)}
                 </>}
               </svg>
