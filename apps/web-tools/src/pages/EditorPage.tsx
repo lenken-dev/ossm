@@ -454,7 +454,8 @@ function reshaped(func: Func, shape: Shape, own?: number, toward?: number): Func
 
 /**
  * Generate's setup: how the next point's time is found, whether the first
- * point goes on Low (In) or High (Out), and a function for each of
+ * point goes on Low (In) or High (Out), how many points in a row go on each
+ * (1 when not set), and a function for each of
  * Interval (ms), Speed, and High and Low (in % of the box). Markers timing
  * puts the points at the bookmarks instead.
  */
@@ -463,6 +464,9 @@ interface GenerateSetup {
   /** With Markers timing, the names of the bookmarks it leaves out. */
   skip?: string[];
   first: "in" | "out";
+  /** Points in a row on High and on Low, as typed; whole numbers from 1. */
+  highs?: string;
+  lows?: string;
   interval: Func;
   speed: Func;
   high: Func;
@@ -473,11 +477,22 @@ interface GenerateSetup {
 type FuncKey = "interval" | "speed" | "high" | "low" | "time";
 /** Whether the function `key` is on a scale of its own, in the timing view, rather than in % of the box. */
 const ownScale = (key: FuncKey) => key !== "high" && key !== "low";
-/** The parts of Generate's setup, shown one at a time, with their handles in the graph: Position its box and First, Timing its timing and Interval or Speed. */
+/** The parts of Generate's setup, shown one at a time, with their handles in the graph: Layout its box, First and the runs on High and Low, Timing its timing and Interval or Speed. */
 type GenPart = "position" | "timing" | "high" | "low";
 
 const constant = (value: string): Func => ({ shape: "constant", value });
 const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("500"), speed: constant("200"), high: constant("100"), low: constant("0") };
+
+/**
+ * Whether Generate's point `i` goes on High: First's side's run, then the
+ * other's, over and over; null while a run is not a whole number from 1.
+ */
+function onHigh(setup: GenerateSetup, i: number) {
+  const [highs, lows] = [typed(setup.highs ?? "1"), typed(setup.lows ?? "1")];
+  if (!(Number.isInteger(highs) && highs >= 1 && Number.isInteger(lows) && lows >= 1)) return null;
+  const k = i % (highs + lows);
+  return setup.first === "out" ? k < highs : k >= lows;
+}
 
 /** A random value, 0–1, for `seed` and `k`. */
 function hashed(seed: number, k: number) {
@@ -551,11 +566,12 @@ function funcAt(func: Func, t: number, span: number) {
 }
 
 /**
- * Generate's points in `range`: reversals alternating between High and Low,
+ * Generate's points in `range`: runs of points on High and on Low in turn,
  * from its start, the last at or before its end; null while a field is
  * refused. Each next point goes the Interval after the one before, or with
- * Speed timing at the first ms where the segment to it is no faster than the
- * Speed; at least 1 ms after either way. With Markers timing, one goes at
+ * Speed timing at the first ms where a segment to the other side's function
+ * is no faster than the Speed, so a point in a run waits as long as a stroke
+ * would; at least 1 ms after either way. With Markers timing, one goes at
  * each of the sorted bookmarks `marks` in the range it doesn't skip, one per
  * ms; null without any.
  */
@@ -565,11 +581,14 @@ function generated(setup: GenerateSetup, range: Area, marks: Bookmark[]): Action
   const depthAt = (func: Func, at: number) => Math.round(range.low + (clamp(funcAt(func, at - range.from, span), 0, 100) * (range.high - range.low)) / 100);
   if (setup.timing === "markers") {
     const times = [...new Set(markTimes(setup, marks).filter((t) => t >= range.from && t <= range.to))];
-    const made = times.map((at, i) => ({ at, pos: depthAt(i % 2 === (setup.first === "out" ? 0 : 1) ? setup.high : setup.low, at) }));
+    if (onHigh(setup, 0) === null) return null;
+    const made = times.map((at, i) => ({ at, pos: depthAt(onHigh(setup, i) ? setup.high : setup.low, at) }));
     return made.length && !made.some((a) => Number.isNaN(a.pos)) ? made : null;
   }
+  if (onHigh(setup, 0) === null) return null;
   const out: Action[] = [];
-  for (let at = range.from, high = setup.first === "out"; at <= range.to; high = !high) {
+  for (let at = range.from; at <= range.to; ) {
+    const high = onHigh(setup, out.length);
     const pos = depthAt(high ? setup.high : setup.low, at);
     const step = setup.timing === "speed" ? Math.max(funcAt(setup.speed, at - range.from, span), 1) : funcAt(setup.interval, at - range.from, span);
     // An Interval not above 0 is refused.
@@ -579,7 +598,7 @@ function generated(setup: GenerateSetup, range: Area, marks: Bookmark[]): Action
       at += Math.max(Math.round(step), 1);
       continue;
     }
-    // A ms at a time, so no crossing is missed: as many steps in all as the range has ms. Between the rounded depths, as the points get them.
+    // A ms at a time, so no crossing is missed: as many steps in all as the range has ms. Between the rounded depths, as the points get them; to the other side even within a run.
     const next = high ? setup.low : setup.high;
     let dt = 1;
     while (at + dt <= range.to && Math.abs(depthAt(next, at + dt) - pos) * 1000 > step * dt) dt++;
@@ -1743,7 +1762,7 @@ export default function EditorPage() {
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
   /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
   const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
-  /** The part of Generate's or Repeat's setup shown, whose handles the graph shows; Position, Repeat's Pattern, on opening. */
+  /** The part of Generate's or Repeat's setup shown, whose handles the graph shows; Generate's Layout, Repeat's Pattern, on opening. */
   const [genPart, setGenPart] = useState<GenPart>("position");
   /** Repeat's setup for new runs, remembered as Generate's; a region's own while editing it. */
   const [rememberedRepeat, setRememberedRepeat] = usePersistedState<RepeatSetup>("ossm:editorRepeat", REPEAT_DEFAULTS, localStorage);
@@ -3509,9 +3528,9 @@ export default function EditorPage() {
               </SegmentedControl.Root>
             </Flex>
           </>}
-          {/* The setup's parts as a list, one expanded at a time: Position the range box's fields and First, Timing the timing and its function, High and Low theirs. */}
+          {/* The setup's parts as a list, one expanded at a time: Layout the range box's fields, First and the runs on High and Low, Timing the timing and its function, High and Low theirs. */}
           {tool.kind === "generate" && <>
-            {partHeader("position", "Position", genPart !== "position" && `${genRange.from}–${genRange.to} s`)}
+            {partHeader("position", "Layout", genPart !== "position" && `${genRange.from}–${genRange.to} s`)}
             {genPart === "position" && ([["from", "to"], ["low", "high"]] as const).map((row) => (
               <Flex key={row[0]} gap="2">
                 {row.map((field) => (
@@ -3537,6 +3556,25 @@ export default function EditorPage() {
                 <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
               </SegmentedControl.Root>
             </Flex>}
+            {genPart === "position" && (
+              <Flex gap="2">
+                {(["highs", "lows"] as const).map((field) => (
+                  <TextField.Root
+                    key={field}
+                    type="number"
+                    min="1"
+                    step="1"
+                    aria-label={field === "highs" ? "Points in a row on High" : "Points in a row on Low"}
+                    value={genSetup[field] ?? "1"}
+                    onChange={(e) => setGenSetup({ ...genSetup, [field]: e.target.value })}
+                    style={{ flex: 1, minWidth: 0 }}
+                  >
+                    <TextField.Slot side="left">{field === "highs" ? "On High" : "On Low"}</TextField.Slot>
+                    <TextField.Slot side="right">×</TextField.Slot>
+                  </TextField.Root>
+                ))}
+              </Flex>
+            )}
             {partHeader("timing", "Timing", genPart !== "timing" && { interval: "Interval", speed: "Speed", markers: "Markers" }[genSetup.timing])}
             {/* In a row of its own, across the panel. */}
             {genPart === "timing" && (
@@ -4257,7 +4295,7 @@ export default function EditorPage() {
                 </g>
               );
             })()}
-            {/* Generate's range box, like the selection box: with Position shown its edges and corners resize it, its body moves it. High and Low's curves dashed in it, the shown one's bolder, with its handles. */}
+            {/* Generate's range box, like the selection box: with Layout shown its edges and corners resize it, its body moves it. High and Low's curves dashed in it, the shown one's bolder, with its handles. */}
             {genBox && (() => {
               const b = { from: x(genBox.from), to: x(genBox.to), low: y(genBox.low), high: y(genBox.high) };
               const depth = (v: number) => y(genBox.low + (v * (genBox.high - genBox.low)) / 100);
