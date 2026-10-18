@@ -248,6 +248,8 @@ export default function PlayerPage() {
   const played = useMemo(() => script && simplified ? simplify(script) : script, [script, simplified]);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
   const [offset, setOffset] = usePersistedState("ossm:playerOffset", -50);
+  /** The offset slider's value while dragged; the offset applies on release. */
+  const [offsetDraft, setOffsetDraft] = useState<number | null>(null);
   /** How fast the script plays against the video, which keeps its own speed. */
   const [scriptSpeed, setScriptSpeed] = usePersistedState("ossm:playerScriptSpeed", 1);
   /** The script follows the media's playhead; otherwise it keeps its own and only plays and pauses with the media. */
@@ -613,13 +615,18 @@ export default function PlayerPage() {
             {ready && (
               <LabeledSlider
                 label="Sync offset"
-                value={offset}
-                display={`${offset > 0 ? "+" : ""}${offset} ms`}
+                value={offsetDraft ?? offset}
+                display={`${(offsetDraft ?? offset) > 0 ? "+" : ""}${offsetDraft ?? offset} ms`}
                 min={-500}
                 max={500}
                 step={5}
-                disabled={!paused}
-                onChange={setOffset}
+                onChange={setOffsetDraft}
+                onCommit={(v) => {
+                  // The queued points are timed from the old offset; the next tick opens a stream at the new one.
+                  endStream("offset");
+                  setOffsetDraft(null);
+                  setOffset(v);
+                }}
               />
             )}
             {ready && media && (

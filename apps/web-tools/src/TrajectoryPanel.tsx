@@ -297,6 +297,7 @@ export function LabeledSlider({
   disabled,
   ends,
   onChange,
+  onCommit,
 }: {
   label: string;
   value: number;
@@ -308,6 +309,8 @@ export function LabeledSlider({
   /** Labels under the track's start and end. */
   ends?: [string, string];
   onChange: (v: number) => void;
+  /** On release or a key step, after the `onChange` calls of a drag. */
+  onCommit?: (v: number) => void;
 }) {
   return (
     <Box>
@@ -315,7 +318,7 @@ export function LabeledSlider({
         <Text size="2" weight="medium">{label}</Text>
         <Text size="2" color="gray">{display}</Text>
       </Flex>
-      <Slider min={min} max={max} step={step} value={[value]} disabled={disabled} onValueChange={([v]) => onChange(v)} />
+      <Slider min={min} max={max} step={step} value={[value]} disabled={disabled} onValueChange={([v]) => onChange(v)} onValueCommit={([v]) => onCommit?.(v)} />
       {ends && (
         <Flex justify="between" mt="1">
           <Text size="1" color="gray">{ends[0]}</Text>
