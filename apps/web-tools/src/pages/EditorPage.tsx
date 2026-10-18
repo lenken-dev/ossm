@@ -141,8 +141,8 @@ interface Clip {
   regions: Region[];
 }
 
-/** A clip being placed, with which of its points and regions are `picked` and what its edit is called; see `placing`. */
-type Placing = Clip & { picked?: { actions: boolean[]; regions: boolean[] }; label?: string };
+/** A clip being placed, with which of its points and regions are `picked`, what its edit is called, the time its first point came `from` and the point dragged by, its `grip`; see `placing`. */
+type Placing = Clip & { picked?: { actions: boolean[]; regions: boolean[] }; label?: string; from?: number; grip?: number };
 
 /** What the undo history calls `n` points and the regions `rs` together. */
 const items = (n: number, rs: Region[]) => [n ? points(n) : "", rs.length === 1 ? regionNoun(rs[0]) : rs.length ? `${rs.length} regions` : ""].filter(Boolean).join(" and ");
@@ -939,8 +939,8 @@ export default function EditorPage() {
    * Points being placed, timed from the first, with the regions they carry,
    * following the pointer until a click or a drag's release places them; with
    * the `picked` ones of them, the selection being moved, which alone take the
-   * depth change and are selected once placed (all without), and what the
-   * edit is called.
+   * depth change and are selected once placed (all without), what the edit
+   * is called and, moved or added, the time its first point came from.
    */
   const [placing, setPlacing] = useState<Placing | null>(null);
   /**
@@ -956,8 +956,8 @@ export default function EditorPage() {
   const carrying = useRef(false);
   /** Set on a drag's release, to put in what it carried, or by Done, to put in its result; see where it is used. */
   const [settle, setSettle] = useState<"drop" | "try" | null>(null);
-  /** While a selection that is not consecutive is dragged in place, the points as they were, which of them move, and its regions as they were; drawn dashed. */
-  const [apart, setApart] = useState<{ actions: Action[]; moving: Set<number>; regions: Region[] } | null>(null);
+  /** While a selection that is not consecutive is dragged in place, the points as they were, which of them move, its regions as they were, drawn dashed, and the point dragged by, else the first, as it was. */
+  const [apart, setApart] = useState<{ actions: Action[]; moving: Set<number>; regions: Region[]; grip?: Action } | null>(null);
   /** While one is dragged, puts it back where it was, for Escape. */
   const cancelApart = useRef<(() => void) | null>(null);
   /** Selection mode's box selects by time: it takes in whole stretches of the script, whatever their depth. */
@@ -965,7 +965,7 @@ export default function EditorPage() {
   /**
    * Modifiers held while placing: Shift replaces the points covered instead
    * of inserting, Ctrl (or Cmd) keeps the copied depths instead of following
-   * the pointer's.
+   * the pointer's, or moved or added points their time; see `upright`.
    */
   const [held, setHeld] = useState({ shift: false, ctrl: false });
   const inserting = !held.shift;
@@ -1303,10 +1303,10 @@ export default function EditorPage() {
   /**
    * Lift the selection, the points `ps` and the regions `rs`, to place it
    * again: the stretch from its first to its last item, with every point and
-   * region in it, the gap closing behind it. Returns its first point; null
-   * when it has none, as there is nothing to place.
+   * region in it, the gap closing behind it, dragged by the point `grabbed`.
+   * Returns its first point; null when it has none, as there is nothing to place.
    */
-  const lift = (ps: number[], rs: Region[]) => {
+  const lift = (ps: number[], rs: Region[], grabbed?: number) => {
     const times = [...ps.map((i) => actions[i].at), ...rs.flatMap((r) => [r.from, r.to])];
     const [from, to] = [Math.min(...times), Math.max(...times)];
     const [lo, hi] = [byTime(actions, from), afterTime(actions, to)];
@@ -1319,6 +1319,8 @@ export default function EditorPage() {
       actions: actions.slice(lo, hi).map((a) => ({ at: a.at - first.at, pos: a.pos })),
       regions: inner.map((r) => movedBy(r, -first.at)),
       picked: { actions: actions.slice(lo, hi).map((_, j) => own.has(lo + j)), regions: inner.map((r) => rs.includes(r)) },
+      from: first.at,
+      grip: grabbed === undefined ? undefined : grabbed - lo,
     });
     setLifted({ from, to, points: own, regions: rs });
     setPlaceAt(first);
@@ -1330,16 +1332,16 @@ export default function EditorPage() {
   /**
    * Follow a drag from `e` with what is being placed, its first point at
    * `start` as pressed; without one, once it has gone 3 px, with the
-   * selection `ps`, `rs` lifted. Released, it goes in.
+   * selection `ps`, `rs` lifted, by the point `grabbed`. Released, it goes in.
    */
-  const carry = (e: PointerEvent<Element>, start: Action | null, ps: number[] = [], rs: Region[] = []) => {
+  const carry = (e: PointerEvent<Element>, start: Action | null, ps: number[] = [], rs: Region[] = [], grabbed?: number) => {
     e.preventDefault();
     e.stopPropagation();
     const origin = pointerAt(e);
     const [x0, y0] = [e.clientX, e.clientY];
     carrying.current = !!start;
     track(e.currentTarget.closest("svg")!, e, (m) => {
-      if (!start && (Math.hypot(m.clientX - x0, m.clientY - y0) <= 3 || !(start = lift(ps, rs)))) return;
+      if (!start && (Math.hypot(m.clientX - x0, m.clientY - y0) <= 3 || !(start = lift(ps, rs, grabbed)))) return;
       carrying.current = true;
       const p = pointerAt(m);
       setPlaceAt({ at: start!.at + p.at - origin.at, pos: start!.pos + p.pos - origin.pos });
@@ -1366,7 +1368,7 @@ export default function EditorPage() {
     if (inside) return regionDown(e, inside);
     if (selected.size > 1 || chosen.length) return select([]);
     if (point.at < 0) return;
-    setPlacing({ actions: [{ at: 0, pos: point.pos }], regions: [], label: "Add point" });
+    setPlacing({ actions: [{ at: 0, pos: point.pos }], regions: [], label: "Add point", from: point.at });
     setPlaceAt(point);
     carry(e, point);
   };
@@ -1410,8 +1412,8 @@ export default function EditorPage() {
     if (picked(e, actions[i].at, actions[i].at, () => setSelected(toggled(i)))) return;
     const [ps, rs] = selected.has(i) ? [[...selected], chosen] : [[i], []];
     select(ps, rs);
-    if (consecutive(ps, rs)) carry(e, null, ps, rs);
-    else dragApart(e, ps, rs);
+    if (consecutive(ps, rs)) carry(e, null, ps, rs, i);
+    else dragApart(e, ps, rs, i);
   };
 
   /** A press on the region `r`'s band, as on a point. */
@@ -1437,9 +1439,11 @@ export default function EditorPage() {
    * `rs`, once it has gone 3 px: in place and live, each staying between the
    * other points and regions either side of it, from 0 on, so it passes none;
    * to pass them, select the whole stretch. The selected points follow the
-   * pointer's depth, but not with a region. Escape puts it back. One edit.
+   * pointer's depth, but not with a region. Ctrl (or Cmd) keeps their times
+   * while dragged further in depth than in time on screen, else their depths.
+   * Escape puts it back. One edit. Dragged by the point `grabbed`.
    */
-  const dragApart = (e: PointerEvent<Element>, ps: number[], rs: Region[]) => {
+  const dragApart = (e: PointerEvent<Element>, ps: number[], rs: Region[], grabbed = ps[0]) => {
     e.preventDefault();
     e.stopPropagation();
     const own = new Set(ps);
@@ -1464,7 +1468,7 @@ export default function EditorPage() {
         live = true;
         dragging.current = true;
         editLabel.current = `Move ${items(ps.length, rs)}`;
-        setApart({ actions, moving, regions: rs });
+        setApart({ actions, moving, regions: rs, grip: actions[grabbed] });
         cancelApart.current = () => {
           done = true;
           setScript((s) => ({ ...s, ...start }));
@@ -1473,8 +1477,11 @@ export default function EditorPage() {
         };
       }
       const p = pointerAt(m);
-      const dt = clamp(p.at - origin.at, dtMin, dtMax);
-      const dp = rs.length ? 0 : clamp(p.pos - origin.pos, -Math.min(...depths), 100 - Math.max(...depths));
+      const lock = m.ctrlKey || m.metaKey;
+      setHeld({ shift: m.shiftKey, ctrl: lock });
+      const up = Math.abs(y(p.pos) - y(origin.pos)) > Math.abs(x(p.at) - x(origin.at));
+      const dt = lock && up ? 0 : clamp(p.at - origin.at, dtMin, dtMax);
+      const dp = rs.length || (lock && !up) ? 0 : clamp(p.pos - origin.pos, -Math.min(...depths), 100 - Math.max(...depths));
       const moved = rs.map((r) => movedBy(r, dt));
       const shifted = actions.map((a, i) => (!moving.has(i) ? a : { at: a.at + dt, pos: own.has(i) ? a.pos + dp : a.pos }));
       // A moved Markers region's points go on the bookmarks in its new box; the selected points are found again by their times.
@@ -2566,15 +2573,29 @@ export default function EditorPage() {
    * The points being placed with the first at `at`, `pos`; they keep their
    * shape and stay within 0–100, and their regions from 0 on. Only the picked
    * ones take the depth change, and none carrying regions, which keep their
-   * depths, as the regions' boxes do.
+   * depths, as the regions' boxes do. Locked, they keep their time instead
+   * where `upright`.
    */
-  const positioned = (at: number, pos: number, keepDepth: boolean) => {
-    const { actions: shape, regions, picked } = placing!;
+  const positioned = (at: number, pos: number, lock: boolean) => {
+    const { actions: shape, regions, picked, from } = placing!;
+    const keepTime = lock && upright(at, pos);
+    const keepDepth = lock && !keepTime;
+    if (keepTime) at = from!;
     const follows = (j: number) => !picked || picked.actions[j];
     const depths = shape.filter((_, j) => follows(j)).map((a) => a.pos);
     const dp = keepDepth || regions.length || !depths.length ? 0 : clamp(pos - shape[0].pos, -Math.min(...depths), 100 - Math.max(...depths));
     const first = Math.max(at, 0, ...regions.map((r) => -r.from));
     return shape.map((a, j) => ({ at: first + a.at, pos: follows(j) ? a.pos + dp : a.pos }));
+  };
+
+  /**
+   * Whether the points being placed with the first at `at`, `pos` are further
+   * on screen from where they came from in depth than in time; never for a
+   * paste, which came from no time.
+   */
+  const upright = (at: number, pos: number) => {
+    const { actions: shape, from } = placing!;
+    return from !== undefined && Math.abs(y(pos) - y(shape[0].pos)) > Math.abs(x(at) - x(from));
   };
 
   /** Placing on markers, the time `at` on the nearest bookmark out of the regions; as it is otherwise, or without one. */
@@ -2806,6 +2827,8 @@ export default function EditorPage() {
 
   /** The points being placed where the pointer puts them. */
   const ghost = placing && placeAt ? positioned(snapAt(placeAt.at), placeAt.pos, held.ctrl) : null;
+  /** The point being placed or dragged apart dragged by, else the first, where it came from: a paste's depth alone, as it came from no time. */
+  const dragged = placing && placeAt ? { at: placing.from === undefined ? undefined : placing.from + placing.actions[placing.grip ?? 0].at, pos: placing.actions[placing.grip ?? 0].pos } : apart?.grip;
   /** Where they go in; none where they can't, as they would cut into a region, and they show red. */
   const landed = ghost && landing(ghost, inserting);
   const refused = !!ghost && !landed;
@@ -4188,10 +4211,13 @@ export default function EditorPage() {
             <foreignObject width={width} height={height} style={{ pointerEvents: "none" }}>
               <canvas ref={canvasRef} style={{ display: "block", width, height }} />
             </foreignObject>
-            {/* Holding Ctrl, the copied points' original lowest and highest depth, which it keeps them at. */}
-            {ghost && placing && held.ctrl && [Math.min(...placing.actions.map((a) => a.pos)), Math.max(...placing.actions.map((a) => a.pos))].map((pos, i) => (
-              <line key={i} x1={0} x2={width} y1={y(pos)} y2={y(pos)} strokeDasharray="6 4" style={{ stroke: LINE_COLOR, opacity: 0.6, pointerEvents: "none" }} />
-            ))}
+            {/* Holding Ctrl, the axes through where the point dragged by came from, along which it keeps them. */}
+            {dragged && held.ctrl && (
+              <g strokeDasharray="6 4" style={{ stroke: LINE_COLOR, opacity: 0.6, pointerEvents: "none" }}>
+                <line x1={0} x2={width} y1={y(dragged.pos)} y2={y(dragged.pos)} />
+                {dragged.at !== undefined && <line x1={x(dragged.at)} x2={x(dragged.at)} y1={0} y2={plotHeight} />}
+              </g>
+            )}
             {/* While placing, a click anywhere places, over points and the playhead alike. */}
             {placing && (
               // No menu for Ctrl+click, which is a right-click on a Mac.
