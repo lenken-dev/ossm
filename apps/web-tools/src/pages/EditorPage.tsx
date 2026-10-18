@@ -210,9 +210,10 @@ interface Selection {
   markers: Set<Marker>;
 }
 
-/** An undo history entry: the content after an edit, what the edit is called, and the selection last made on it. */
+/** An undo history entry: the content after an edit, what the edit is called, the snippet library with it, and the selection last made on it. */
 interface Step extends Content {
   label: string;
+  library: Entry[];
   selection?: Selection;
 }
 
@@ -222,9 +223,23 @@ interface Timeline {
   index: number;
 }
 
-/** An undo history starting at `c`, its first entry called `label`. */
-const startedAt = ({ actions, chapters, bookmarks, regions }: Content, label: string): Timeline =>
-  ({ states: [{ actions, chapters, bookmarks, regions, label }], index: 0 });
+/** An undo history starting at `c` with the snippet library `library`, its first entry called `label`. */
+const startedAt = ({ actions, chapters, bookmarks, regions }: Content, library: Entry[], label: string): Timeline =>
+  ({ states: [{ actions, chapters, bookmarks, regions, library, label }], index: 0 });
+
+/**
+ * `tl` going on with the snippet library's changes in the undo history
+ * `from`, up to its current entry, each an entry of its own with `tl`'s
+ * current content, so they stay undoable when `from` goes; `tl`'s undone
+ * entries go.
+ */
+function withLibraryChanges(tl: Timeline, from: Timeline): Timeline {
+  const { actions, chapters, bookmarks, regions } = tl.states[tl.index];
+  const steps = from.states.slice(0, from.index + 1);
+  const changes = steps.filter((st, k) => k > 0 && st.library !== steps[k - 1].library).map(({ library, label }) => ({ actions, chapters, bookmarks, regions, library, label }));
+  const states = [...tl.states.slice(0, tl.index + 1), ...changes].slice(-UNDO_SIZE - 1);
+  return { states, index: states.length - 1 };
+}
 
 /**
  * The time range of what differs between `a` and `b`, null when nothing
@@ -915,10 +930,16 @@ export default function EditorPage() {
   /** The panel beside the graph, on its other side from the sidebar, and which it shows: the markers list or the snippet library. */
   const [asideShown, setAsideShown] = usePersistedState("ossm:editorAsideShown", true, localStorage);
   const [asideTab, setAsideTab] = usePersistedState<"markers" | "snippets">("ossm:editorAsideTab", "snippets", localStorage);
+  /** What the next edit is called in the undo history. */
+  const editLabel = useRef<string | null>(null);
   /** The snippet library, shared by all scripts, as its file holds it. */
   const [libraryFile, setLibraryFile] = usePersistedState<LibraryFile>("ossm:editorSnippets", { ossmRsWebTools: { version: 1, snippets: [] } }, localStorage);
   const library = libraryFile.ossmRsWebTools.snippets;
-  const setLibrary = (f: (lib: Entry[]) => Entry[]) => setLibraryFile((l) => ({ ossmRsWebTools: { version: 1, snippets: f(l.ossmRsWebTools.snippets) } }));
+  /** Change the snippet library as an edit called `label`. */
+  const setLibrary = (label: string, f: (lib: Entry[]) => Entry[]) => {
+    editLabel.current = label;
+    setLibraryFile((l) => ({ ossmRsWebTools: { version: 1, snippets: f(l.ossmRsWebTools.snippets) } }));
+  };
   /** The library's open folders, by their paths as JSON. */
   const [openFolders, setOpenFolders] = usePersistedState<string[]>("ossm:editorSnippetFolders", [], localStorage);
   /** Only the library's entries with this in their names show, their folders open. */
@@ -1164,31 +1185,30 @@ export default function EditorPage() {
     return shifted.reduce((list, r) => refilled(list, r, bookmarks), closed);
   }, [actions, lifted, keptRegions, bookmarks]);
 
-  /** Undo history: the points, markers and regions after each edit, the first as loaded; `index` is the current one. */
-  const [timeline, setTimeline] = useState(() => startedAt(script, advanced ? "Open" : "Start"));
+  /** Undo history: the points, markers, regions and snippet library after each edit, the first as loaded; `index` is the current one. */
+  const [timeline, setTimeline] = useState(() => startedAt(script, library, advanced ? "Open" : "Start"));
   /** The main script's undo history, put aside while the advanced editor is open; lost on a reload, when it starts over. */
   const mainTimeline = useRef<Timeline | null>(null);
   /** Set while a drag runs, so the whole drag becomes one edit when it ends; undo and redo wait for it. */
   const [dragging, setDragging] = useState(false);
-  /** What the next edit is called in the undo history. */
-  const editLabel = useRef<string | null>(null);
   /** Change the script as an edit called `label`; in a drag, the whole drag is one edit, called as its last step. */
   const edit = (label: string, next: Parameters<typeof setScript>[0]) => {
     editLabel.current = label;
     setScript(next);
   };
 
-  // Every change of the points, markers or regions, except by undo and redo, is an edit.
+  // Every change of the points, markers, regions or snippet library, except by undo and redo, is an edit.
   useEffect(() => {
     if (dragging) return;
     const label = editLabel.current ?? "Edit";
     editLabel.current = null;
     setTimeline((tl) => {
-      if (sameContent(tl.states[tl.index], script)) return tl;
-      const states = [...tl.states.slice(0, tl.index + 1), { actions, chapters, bookmarks, regions, label }].slice(-UNDO_SIZE - 1);
+      const now = tl.states[tl.index];
+      if (sameContent(now, script) && now.library === library) return tl;
+      const states = [...tl.states.slice(0, tl.index + 1), { actions, chapters, bookmarks, regions, library, label }].slice(-UNDO_SIZE - 1);
       return { states, index: states.length - 1 };
     });
-  }, [actions, chapters, bookmarks, regions, dragging]);
+  }, [actions, chapters, bookmarks, regions, library, dragging]);
 
   // The selection goes with the current entry, to come back with it; not while dragging or placing, so an entry keeps the one from before them.
   useEffect(() => {
@@ -1196,15 +1216,16 @@ export default function EditorPage() {
     setTimeline((tl) => ({ ...tl, states: tl.states.map((st, k) => (k === tl.index ? { ...st, selection: { points: selected, regions: regionsOn, markers: marked } } : st)) }));
   }, [selected, regionsOn, marked, timeline.index, dragging, placing]);
 
-  /** Go to the content after edit `index` of the undo history, with the selection last made there, in selection mode with the box around it, and bring the change into view. */
+  /** Go to the content and snippet library after edit `index` of the undo history, with the selection last made there, in selection mode with the box around it, and bring the change into view. */
   const jump = (index: number) => {
     const step = timeline.states[index];
-    const { actions, chapters, bookmarks, regions } = step;
+    const { actions, chapters, bookmarks, regions, library } = step;
     const { points, regions: rs, markers } = step.selection ?? { points: new Set<number>(), regions: new Set<Region>(), markers: new Set<Marker>() };
     const span = changedSpan(script, step);
     setTimeline((tl) => ({ ...tl, index }));
     setTool(null);
     setScript((s) => ({ ...s, actions, chapters, bookmarks, regions }));
+    setLibraryFile({ ossmRsWebTools: { version: 1, snippets: library } });
     setSelected(points);
     setRegionsOn(rs);
     setMarked(markers);
@@ -1221,7 +1242,7 @@ export default function EditorPage() {
   useWindowEvent("beforeunload", (e) => {
     if (changed) e.preventDefault();
   });
-  /** Whether the script may be replaced, as Open and New do, starting its undo history anew: without unsaved changes, or once confirmed. */
+  /** Whether the script may be replaced, as Open and New do, starting its undo history anew but for the snippet library's changes: without unsaved changes, or once confirmed. */
   const discardable = () => !changed || confirm("Discard the unsaved changes?");
   const canUndo = !dragging && timeline.index > 0;
   const canRedo = !dragging && timeline.index < timeline.states.length - 1;
@@ -2437,7 +2458,7 @@ export default function EditorPage() {
     const zero = Math.round(instance ? instance.from : from ? actions[from[0]].at : view.from);
     const doc = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => actions[i]) ?? [], regions: instance?.snippet.regions ?? [] };
     mainTimeline.current = timeline;
-    setTimeline(startedAt({ ...doc, chapters, bookmarks }, "Open"));
+    setTimeline(startedAt({ ...doc, chapters, bookmarks }, library, "Open"));
     setAdvanced({ ...doc, zero, from, snippet, instance: instance && regions.indexOf(instance) });
     select([]);
     setMarked(new Set());
@@ -2458,7 +2479,8 @@ export default function EditorPage() {
     const { actions: result, regions: made, from, snippet } = advanced!;
     const instance = advanced!.instance === undefined ? null : (main.regions[advanced!.instance] as Instance);
     setLeaving(false);
-    setTimeline(mainTimeline.current ?? startedAt(main, "Start"));
+    // The snippet library's changes in the advanced editor go on in the main script's history.
+    setTimeline(withLibraryChanges(mainTimeline.current ?? startedAt(main, timeline.states[0].library, "Start"), timeline));
     mainTimeline.current = null;
     setAdvanced(null);
     // Cancelled, an open tool goes too, unapplied.
@@ -2508,6 +2530,12 @@ export default function EditorPage() {
     return JSON.stringify({ actions: result, regions: made }) !== JSON.stringify(original);
   };
 
+  /** What the undo history calls the library entry at `path`. */
+  const entryNoun = (path: string[]) => {
+    const e = entryAt(library, path);
+    return e && isFolder(e) ? "folder" : "snippet";
+  };
+
   /** Whether the folder at `folder` has an entry named `name`. */
   const nameTaken = (folder: string[], name: string) => itemsAt(library, folder).some((e) => entryName(e) === name);
 
@@ -2515,7 +2543,7 @@ export default function EditorPage() {
   const saveSnippet = (path: string[], clip: Clip) => {
     const name = path[path.length - 1];
     const snippet: Snippet = { name, ...clipBy(clip, -clip.actions[0].at) };
-    setLibrary((lib) => updatedAt(lib, path.slice(0, -1), (items) => [...items.filter((e) => entryName(e) !== name), snippet]));
+    setLibrary(`Save snippet "${name}"`, (lib) => updatedAt(lib, path.slice(0, -1), (items) => [...items.filter((e) => entryName(e) !== name), snippet]));
   };
 
   /**
@@ -2537,29 +2565,27 @@ export default function EditorPage() {
 
   /** Add an empty folder `name` in the folder at `path`, and open that. */
   const addFolder = (path: string[], name: string) => {
-    setLibrary((lib) => updatedAt(lib, path, (items) => [...items, { folder: name, items: [] }]));
+    setLibrary(`Add folder "${name}"`, (lib) => updatedAt(lib, path, (items) => [...items, { folder: name, items: [] }]));
     if (path.length) setOpenFolders((keys) => [...new Set([...keys, JSON.stringify(path)])]);
   };
 
   const renameEntry = (path: string[], name: string) => {
     const old = path[path.length - 1];
-    setLibrary((lib) => updatedAt(lib, path.slice(0, -1), (items) => items.map((e) => (entryName(e) !== old ? e : isFolder(e) ? { ...e, folder: name } : { ...e, name }))));
+    setLibrary(`Rename ${entryNoun(path)} "${old}" to "${name}"`, (lib) => updatedAt(lib, path.slice(0, -1), (items) => items.map((e) => (entryName(e) !== old ? e : isFolder(e) ? { ...e, folder: name } : { ...e, name }))));
     reopened(path, [...path.slice(0, -1), name]);
   };
 
-  /** Delete the entry at `path`, a folder with its contents, once confirmed; an empty folder without asking. */
+  /** Delete the entry at `path`, a folder with its contents. */
   const deleteEntry = (path: string[]) => {
-    const [e, name] = [entryAt(library, path), path[path.length - 1]];
-    const ask = !e ? null : !isFolder(e) ? `Delete the snippet ${name}?` : e.items.length ? `Delete the folder ${name} and everything in it?` : null;
-    if (ask && !confirm(ask)) return;
-    setLibrary((lib) => updatedAt(lib, path.slice(0, -1), (items) => items.filter((o) => entryName(o) !== name)));
+    const name = path[path.length - 1];
+    setLibrary(`Delete ${entryNoun(path)} "${name}"`, (lib) => updatedAt(lib, path.slice(0, -1), (items) => items.filter((o) => entryName(o) !== name)));
   };
 
   /** Whether the entry at `from` may go into the folder at `to`: not where it is, not into itself, and not onto a name taken there. */
   const movable = (from: string[], to: string[]) => JSON.stringify(from.slice(0, -1)) !== JSON.stringify(to) && !under(to, from) && !nameTaken(to, from[from.length - 1]);
 
   const moveEntry = (from: string[], to: string[]) => {
-    setLibrary((lib) => {
+    setLibrary(`Move ${entryNoun(from)} "${from[from.length - 1]}" ${to.length ? `into "${to[to.length - 1]}"` : "to the top"}`, (lib) => {
       const e = entryAt(lib, from)!;
       return updatedAt(updatedAt(lib, from.slice(0, -1), (items) => items.filter((o) => o !== e)), to, (items) => [...items, e]);
     });
@@ -2613,7 +2639,7 @@ export default function EditorPage() {
       const parsed = JSON.parse(await file.text()) as { ossmRsWebTools?: { snippets?: unknown } } | null;
       if (!Array.isArray(parsed?.ossmRsWebTools?.snippets)) throw new Error();
       const read = readEntries(parsed.ossmRsWebTools.snippets);
-      setLibrary((lib) => merged(lib, read));
+      setLibrary(`Import ${file.name}`, (lib) => merged(lib, read));
       setError(null);
     } catch {
       setError(`${file.name} is not a snippet library.`);
@@ -2869,7 +2895,7 @@ export default function EditorPage() {
       const next = { name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers, regions };
       setSaved(next);
       setScript(next);
-      setTimeline(startedAt(next, `Open ${file.name}`));
+      setTimeline(withLibraryChanges(startedAt(next, timeline.states[0].library, `Open ${file.name}`), timeline));
       setView((v) => ({ ...v, from: 0 }));
       setError(null);
     } catch (e) {
@@ -3392,7 +3418,7 @@ export default function EditorPage() {
             setMarked(new Set());
             setSaved(EMPTY);
             setScript(EMPTY);
-            setTimeline(startedAt(EMPTY, "New script"));
+            setTimeline(withLibraryChanges(startedAt(EMPTY, timeline.states[0].library, "New script"), timeline));
             setView((v) => ({ ...v, from: 0 }));
           }}
         >
@@ -4044,7 +4070,8 @@ export default function EditorPage() {
                           const before = timeline.states[k - 1];
                           const markersChanged = before.chapters !== state.chapters || before.bookmarks !== state.bookmarks;
                           const regionsChanged = before.regions !== state.regions;
-                          const others = markersChanged || regionsChanged;
+                          // A change only to the snippet library has nothing to show but its label.
+                          const others = markersChanged || regionsChanged || before.library !== state.library;
                           return <>
                             {(before.actions !== state.actions || !others) && <PreviewGraph pieces={diffPieces(before.actions, state.actions)} />}
                             {markersChanged && <LanePreview lists={[[before.chapters.map(chapterItem), state.chapters.map(chapterItem)], [before.bookmarks.map(bookmarkItem), state.bookmarks.map(bookmarkItem)]]} />}
