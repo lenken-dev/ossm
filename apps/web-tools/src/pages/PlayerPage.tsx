@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type RefObject, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
-import { Box, Button, Callout, Dialog, Flex, Heading, IconButton, SegmentedControl, Select, Separator, Switch, Text, Theme, Tooltip } from "@radix-ui/themes";
+import { AlertDialog, Box, Button, Callout, Dialog, Flex, Heading, IconButton, SegmentedControl, Select, Separator, Switch, Text, Theme, Tooltip } from "@radix-ui/themes";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -294,6 +294,8 @@ export default function PlayerPage() {
   const [configured, setConfigured] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [speedLimit, setSpeedLimit] = usePersistedState("ossm:playerSpeedLimit", DEFAULT_SPEED_LIMIT, localStorage);
+  /** Depth and stroke sliders in the controls, changed while playing; kept for the session only, as it risks going too deep. */
+  const [depthSliders, setDepthSliders] = usePersistedState("ossm:playerDepthSliders", false);
   const blocked = blockReason(ossm, state, configured, setupOpen);
   /**
    * Why the mode cannot change while it plays, or `null` when it can; the
@@ -584,6 +586,10 @@ export default function PlayerPage() {
               ) : <>
                 <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
                 <SettingSlider ossm={ossm} setting="sensation" label="Sensation" value={state.sensation} ends={["Smooth", "Hard"]} />
+                {depthSliders && <>
+                  <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} ends={DEPTH_ENDS} />
+                  <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} ends={STROKE_ENDS} />
+                </>}
                 <Button variant="soft" onClick={openSetup}>
                   Depth {state.depth.toFixed(0)}% · Stroke {state.stroke.toFixed(0)}%
                 </Button>
@@ -598,6 +604,8 @@ export default function PlayerPage() {
                 state={state}
                 speedLimit={speedLimit}
                 setSpeedLimit={setSpeedLimit}
+                depthSliders={depthSliders}
+                setDepthSliders={setDepthSliders}
                 onDone={() => setConfigured(true)}
                 onClose={() => setSetupOpen(false)}
               />
@@ -1167,11 +1175,14 @@ function SpeedSlider({ ossm, value, limit, setLimit }: {
  * for a speed above zero, so the machine moves no faster than the speed shown.
  * Done returns the machine to the stroke end.
  */
-function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }: {
+function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSliders, setDepthSliders, onDone, onClose }: {
   ossm: Ossm;
   state: OssmState;
   speedLimit: number;
   setSpeedLimit: (limit: number) => void;
+  /** Depth and stroke sliders in the controls. */
+  depthSliders: boolean;
+  setDepthSliders: (on: boolean) => void;
   onDone: () => void;
   onClose: () => void;
 }) {
@@ -1230,7 +1241,34 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, onDone, onClose }
             <Text size="2" color="gray">Raise the speed to change depth and stroke; the machine moves at that speed.</Text>
           )}
         </Flex>
-        <Flex justify="end" gap="2" mt="4">
+        <Flex justify="between" gap="2" mt="4">
+          {depthSliders ? (
+            <Button variant="soft" color="gray" onClick={() => setDepthSliders(false)}>
+              Hide sliders in controls
+            </Button>
+          ) : (
+            <AlertDialog.Root>
+              <AlertDialog.Trigger>
+                <Button variant="soft" color="gray">Show sliders in controls</Button>
+              </AlertDialog.Trigger>
+              <AlertDialog.Content maxWidth="400px" container={container}>
+                <AlertDialog.Title>Change depth while playing?</AlertDialog.Title>
+                <AlertDialog.Description size="2">
+                  The script plays between depth and stroke, so a depth that feels right in a shallow part of the
+                  script goes that much deeper once the script does. Raise it only a little at a time. The sliders
+                  stay until you close the browser.
+                </AlertDialog.Description>
+                <Flex gap="3" mt="4" justify="end">
+                  <AlertDialog.Cancel>
+                    <Button variant="soft" color="gray">Cancel</Button>
+                  </AlertDialog.Cancel>
+                  <AlertDialog.Action>
+                    <Button color="red" onClick={() => setDepthSliders(true)}>Show sliders</Button>
+                  </AlertDialog.Action>
+                </Flex>
+              </AlertDialog.Content>
+            </AlertDialog.Root>
+          )}
           <Button
             onClick={() => {
               setLast({ depth: state.depth, stroke: state.stroke });
