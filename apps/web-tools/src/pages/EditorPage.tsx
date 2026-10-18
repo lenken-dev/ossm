@@ -267,7 +267,7 @@ const EDGE_SPEED = 1.5;
 /** Height of the minimap that shows the whole script below the graph, in px. */
 const MINIMAP_HEIGHT = 40;
 
-/** Height of the view of Generate's Interval or Speed below the graph, in px. */
+/** Least and first height of the view of Generate's Interval or Speed below the graph, in px. */
 const TIMING_HEIGHT = 80;
 
 /** Height of the marker lane below the graph, in px. */
@@ -1026,18 +1026,19 @@ export default function EditorPage() {
     setView((v) => (t < v.from || t > v.from + v.span ? { ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) } : v));
   };
 
-  /** Drag the bottom edge of the video to set its height; at most most of the window. */
-  const dragVideoHeight = (e: PointerEvent<HTMLElement>) => {
+  /** Drag the bottom of something `start` px high to resize it, or its top if `top`, from `min` px to 70% of the window. */
+  const dragHeight = (e: PointerEvent<HTMLElement>, start: number, set: (h: number) => void, min: number, top = false) => {
     e.preventDefault();
-    const start = videoHeight;
     const target = e.currentTarget;
     const startY = e.clientY;
     const move = (m: globalThis.PointerEvent) =>
-      setVideoHeight(Math.round(Math.min(Math.max(start + (m.clientY - startY), VIDEO_MIN_HEIGHT), window.innerHeight * 0.7)));
+      set(Math.round(Math.min(Math.max(start + (top ? startY - m.clientY : m.clientY - startY), min), window.innerHeight * 0.7)));
     target.setPointerCapture(e.pointerId);
     target.addEventListener("pointermove", move);
     target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
   };
+  /** Drag the bottom edge of the video to set its height; at most most of the window. */
+  const dragVideoHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, videoHeight, setVideoHeight, VIDEO_MIN_HEIGHT);
 
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
@@ -1760,10 +1761,14 @@ export default function EditorPage() {
   const [genSetup, setGenSetup] = tool?.region ? [regionSetup, setRegionSetup] : [remembered, setRemembered];
   /** Generate shows its Interval or Speed in a view of its own below the graph. */
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
+  /** The timing view's height while its function is edited, in px, its top dragged then. */
+  const [timingTall, setTimingTall] = usePersistedState("ossm:editorTimingHeight", TIMING_HEIGHT, localStorage);
   /** Generate's range box fields, as typed: From and To in seconds as shown, Out and In in depth. */
   const [genRange, setGenRange] = useState({ from: "0", to: "0", out: "0", in: "100" });
   /** The part of Generate's or Repeat's setup shown, whose handles the graph shows; Generate's Layout, Repeat's Pattern, on opening. */
   const [genPart, setGenPart] = useState<GenPart>("position");
+  /** The timing view's height as shown, its first while another part is edited. */
+  const timingHeight = genPart === "timing" ? timingTall : TIMING_HEIGHT;
   /** Repeat's setup for new runs, remembered as Generate's; a region's own while editing it. */
   const [rememberedRepeat, setRememberedRepeat] = usePersistedState<RepeatSetup>("ossm:editorRepeat", REPEAT_DEFAULTS, localStorage);
   const [regionRepeat, setRegionRepeat] = useState(REPEAT_DEFAULTS);
@@ -1973,7 +1978,7 @@ export default function EditorPage() {
     return [0, peak > 0 ? peak * 1.25 : 1];
   })();
   /** Where a value of Generate's Interval or Speed goes in the timing view, in px. */
-  const timingY = (v: number) => PAD + (1 - clamp((v - timingLow) / (timingHigh - timingLow), 0, 1)) * (TIMING_HEIGHT - 2 * PAD);
+  const timingY = (v: number) => PAD + (1 - clamp((v - timingLow) / (timingHigh - timingLow), 0, 1)) * (timingHeight - 2 * PAD);
 
   /**
    * Drag one of a tool's handles in the graph; `move` gets how far the pointer
@@ -2098,7 +2103,7 @@ export default function EditorPage() {
       // Out's and In's are depths, deeper down.
       const v = clamp(Math.round(v0 + (own ? dp : high > low ? (-dp / (high - low)) * 100 : 0)), 0, 100);
       setKnots(key, knots.map((k, j) => (j === i ? [t, v] : k)));
-    }, own ? TIMING_HEIGHT - 2 * PAD : undefined);
+    }, own ? timingHeight - 2 * PAD : undefined);
   };
 
   /** Add a knot to the spline `key` where its line is under the pointer, and drag it. */
@@ -2137,7 +2142,7 @@ export default function EditorPage() {
     const drag = (e: PointerEvent<SVGElement>, move: (dt: number, dv: number) => Partial<Func>) => {
       // Out's and In's are depths, deeper down.
       const scale = own ? (timingHigh - timingLow) / 100 : high > low ? -100 / (high - low) : 0;
-      dragHandle(e, (dt, dp) => setFunc(key, (s) => ({ ...s, ...move(dt, dp * scale) })), own ? TIMING_HEIGHT - 2 * PAD : undefined);
+      dragHandle(e, (dt, dp) => setFunc(key, (s) => ({ ...s, ...move(dt, dp * scale) })), own ? timingHeight - 2 * PAD : undefined);
     };
     /** A value's line across the box, dragged by it or its grip at the right end; drawn unless it is a constant's, which its curve shows. */
     const line = (field: ShapeField) => {
@@ -4132,7 +4137,7 @@ export default function EditorPage() {
         gap="3"
         flexGrow="1"
         // Its own least height, so it shrinks with the graph instead of keeping the graph's measured one.
-        minHeight={`${120 + 12 + LANE_HEIGHT + (timingShown ? TIMING_HEIGHT + 12 : 0)}px`}
+        minHeight={`${120 + 12 + LANE_HEIGHT + (timingShown ? timingHeight + 12 : 0)}px`}
         onPointerMove={(e) => void (hoverAt.current = Math.max(pointerAt(e).at, 0))}
         onPointerLeave={() => void (hoverAt.current = null)}
       >
@@ -4396,14 +4401,14 @@ export default function EditorPage() {
         {timingShown && (() => {
           const key = timingKey!;
           return (
-            <Box flexShrink="0" height={`${TIMING_HEIGHT}px`} style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
-              <svg width={width} height={TIMING_HEIGHT} style={{ display: "block", touchAction: "none", userSelect: "none" }}>
-                <rect x={x(fnBox.from)} width={x(fnBox.to) - x(fnBox.from)} height={TIMING_HEIGHT} style={{ fill: TOOL_BOX.fill, pointerEvents: "none" }} />
+            <Box position="relative" flexShrink="0" height={`${timingHeight}px`} style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden" }}>
+              <svg width={width} height={timingHeight} style={{ display: "block", touchAction: "none", userSelect: "none" }}>
+                <rect x={x(fnBox.from)} width={x(fnBox.to) - x(fnBox.from)} height={timingHeight} style={{ fill: TOOL_BOX.fill, pointerEvents: "none" }} />
                 {timingLow < timingHigh && <>
                   {[0, 0.5, 1].map((f) => (
                     <g key={f} style={{ pointerEvents: "none" }}>
-                      <line x1={0} x2={width} y1={PAD + (1 - f) * (TIMING_HEIGHT - 2 * PAD)} y2={PAD + (1 - f) * (TIMING_HEIGHT - 2 * PAD)} style={{ stroke: "var(--gray-a5)" }} />
-                      <text x={width - 4} y={PAD + (1 - f) * (TIMING_HEIGHT - 2 * PAD) + (f === 0 ? -3 : f === 1 ? 10 : 3)} textAnchor="end" fontSize={10} style={{ fill: "var(--blue-11)" }}>
+                      <line x1={0} x2={width} y1={PAD + (1 - f) * (timingHeight - 2 * PAD)} y2={PAD + (1 - f) * (timingHeight - 2 * PAD)} style={{ stroke: "var(--gray-a5)" }} />
+                      <text x={width - 4} y={PAD + (1 - f) * (timingHeight - 2 * PAD) + (f === 0 ? -3 : f === 1 ? 10 : 3)} textAnchor="end" fontSize={10} style={{ fill: "var(--blue-11)" }}>
                         {/* Interval's in s, as its fields, Time's in %. */}
                         {key === "interval" ? +((timingLow + f * (timingHigh - timingLow)) / 1000).toFixed(2) : `${Math.round(timingLow + f * (timingHigh - timingLow))}${key === "time" ? "%" : ""}`}
                       </text>
@@ -4413,6 +4418,22 @@ export default function EditorPage() {
                   {genPart === "timing" && funcHandles(key, timingY)}
                 </>}
               </svg>
+              {genPart === "timing" && (
+                <Box
+                  title="Drag to resize"
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: "calc(50% - 20px)",
+                    width: 40,
+                    height: 8,
+                    borderTop: "4px solid var(--gray-a8)",
+                    cursor: "ns-resize",
+                    touchAction: "none",
+                  }}
+                  onPointerDown={(e) => dragHeight(e, timingTall, setTimingTall, TIMING_HEIGHT, true)}
+                />
+              )}
             </Box>
           );
         })()}
