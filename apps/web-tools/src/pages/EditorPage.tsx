@@ -2871,21 +2871,25 @@ export default function EditorPage() {
       for (const a of run.slice(Math.max(byTime(run, view.from) - 1, 0), byTime(run, view.from + view.span) + 1)) ctx.lineTo(x(a.at), y(a.pos));
       ctx.stroke();
     }
-    // With a tool open, the points it was opened on, faint and dashed behind its result.
+    // With a tool open, the points it was opened on, faint and dashed behind its result; Repeat's only in its pattern box.
     if (tool) {
       ctx.save();
       Object.assign(ctx, { lineWidth: 1.5, strokeStyle: css.getPropertyValue("--gray-a9") });
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
-      const a = tool.actions;
+      const all = tool.actions;
+      const a = tool.kind !== "repeat" ? all : repParams ? all.slice(byTime(all, repBox.from), afterTime(all, repBox.from + repParams.length)) : [];
       for (const p of a.slice(Math.max(byTime(a, view.from) - 1, 0), byTime(a, view.from + view.span) + 1)) ctx.lineTo(x(p.at), y(p.pos));
       ctx.stroke();
       ctx.restore();
     }
     Object.assign(ctx, { strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
+    // Repeat's copies show thin and faded, so its pattern's line stands out; the line breaks between them, to be drawn over.
+    const muted = tool?.kind === "repeat" && !ghost;
+    const between = (j: number) => marks.has(first + j - 1) && marks.has(first + j);
     for (const segment of segments) {
       ctx.beginPath();
-      for (const a of segment) ctx.lineTo(x(a.at), y(a.pos));
+      segment.forEach((a, j) => (muted && between(j) ? ctx.moveTo(x(a.at), y(a.pos)) : ctx.lineTo(x(a.at), y(a.pos))));
       ctx.stroke();
     }
     // The line through selected points is drawn over; a short run of them in view also shows rings, so zoomed in, a long run's part in view does too.
@@ -2899,12 +2903,15 @@ export default function EditorPage() {
     const line = new Path2D();
     for (let j = 1; j < visible.length; j++) {
       const [a, b] = [visible[j - 1], visible[j]];
-      if (!marks.has(first + j - 1) || !marks.has(first + j) || replaced(a.at) || replaced(b.at)) continue;
+      if (!between(j) || replaced(a.at) || replaced(b.at)) continue;
       line.moveTo(x(a.at), y(a.pos));
       line.lineTo(x(b.at), y(b.pos));
     }
     ctx.strokeStyle = css.getPropertyValue("--gray-12");
+    ctx.save();
+    if (muted) Object.assign(ctx, { lineWidth: 1.5, globalAlpha: 0.45 });
     ctx.stroke(line);
+    ctx.restore();
     // Packed this close, the points would only blur the line; a tool's result only shows its line, as its points can't be dragged.
     const showDots = !tool && visible.length * DOT_SPACING < width;
     // One path per look, so drawing stays fast however many points there are. The points being replaced show as small crosses.
@@ -4321,7 +4328,7 @@ export default function EditorPage() {
             })()}
             {/*
               Repeat: the copies' time shaded over the pattern box's depths, Out's and In's curves dashed across it, the shown one's bolder, with its handles.
-              The pattern box, a click in its time adding a point, its right edge setting Length, its top and bottom its depths; its points over it, dragged.
+              The pattern box, a click in its time adding a point, its right edge setting Length, its top and bottom its depths; its points over it, joined by a solid line, dragged.
             */}
             {tool?.kind === "repeat" && repParams && (() => {
               const [left, right, top, bottom] = [x(repBox.from), x(repBox.from + repParams.length), y(repParams.top), y(repParams.bottom)];
@@ -4337,6 +4344,7 @@ export default function EditorPage() {
                   {(["low", "high"] as const).map((v) => grip(v, [left, y(repParams[v === "low" ? "bottom" : "top"]) - GRIP / 2, right - left, GRIP], "ns-resize", (e) => dragRepeat(e, [v])))}
                   {grip("to", [right - GRIP / 2, top, GRIP, Math.max(bottom - top, GRIP)], "ew-resize", (e) => dragRepeat(e, ["to"]))}
                   {(["low", "high"] as const).map((v) => grip(`to-${v}`, [right - GRIP / 2, (v === "low" ? bottom : top) - GRIP / 2, GRIP, GRIP], v === "high" ? "nesw-resize" : "nwse-resize", (e) => dragRepeat(e, ["to", v]), true))}
+                  <polyline points={repBox.pattern.filter((a) => a.at <= repBox.from + repParams.length).map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")} fill="none" strokeWidth={2} strokeLinejoin="round" style={{ stroke: "var(--gray-12)", pointerEvents: "none" }} />
                   {repBox.pattern.map((a, i) => a.at <= repBox.from + repParams.length && (
                     <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={5} style={{ fill: LINE_COLOR, stroke: "var(--gray-12)", cursor: "move" }} onPointerDown={(e) => dragPattern(e, i)} />
                   ))}
