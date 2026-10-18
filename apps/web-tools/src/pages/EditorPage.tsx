@@ -305,7 +305,7 @@ interface Transformed {
 }
 
 /**
- * Scale the points `picked` of `actions` by `time` % and onto `low`–`high`. In
+ * Scale the points `picked` of `actions` by `time` % and onto `low`–`high`, as positions. In
  * time from the first, which stays: the points up to the last stretch along,
  * those in between too so the order stays, and later ones move by the change
  * in length, as do the `regions` after them; points landing on the same ms
@@ -336,16 +336,16 @@ function scaled(actions: Action[], picked: number[], time: number, low: number, 
   return { actions: next, selected: moved, regions: regions.map((r) => (r.from > actions[i1].at ? movedBy(r, shift) : r)) };
 }
 
-/** Scale's fields as numbers; null while one is refused: a time of 0 or less would fold the points onto each other, and the depths are 0–100. */
-function scaleParams(fields: { time: string; low: string; high: string }) {
-  const [time, low, high] = [typed(fields.time), typed(fields.low), typed(fields.high)];
-  return time > 0 && low >= 0 && low <= 100 && high >= 0 && high <= 100 ? { time, low, high } : null;
+/** Scale's fields as numbers, Out and In typed as depths, as positions `high` and `low`; null while one is refused: a time of 0 or less would fold the points onto each other, and the depths are 0–100. */
+function scaleParams(fields: { time: string; out: string; in: string }) {
+  const [time, out, inn] = [typed(fields.time), typed(fields.out), typed(fields.in)];
+  return time > 0 && out >= 0 && out <= 100 && inn >= 0 && inn <= 100 ? { time, low: 100 - inn, high: 100 - out } : null;
 }
 
-/** Shift depth's fields as numbers; null while one is refused: limits outside the depths, rather than quietly clamped, or Min above Max. */
-function shiftParams(fields: { offset: string; min: string; max: string }) {
-  const [offset, min, max] = [typed(fields.offset), typed(fields.min), typed(fields.max)];
-  return Number.isFinite(offset) && min >= 0 && max <= 100 && min <= max ? { offset, min, max } : null;
+/** Shift depth's fields as numbers, typed as depths, as positions: the Offset deeper the higher, Out the limit `max`, In `min`; null while one is refused: limits outside the depths, rather than quietly clamped, or Out past In. */
+function shiftParams(fields: { offset: string; out: string; in: string }) {
+  const [offset, out, inn] = [typed(fields.offset), typed(fields.out), typed(fields.in)];
+  return Number.isFinite(offset) && out >= 0 && inn <= 100 && out <= inn ? { offset: -offset, min: 100 - inn, max: 100 - out } : null;
 }
 
 /** Shift the depth of the points `picked` of `actions` by `offset`, then keep it within `min`–`max`. */
@@ -417,10 +417,10 @@ function extent(func: Func): [number, number] {
  * `func` as `shape`, keeping the fields the two share, the rest from what it
  * spans, lowest to highest, so the curve stays where it was: a constant's
  * value, a ramp's Start and End, a wave's Min and Max or a spline's knots.
- * A flat one is spread so the new shape shows: High's and Low's, given the
+ * A flat one is spread so the new shape shows: Out's and In's, given the
  * other's nearest value `toward`, keep their value and reach a quarter of the
  * way toward it; Interval's and Speed's half either side. Back to a constant,
- * High and Low keep the end away from `toward`, so switching back and forth
+ * Out and In keep the end away from `toward`, so switching back and forth
  * does not drift, Interval and Speed the middle. A new spline goes high, low,
  * high, low on four evenly spaced knots, so it shows what it can do.
  * Interval's and Speed's, on their own scale, given the value `own` to fall
@@ -454,44 +454,44 @@ function reshaped(func: Func, shape: Shape, own?: number, toward?: number): Func
 
 /**
  * Generate's setup: how the next point's time is found, whether the first
- * point goes on Low (In) or High (Out), how many points in a row go on each
+ * point goes on In or Out, how many points in a row go on each
  * (1 when not set), and a function for each of
- * Interval (ms), Speed, and High and Low (in % of the box). Markers timing
- * puts the points at the bookmarks instead.
+ * Interval (ms), Speed, and Out and In (depths in % of the box, from its Out
+ * edge). Markers timing puts the points at the bookmarks instead.
  */
 interface GenerateSetup {
   timing: "interval" | "speed" | "markers";
   /** With Markers timing, the names of the bookmarks it leaves out. */
   skip?: string[];
   first: "in" | "out";
-  /** Points in a row on High and on Low, as typed; whole numbers from 1. */
-  highs?: string;
-  lows?: string;
+  /** Points in a row on Out and on In, as typed; whole numbers from 1. */
+  outs?: string;
+  ins?: string;
   interval: Func;
   speed: Func;
-  high: Func;
-  low: Func;
+  out: Func;
+  in: Func;
 }
 
 /** A function of Generate's setup or Repeat's Time. */
-type FuncKey = "interval" | "speed" | "high" | "low" | "time";
+type FuncKey = "interval" | "speed" | "out" | "in" | "time";
 /** Whether the function `key` is on a scale of its own, in the timing view, rather than in % of the box. */
-const ownScale = (key: FuncKey) => key !== "high" && key !== "low";
-/** The parts of Generate's setup, shown one at a time, with their handles in the graph: Layout its box, First and the runs on High and Low, Timing its timing and Interval or Speed. */
-type GenPart = "position" | "timing" | "high" | "low";
+const ownScale = (key: FuncKey) => key !== "out" && key !== "in";
+/** The parts of Generate's setup, shown one at a time, with their handles in the graph: Layout its box, First and the runs on Out and In, Timing its timing and Interval or Speed. */
+type GenPart = "position" | "timing" | "out" | "in";
 
 const constant = (value: string): Func => ({ shape: "constant", value });
-const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("500"), speed: constant("200"), high: constant("100"), low: constant("0") };
+const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("500"), speed: constant("200"), out: constant("0"), in: constant("100") };
 
 /**
- * Whether Generate's point `i` goes on High: First's side's run, then the
+ * Whether Generate's point `i` goes on Out: First's side's run, then the
  * other's, over and over; null while a run is not a whole number from 1.
  */
-function onHigh(setup: GenerateSetup, i: number) {
-  const [highs, lows] = [typed(setup.highs ?? "1"), typed(setup.lows ?? "1")];
-  if (!(Number.isInteger(highs) && highs >= 1 && Number.isInteger(lows) && lows >= 1)) return null;
-  const k = i % (highs + lows);
-  return setup.first === "out" ? k < highs : k >= lows;
+function onOut(setup: GenerateSetup, i: number) {
+  const [outs, ins] = [typed(setup.outs ?? "1"), typed(setup.ins ?? "1")];
+  if (!(Number.isInteger(outs) && outs >= 1 && Number.isInteger(ins) && ins >= 1)) return null;
+  const k = i % (outs + ins);
+  return setup.first === "out" ? k < outs : k >= ins;
 }
 
 /** A random value, 0–1, for `seed` and `k`. */
@@ -566,7 +566,7 @@ function funcAt(func: Func, t: number, span: number) {
 }
 
 /**
- * Generate's points in `range`: runs of points on High and on Low in turn,
+ * Generate's points in `range`: runs of points on Out and on In in turn,
  * from its start, the last at or before its end; null while a field is
  * refused. Each next point goes the Interval after the one before, or with
  * Speed timing at the first ms where a segment to the other side's function
@@ -577,34 +577,34 @@ function funcAt(func: Func, t: number, span: number) {
  */
 function generated(setup: GenerateSetup, range: Area, marks: Bookmark[]): Action[] | null {
   const span = range.to - range.from;
-  /** The depth a point on `func` gets at `at`, rounded; NaN while a field is refused. */
-  const depthAt = (func: Func, at: number) => Math.round(range.low + (clamp(funcAt(func, at - range.from, span), 0, 100) * (range.high - range.low)) / 100);
+  /** The position a point on `func` gets at `at`, its depth from the range's Out edge, rounded; NaN while a field is refused. */
+  const depthAt = (func: Func, at: number) => Math.round(range.high - (clamp(funcAt(func, at - range.from, span), 0, 100) * (range.high - range.low)) / 100);
   if (setup.timing === "markers") {
     const times = [...new Set(markTimes(setup, marks).filter((t) => t >= range.from && t <= range.to))];
-    if (onHigh(setup, 0) === null) return null;
-    const made = times.map((at, i) => ({ at, pos: depthAt(onHigh(setup, i) ? setup.high : setup.low, at) }));
+    if (onOut(setup, 0) === null) return null;
+    const made = times.map((at, i) => ({ at, pos: depthAt(onOut(setup, i) ? setup.out : setup.in, at) }));
     return made.length && !made.some((a) => Number.isNaN(a.pos)) ? made : null;
   }
-  if (onHigh(setup, 0) === null) return null;
-  const out: Action[] = [];
+  if (onOut(setup, 0) === null) return null;
+  const made: Action[] = [];
   for (let at = range.from; at <= range.to; ) {
-    const high = onHigh(setup, out.length);
-    const pos = depthAt(high ? setup.high : setup.low, at);
+    const out = onOut(setup, made.length);
+    const pos = depthAt(out ? setup.out : setup.in, at);
     const step = setup.timing === "speed" ? Math.max(funcAt(setup.speed, at - range.from, span), 1) : funcAt(setup.interval, at - range.from, span);
     // An Interval not above 0 is refused.
     if (Number.isNaN(pos) || !(step > 0)) return null;
-    out.push({ at, pos });
+    made.push({ at, pos });
     if (setup.timing === "interval") {
       at += Math.max(Math.round(step), 1);
       continue;
     }
     // A ms at a time, so no crossing is missed: as many steps in all as the range has ms. Between the rounded depths, as the points get them; to the other side even within a run.
-    const next = high ? setup.low : setup.high;
+    const next = out ? setup.in : setup.out;
     let dt = 1;
     while (at + dt <= range.to && Math.abs(depthAt(next, at + dt) - pos) * 1000 > step * dt) dt++;
     at += dt;
   }
-  return out;
+  return made;
 }
 
 /** The times of the bookmarks `marks` that Markers timing with `setup` puts points at: those with names it doesn't skip. */
@@ -632,19 +632,19 @@ function withBookmarks<T extends Content>(s: T, bookmarks: Bookmark[]): T {
 /**
  * Repeat's setup: how many copies in all, as typed, the pattern being the
  * first, and a function each for Time, in % of the pattern's Length, and
- * High and Low, in % of its box's height.
+ * Out and In, depths in % of its box's height, from its Out edge.
  */
 interface RepeatSetup {
   count: string;
   time: Func;
-  high: Func;
-  low: Func;
+  out: Func;
+  in: Func;
 }
 
-/** What a Repeat region keeps: its setup and its pattern, the points timed from the box's start, the box's Length in whole ms and its Bottom and Top. */
+/** What a Repeat region keeps: its setup and its pattern, the points timed from the box's start, the box's Length in whole ms and its lowest and highest position. */
 type RepeatKept = RepeatSetup & { pattern: Action[]; length: number; bottom: number; top: number };
 
-const REPEAT_DEFAULTS: RepeatSetup = { count: "4", time: constant("100"), high: constant("100"), low: constant("0") };
+const REPEAT_DEFAULTS: RepeatSetup = { count: "4", time: constant("100"), out: constant("0"), in: constant("100") };
 
 /** The shapes that run across a function's range, rather than in time. */
 const RANGED: Shape[] = ["ramp", "spline"];
@@ -654,10 +654,10 @@ const RANGED: Shape[] = ["ramp", "spline"];
  * `length` ms long, from `bottom` to `top`: each the box stretched to Length
  * by Time, read at the copy's start, end to end, a point at the box's end
  * left to the next copy's first but the last's; their depths mapped from the
- * box's Bottom–Top onto Low–High, read at each point's time. Points on the
+ * box's Out–In onto Out's–In's, read at each point's time. Points on the
  * same ms merge, the later kept. Time's ramp and spline run across the copies
  * by number, first to last, as the copies' time depends on them; its waves
- * and High and Low in time. Gives the copies' starts and their end, and their
+ * and Out and In in time. Gives the copies' starts and their end, and their
  * points, null while a field is refused: the starts then as at 100%; null
  * without a valid Count or Length.
  */
@@ -680,9 +680,9 @@ function repeated(setup: RepeatSetup, from: number, pattern: Action[], length: n
     for (const a of inBox) {
       if (a.at === from + length && k < count - 1) continue;
       const at = Math.round(starts[k] + ((a.at - from) * (starts[k + 1] - starts[k])) / length);
-      const [low, high] = [clamp(funcAt(setup.low, at - from, span), 0, 100), clamp(funcAt(setup.high, at - from, span), 0, 100)];
-      const v = top > bottom ? (a.pos - bottom) / (top - bottom) : 0.5;
-      const pos = Math.round(clamp(bottom + ((low + v * (high - low)) * (top - bottom)) / 100, 0, 100));
+      const [outer, inner] = [clamp(funcAt(setup.out, at - from, span), 0, 100), clamp(funcAt(setup.in, at - from, span), 0, 100)];
+      const v = top > bottom ? (top - a.pos) / (top - bottom) : 0.5;
+      const pos = Math.round(clamp(top - ((outer + v * (inner - outer)) * (top - bottom)) / 100, 0, 100));
       if (Number.isNaN(pos)) return { starts, end, actions: null };
       if (out[out.length - 1]?.at === at) out.pop();
       out.push({ at, pos });
@@ -691,21 +691,21 @@ function repeated(setup: RepeatSetup, from: number, pattern: Action[], length: n
   return { starts, end, actions: out };
 }
 
-/** Repeat's box fields as numbers, Length in whole ms from shown seconds; null while one is refused: a Length not above 0, or depths outside 0–100 or Bottom above Top. */
-function repeatParams(fields: { length: string; low: string; high: string }) {
-  const [length, bottom, top] = [Math.round(typed(fields.length) * 1000), typed(fields.low), typed(fields.high)];
-  return length > 0 && bottom >= 0 && bottom <= top && top <= 100 ? { length, bottom, top } : null;
+/** Repeat's box fields as numbers, Length in whole ms from shown seconds, Out and In typed as depths, as positions `top` and `bottom`; null while one is refused: a Length not above 0, or depths outside 0–100 or Out past In. */
+function repeatParams(fields: { length: string; out: string; in: string }) {
+  const [length, out, inn] = [Math.round(typed(fields.length) * 1000), typed(fields.out), typed(fields.in)];
+  return length > 0 && out >= 0 && out <= inn && inn <= 100 ? { length, bottom: 100 - inn, top: 100 - out } : null;
 }
 
-/** Generate's range fields as numbers, its times in ms from shown seconds; null while one is refused: times before 0, To before From, or depths outside 0–100 or Bottom above Top. */
-function rangeParams(fields: { from: string; to: string; low: string; high: string }, zero: number): Area | null {
+/** Generate's range fields as numbers, its times in ms from shown seconds, Out and In typed as depths, as positions; null while one is refused: times before 0, To before From, or depths outside 0–100 or Out past In. */
+function rangeParams(fields: { from: string; to: string; out: string; in: string }, zero: number): Area | null {
   const [from, to] = [Math.round(typed(fields.from) * 1000) + zero, Math.round(typed(fields.to) * 1000) + zero];
-  const [low, high] = [typed(fields.low), typed(fields.high)];
-  return from >= 0 && to >= from && low >= 0 && low <= high && high <= 100 ? { from, to, low, high } : null;
+  const [out, inn] = [typed(fields.out), typed(fields.in)];
+  return from >= 0 && to >= from && out >= 0 && out <= inn && inn <= 100 ? { from, to, low: 100 - inn, high: 100 - out } : null;
 }
 
-/** Generate's range fields for `area`, its times in seconds from `zero`. */
-const rangeFields = (area: Area, zero: number) => ({ from: String((area.from - zero) / 1000), to: String((area.to - zero) / 1000), low: String(area.low), high: String(area.high) });
+/** Generate's range fields for `area`, its times in seconds from `zero`, its positions as depths. */
+const rangeFields = (area: Area, zero: number) => ({ from: String((area.from - zero) / 1000), to: String((area.to - zero) / 1000), out: String(100 - area.high), in: String(100 - area.low) });
 
 type ToolKind = "scale" | "shift" | "speed" | "generate" | "repeat";
 
@@ -714,7 +714,7 @@ const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after
   { kind: "scale", name: "Scale", verb: "Scale", before: "4,16 12,8 20,16 28,8", after: "4,20 20,4 36,20 52,4" },
   { kind: "shift", name: "Shift depth", verb: "Shift depth of", before: "4,20 14,12 24,20 34,12 44,20 52,12", after: "4,12 14,4 24,12 34,4 44,12 52,4" },
   { kind: "speed", name: "Max speed", verb: "Limit speed of", before: "4,20 12,4 20,20 28,4 36,20 44,4 52,20", after: "4,20 12,12 20,20 28,12 36,20 44,12 52,20" },
-  // Strokes up to a sine for High, down to a constant Low; the sine faint behind them.
+  // Strokes up to a sine for Out, down to a constant In; the sine faint behind them.
   { kind: "generate", name: "Generate", verb: "Generate", before: "4,8 6,7 8,6 10,5.2 12,4.5 14,4.1 16,4 18,4.1 20,4.5 22,5.2 24,6 26,7 28,8 30,9 32,10 34,10.8 36,11.5 38,11.9 40,12 42,11.9 44,11.5 46,10.8 48,10 50,9 52,8", after: "4,20 8,6 12,20 16,4 20,20 24,6 28,20 32,10 36,20 40,12 44,20 48,10 52,20" },
   // The pattern in pink, then its two copies in grey.
   { kind: "repeat", name: "Repeat", verb: "Repeat", before: "20,20 24,6 28,20 32,12 36,20 40,6 44,20 48,12 52,20", after: "4,20 8,6 12,20 16,12 20,20" },
@@ -770,10 +770,10 @@ function readRegions(list: unknown): Region[] {
   const read = (Array.isArray(list) ? list : []).flatMap((r): Region[] => {
     if (typeof r?.from !== "number" || typeof r.to !== "number" || !(r.from < r.to)) return [];
     const g = r.generate as GenerateSetup | undefined;
-    if (!!g && typeof g === "object" && ["interval", "speed", "markers"].includes(g.timing) && known(g.interval) && known(g.speed) && known(g.high) && known(g.low)) return [r];
+    if (!!g && typeof g === "object" && ["interval", "speed", "markers"].includes(g.timing) && known(g.interval) && known(g.speed) && known(g.out) && known(g.in)) return [r];
     const p = r.repeat as RepeatKept | undefined;
     const pattern = Array.isArray(p?.pattern) && p.pattern.every((a) => Number.isFinite(a?.at) && Number.isFinite(a?.pos)) ? p.pattern : [];
-    if (pattern.length > 1 && typeof p?.length === "number" && known(p.time) && known(p.high) && known(p.low)) return [r];
+    if (pattern.length > 1 && typeof p?.length === "number" && known(p.time) && known(p.out) && known(p.in)) return [r];
     const snippet = r.snippet as { name?: unknown; regions?: unknown } | undefined;
     if (typeof snippet?.name !== "string") return [];
     // Not nested: an instance's own instances go.
@@ -1745,12 +1745,12 @@ export default function EditorPage() {
   };
 
   /** The fields of the advanced editor's Scale, in %, as typed. */
-  const [scale, setScale] = useState({ time: "100", low: "0", high: "100" });
-  /** The fields of the advanced editor's Shift depth, as typed. */
-  const [shift, setShift] = useState({ offset: "0", min: "0", max: "100" });
+  const [scale, setScale] = useState({ time: "100", out: "0", in: "100" });
+  /** The fields of the advanced editor's Shift depth, as typed, in depth. */
+  const [shift, setShift] = useState({ offset: "0", out: "0", in: "100" });
   /** The field of the advanced editor's Max speed, as typed. */
   const [maxSpeed, setMaxSpeed] = useState("");
-  /** Which end Max speed keeps: In only lowers points, keeping the low reversals; Out only raises them. */
+  /** Which end Max speed keeps: In only moves points deeper, keeping the In reversals; Out only moves them out. */
   const [speedAnchor, setSpeedAnchor] = usePersistedState<"in" | "out">("ossm:editorSpeedAnchor", "in", localStorage);
   /** Generate's setup for new runs, remembered unlike the other tools' fields. */
   const [remembered, setRemembered] = usePersistedState<GenerateSetup>("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage);
@@ -1760,16 +1760,16 @@ export default function EditorPage() {
   const [genSetup, setGenSetup] = tool?.region ? [regionSetup, setRegionSetup] : [remembered, setRemembered];
   /** Generate shows its Interval or Speed in a view of its own below the graph. */
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
-  /** Generate's range box fields, as typed: From and To in seconds as shown, Bottom and Top. */
-  const [genRange, setGenRange] = useState({ from: "0", to: "0", low: "0", high: "100" });
+  /** Generate's range box fields, as typed: From and To in seconds as shown, Out and In in depth. */
+  const [genRange, setGenRange] = useState({ from: "0", to: "0", out: "0", in: "100" });
   /** The part of Generate's or Repeat's setup shown, whose handles the graph shows; Generate's Layout, Repeat's Pattern, on opening. */
   const [genPart, setGenPart] = useState<GenPart>("position");
   /** Repeat's setup for new runs, remembered as Generate's; a region's own while editing it. */
   const [rememberedRepeat, setRememberedRepeat] = usePersistedState<RepeatSetup>("ossm:editorRepeat", REPEAT_DEFAULTS, localStorage);
   const [regionRepeat, setRegionRepeat] = useState(REPEAT_DEFAULTS);
   const [repSetup, setRepSetup] = tool?.region ? [regionRepeat, setRegionRepeat] : [rememberedRepeat, setRememberedRepeat];
-  /** Repeat's pattern: its box's start, in ms, its points, edited while it is open, in the script's times, and the box's fields as typed: Length in s, Bottom and Top. */
-  const [repBox, setRepBox] = useState({ from: 0, pattern: [] as Action[], length: "1", low: "0", high: "100" });
+  /** Repeat's pattern: its box's start, in ms, its points, edited while it is open, in the script's times, and the box's fields as typed: Length in s, Out and In in depth. */
+  const [repBox, setRepBox] = useState({ from: 0, pattern: [] as Action[], length: "1", out: "0", in: "100" });
   /** A part's header in Generate's list, pressed to expand it: its name, then `right`, the part's controls while it is expanded, else a summary. */
   const partHeader = (part: GenPart, label: string, right?: ReactNode) => (
     <Flex gap="2" align="center" justify="between" minHeight="24px">
@@ -1797,8 +1797,8 @@ export default function EditorPage() {
     const fastest = fastestOf(actions, picked);
     setTool({ kind, actions, picked, fastest });
     const depths = picked.map((i) => actions[i].pos);
-    setScale({ time: "100", low: String(Math.min(...depths)), high: String(Math.max(...depths)) });
-    setShift({ offset: "0", min: "0", max: "100" });
+    setScale({ time: "100", out: String(100 - Math.max(...depths)), in: String(100 - Math.min(...depths)) });
+    setShift({ offset: "0", out: "0", in: "100" });
     setMaxSpeed(fastest === null ? "" : String(Math.ceil(fastest)));
     // Over the selected points' time, or the view's.
     const [from, to] = selected.size ? [actions[picked[0]].at, actions[picked[picked.length - 1]].at] : [Math.round(view.from), Math.round(view.from + view.span)];
@@ -1808,7 +1808,7 @@ export default function EditorPage() {
     if (kind === "repeat") {
       const span = pattern[pattern.length - 1].at - pattern[0].at;
       const length = span + (pattern[0].pos === pattern[pattern.length - 1].pos ? 0 : Math.round(span / (pattern.length - 1)));
-      setRepBox({ from: pattern[0].at, pattern, length: String(length / 1000), low: String(Math.min(...depths)), high: String(Math.max(...depths)) });
+      setRepBox({ from: pattern[0].at, pattern, length: String(length / 1000), out: String(100 - Math.max(...depths)), in: String(100 - Math.min(...depths)) });
     }
     setGenPart("position");
     setBox(null);
@@ -1822,7 +1822,7 @@ export default function EditorPage() {
       const { pattern, length, bottom, top, ...setup } = r.repeat;
       setTool({ kind: "repeat", actions, picked: [], fastest: null, region: r });
       setRegionRepeat(setup);
-      setRepBox({ from: r.from, pattern: pattern.map((a) => ({ at: a.at + r.from, pos: a.pos })), length: String(length / 1000), low: String(bottom), high: String(top) });
+      setRepBox({ from: r.from, pattern: pattern.map((a) => ({ at: a.at + r.from, pos: a.pos })), length: String(length / 1000), out: String(100 - top), in: String(100 - bottom) });
     } else {
       setTool({ kind: "generate", actions, picked: [], fastest: null, region: r });
       setRegionSetup(r.generate);
@@ -1988,7 +1988,7 @@ export default function EditorPage() {
     track(e.currentTarget.ownerSVGElement!, e, (m) => move(pointerAt(m).at - origin, Math.round(((y0 - m.clientY) / height) * 100)));
   };
 
-  /** Drag Scale's box by `sides`: its right edge sets Time %, its top and bottom High and Low, which may pass each other; its body both, within 0–100. */
+  /** Drag Scale's box by `sides`: its right edge sets Time %, its top and bottom Out and In, which may pass each other; its body both, within 0–100. */
   const dragScale = (e: PointerEvent<SVGRectElement>, sides: ("to" | "low" | "high")[]) => {
     const start = scaleBox!;
     // Stops where any side dragged would leave 0–100, so the body keeps its height.
@@ -1996,21 +1996,21 @@ export default function EditorPage() {
     const [dpMin, dpMax] = [Math.max(...dragged.map((side) => -start[side])), Math.min(...dragged.map((side) => 100 - start[side]))];
     dragHandle(e, (dt, dp) => {
       const time = Math.max(Number((((start.to + dt - start.t0) / (start.t1 - start.t0)) * 100).toFixed(2)), 0.01);
-      const depth = (side: "low" | "high") => String(start[side] + clamp(dp, dpMin, dpMax));
+      const depth = (side: "low" | "high") => String(100 - (start[side] + clamp(dp, dpMin, dpMax)));
       setScale((f) => ({
         time: sides.includes("to") ? String(time) : f.time,
-        low: sides.includes("low") ? depth("low") : f.low,
-        high: sides.includes("high") ? depth("high") : f.high,
+        out: sides.includes("high") ? depth("high") : f.out,
+        in: sides.includes("low") ? depth("low") : f.in,
       }));
     });
   };
 
-  /** Drag Shift depth's `side`: the box sets Offset, −100–100; Min and Max stay within 0–100 and stop at each other. */
+  /** Drag Shift depth's `side`, a position's: the box sets Offset, −100–100; Out and In stay within 0–100 and stop at each other. */
   const dragShift = (e: PointerEvent<SVGRectElement>, side: "offset" | "min" | "max") => {
     const { offset, min, max } = shiftBox!;
     dragHandle(e, (_, dp) => {
       const value = side === "offset" ? clamp(Math.round(offset + dp), -100, 100) : side === "min" ? clamp(min + dp, 0, max) : clamp(max + dp, min, 100);
-      setShift((f) => ({ ...f, [side]: String(value) }));
+      setShift((f) => ({ ...f, ...(side === "offset" ? { offset: String(-value) } : side === "min" ? { in: String(100 - value) } : { out: String(100 - value) }) }));
     });
   };
 
@@ -2033,7 +2033,7 @@ export default function EditorPage() {
     dragHandle(e, (dt, dp) => {
       const [a, b] = [start.bottom + (sides.includes("low") ? dp : 0), start.top + (sides.includes("high") ? dp : 0)].map((v) => clamp(v, 0, 100));
       const length = sides.includes("to") ? Math.max(start.length + dt, 1) : start.length;
-      setRepBox((f) => ({ ...f, length: String(length / 1000), low: String(Math.min(a, b)), high: String(Math.max(a, b)) }));
+      setRepBox((f) => ({ ...f, length: String(length / 1000), out: String(100 - Math.max(a, b)), in: String(100 - Math.min(a, b)) }));
     });
   };
 
@@ -2095,7 +2095,8 @@ export default function EditorPage() {
     const own = ownScale(key);
     dragHandle(e, (dt, dp) => {
       const t = end ? t0 : clamp(Math.round(rangeU(key, rangeTime(key, t0) + dt) * 100) / 100, knots[i - 1][0] + KNOT_GAP, knots[i + 1][0] - KNOT_GAP);
-      const v = clamp(Math.round(v0 + (own ? dp : high > low ? (dp / (high - low)) * 100 : 0)), 0, 100);
+      // Out's and In's are depths, deeper down.
+      const v = clamp(Math.round(v0 + (own ? dp : high > low ? (-dp / (high - low)) * 100 : 0)), 0, 100);
       setKnots(key, knots.map((k, j) => (j === i ? [t, v] : k)));
     }, own ? TIMING_HEIGHT - 2 * PAD : undefined);
   };
@@ -2122,7 +2123,7 @@ export default function EditorPage() {
    * moves its Max, the trough after it its Min, and either the Period, the
    * other staying; a pulse's falling edge its Width, around the peak, as does
    * the end of a trapezoid's hold on Max; a spline's knots and line as dragKnot's and
-   * addKnot's. Values in whole steps: High's and Low's within 0–100,
+   * addKnot's. Values in whole steps: Out's and In's depths within 0–100,
    * Interval's (ms), Speed's and Time's from 1; none while a field they move is refused.
    */
   const funcHandles = (key: FuncKey, yOf: (v: number) => number) => {
@@ -2134,7 +2135,8 @@ export default function EditorPage() {
     const fit = (v: number) => String(own ? Math.max(Math.round(v), 1) : clamp(Math.round(v), 0, 100));
     /** Drag a handle; `move` gets how far the pointer has gone in ms and in the function's value, and gives the fields it changes. */
     const drag = (e: PointerEvent<SVGElement>, move: (dt: number, dv: number) => Partial<Func>) => {
-      const scale = own ? (timingHigh - timingLow) / 100 : high > low ? 100 / (high - low) : 0;
+      // Out's and In's are depths, deeper down.
+      const scale = own ? (timingHigh - timingLow) / 100 : high > low ? -100 / (high - low) : 0;
       dragHandle(e, (dt, dp) => setFunc(key, (s) => ({ ...s, ...move(dt, dp * scale) })), own ? TIMING_HEIGHT - 2 * PAD : undefined);
     };
     /** A value's line across the box, dragged by it or its grip at the right end; drawn unless it is a constant's, which its curve shows. */
@@ -3164,23 +3166,23 @@ export default function EditorPage() {
 
   /**
    * The open tool's functions as parts of its panel: those of its `timing`,
-   * shown with the Timing part, then High and Low, each its own part,
+   * shown with the Timing part, then Out and In, each its own part,
    * collapsed to a header with its shape; expanded, its shape, then its
    * fields, two to a row, values in the function's unit, Speed's none, as Max
    * speed's.
    */
-  const funcParts = (timing: [FuncKey, string, string][]) => ([...timing, ["high", "High", "%"], ["low", "Low", "%"]] as [FuncKey, string, string][])
+  const funcParts = (timing: [FuncKey, string, string][]) => ([...timing, ["out", "Out", "%"], ["in", "In", "%"]] as [FuncKey, string, string][])
     .filter(([key]) => !ownScale(key) || genPart === "timing")
     .map(([key, label, unit]) => {
       const func = fnSetup[key]!;
-      // High and Low as parts, collapsed to a header with their shape.
-      const part = key === "high" || key === "low";
+      // Out and In as parts, collapsed to a header with their shape.
+      const part = key === "out" || key === "in";
       const set = (next: Func) => setFunc(key, () => next);
       /** Periods and Interval's values: kept in whole ms, shown in s, above 0. */
       const inSeconds = (field: ShapeField) => field === "period" || (key === "interval" && SPANNED.includes(field));
       const shapeSelect = (
         <Select.Root size="1" value={func.shape} onValueChange={(v) => set(part
-          ? reshaped(func, v as Shape, undefined, key === "high" ? extent(fnSetup.low!)[1] : extent(fnSetup.high!)[0])
+          ? reshaped(func, v as Shape, undefined, key === "out" ? extent(fnSetup.in!)[0] : extent(fnSetup.out!)[1])
           : reshaped(func, v as Shape, typed((tool?.kind === "repeat" ? REPEAT_DEFAULTS.time : GENERATE_DEFAULTS[key as "interval"]).value ?? "")))}>
           <Select.Trigger aria-label={`${label} shape`} />
           <Select.Content>
@@ -3466,37 +3468,37 @@ export default function EditorPage() {
             </IconButton>
             <Text size="2" weight="medium">{tool.region ? "Edit region" : TOOLS.find((t) => t.kind === tool.kind)!.name}</Text>
           </Flex>
-          {tool.kind === "scale" && ([["time"], ["low", "high"]] as const).map((row) => (
+          {tool.kind === "scale" && ([["time"], ["out", "in"]] as const).map((row) => (
             <Flex key={row[0]} gap="2">
               {row.map((field) => (
                 <TextField.Root
                   key={field}
                   type="number"
                   step="any"
-                  aria-label={{ time: "Time scale", low: "Lowest depth", high: "Highest depth" }[field]}
+                  aria-label={{ time: "Time scale", out: "Out depth", in: "In depth" }[field]}
                   value={scale[field]}
                   onChange={(e) => setScale({ ...scale, [field]: e.target.value })}
                   style={{ flex: 1, minWidth: 0 }}
                 >
-                  <TextField.Slot side="left">{{ time: "Time", low: "Low", high: "High" }[field]}</TextField.Slot>
+                  <TextField.Slot side="left">{{ time: "Time", out: "Out", in: "In" }[field]}</TextField.Slot>
                   {field === "time" && <TextField.Slot side="right">%</TextField.Slot>}
                 </TextField.Root>
               ))}
             </Flex>
           ))}
-          {tool.kind === "shift" && ([["offset"], ["min", "max"]] as const).map((row) => (
+          {tool.kind === "shift" && ([["offset"], ["out", "in"]] as const).map((row) => (
             <Flex key={row[0]} gap="2">
               {row.map((field) => (
                 <TextField.Root
                   key={field}
                   type="number"
                   step="any"
-                  aria-label={{ offset: "Depth offset", min: "Lowest depth", max: "Highest depth" }[field]}
+                  aria-label={{ offset: "Depth offset", out: "Out limit", in: "In limit" }[field]}
                   value={shift[field]}
                   onChange={(e) => setShift({ ...shift, [field]: e.target.value })}
                   style={{ flex: 1, minWidth: 0 }}
                 >
-                  <TextField.Slot side="left">{{ offset: "Offset", min: "Min", max: "Max" }[field]}</TextField.Slot>
+                  <TextField.Slot side="left">{{ offset: "Offset", out: "Out", in: "In" }[field]}</TextField.Slot>
                 </TextField.Root>
               ))}
             </Flex>
@@ -3528,22 +3530,22 @@ export default function EditorPage() {
               </SegmentedControl.Root>
             </Flex>
           </>}
-          {/* The setup's parts as a list, one expanded at a time: Layout the range box's fields, First and the runs on High and Low, Timing the timing and its function, High and Low theirs. */}
+          {/* The setup's parts as a list, one expanded at a time: Layout the range box's fields, First and the runs on Out and In, Timing the timing and its function, Out and In theirs. */}
           {tool.kind === "generate" && <>
             {partHeader("position", "Layout", genPart !== "position" && `${genRange.from}–${genRange.to} s`)}
-            {genPart === "position" && ([["from", "to"], ["low", "high"]] as const).map((row) => (
+            {genPart === "position" && ([["from", "to"], ["out", "in"]] as const).map((row) => (
               <Flex key={row[0]} gap="2">
                 {row.map((field) => (
                   <TextField.Root
                     key={field}
                     type="number"
                     step="any"
-                    aria-label={{ from: "Range start", to: "Range end", low: "Range bottom", high: "Range top" }[field]}
+                    aria-label={{ from: "Range start", to: "Range end", out: "Range out depth", in: "Range in depth" }[field]}
                     value={genRange[field]}
                     onChange={(e) => setGenRange({ ...genRange, [field]: e.target.value })}
                     style={{ flex: 1, minWidth: 0 }}
                   >
-                    <TextField.Slot side="left">{{ from: "From", to: "To", low: "Bottom", high: "Top" }[field]}</TextField.Slot>
+                    <TextField.Slot side="left">{{ from: "From", to: "To", out: "Out", in: "In" }[field]}</TextField.Slot>
                     {(field === "from" || field === "to") && <TextField.Slot side="right">s</TextField.Slot>}
                   </TextField.Root>
                 ))}
@@ -3551,25 +3553,25 @@ export default function EditorPage() {
             ))}
             {genPart === "position" && <Flex gap="2" align="center" justify="between">
               <Text size="2">First</Text>
-              <SegmentedControl.Root size="1" value={genSetup.first} onValueChange={(v) => setGenSetup({ ...genSetup, first: v as "in" | "out" })} title="Start on Low (In) or High (Out)">
+              <SegmentedControl.Root size="1" value={genSetup.first} onValueChange={(v) => setGenSetup({ ...genSetup, first: v as "in" | "out" })} title="Start In or Out">
                 <SegmentedControl.Item value="in">In</SegmentedControl.Item>
                 <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
               </SegmentedControl.Root>
             </Flex>}
             {genPart === "position" && (
               <Flex gap="2">
-                {(["highs", "lows"] as const).map((field) => (
+                {(["outs", "ins"] as const).map((field) => (
                   <TextField.Root
                     key={field}
                     type="number"
                     min="1"
                     step="1"
-                    aria-label={field === "highs" ? "Points in a row on High" : "Points in a row on Low"}
+                    aria-label={field === "outs" ? "Points in a row on Out" : "Points in a row on In"}
                     value={genSetup[field] ?? "1"}
                     onChange={(e) => setGenSetup({ ...genSetup, [field]: e.target.value })}
                     style={{ flex: 1, minWidth: 0 }}
                   >
-                    <TextField.Slot side="left">{field === "highs" ? "On High" : "On Low"}</TextField.Slot>
+                    <TextField.Slot side="left">{field === "outs" ? "Out" : "In"}</TextField.Slot>
                     <TextField.Slot side="right">×</TextField.Slot>
                   </TextField.Root>
                 ))}
@@ -3661,7 +3663,7 @@ export default function EditorPage() {
               </Button>
             </Flex>
           </>}
-          {/* Count, then the setup's parts as Generate's: Pattern its box's fields, Time, High and Low their functions. */}
+          {/* Count, then the setup's parts as Generate's: Pattern its box's fields, Time, Out and In their functions. */}
           {tool.kind === "repeat" && <>
             <TextField.Root
               type="number"
@@ -3678,7 +3680,7 @@ export default function EditorPage() {
             {partHeader("position", "Pattern", genPart !== "position" && `${points(repBox.pattern.length)} · ${repBox.length} s`)}
             {genPart === "position" && <>
               <Text size="1" color="gray">Drag its points in the graph; click in its box to add one, double-click one to remove it. The box's right edge sets its Length.</Text>
-              {([["length"], ["low", "high"]] as const).map((row) => (
+              {([["length"], ["out", "in"]] as const).map((row) => (
                 <Flex key={row[0]} gap="2">
                   {row.map((field) => (
                     <TextField.Root
@@ -3686,12 +3688,12 @@ export default function EditorPage() {
                       type="number"
                       step={field === "length" ? 0.1 : "any"}
                       min={field === "length" ? 0.1 : undefined}
-                      aria-label={{ length: "Pattern length", low: "Pattern bottom", high: "Pattern top" }[field]}
+                      aria-label={{ length: "Pattern length", out: "Pattern out depth", in: "Pattern in depth" }[field]}
                       value={repBox[field]}
                       onChange={(e) => setRepBox({ ...repBox, [field]: e.target.value })}
                       style={{ flex: 1, minWidth: 0 }}
                     >
-                      <TextField.Slot side="left">{{ length: "Length", low: "Bottom", high: "Top" }[field]}</TextField.Slot>
+                      <TextField.Slot side="left">{{ length: "Length", out: "Out", in: "In" }[field]}</TextField.Slot>
                       {field === "length" && <TextField.Slot side="right">s</TextField.Slot>}
                     </TextField.Root>
                   ))}
@@ -4275,7 +4277,7 @@ export default function EditorPage() {
                 </g>
               );
             })()}
-            {/* Shift depth's box, where the points go before Min and Max clamp them, past 0 or 100 too; its body drags up and down. Min and Max as dashed lines over it, with grips. */}
+            {/* Shift depth's box, where the points go before Out and In clamp them, past 0 or 100 too; its body drags up and down. Out and In as dashed lines over it, with grips. */}
             {shiftBox && toolSpan && (() => {
               // At least a grip wide and high, for a single point or flat ones.
               const w = Math.max(x(toolSpan.t1) - x(toolSpan.t0), 2 * GRIP);
@@ -4295,15 +4297,15 @@ export default function EditorPage() {
                 </g>
               );
             })()}
-            {/* Generate's range box, like the selection box: with Layout shown its edges and corners resize it, its body moves it. High and Low's curves dashed in it, the shown one's bolder, with its handles. */}
+            {/* Generate's range box, like the selection box: with Layout shown its edges and corners resize it, its body moves it. Out's and In's curves dashed in it, the shown one's bolder, with its handles. */}
             {genBox && (() => {
               const b = { from: x(genBox.from), to: x(genBox.to), low: y(genBox.low), high: y(genBox.high) };
-              const depth = (v: number) => y(genBox.low + (v * (genBox.high - genBox.low)) / 100);
+              const depth = (v: number) => y(genBox.high - (v * (genBox.high - genBox.low)) / 100);
               const position = genPart === "position";
               return (
                 <g>
                   <rect x={b.from} y={b.high} width={b.to - b.from} height={b.low - b.high} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "move", pointerEvents: position ? undefined : "none" }} onPointerDown={(e) => dragGenerate(e, ["from", "to", "low", "high"])} />
-                  {(["high", "low"] as const).map((key) => (
+                  {(["out", "in"] as const).map((key) => (
                     <polyline key={key} points={genCurve(key, (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
                   ))}
                   {position && GRIPS.map(([h, v]) => grip(
@@ -4313,21 +4315,21 @@ export default function EditorPage() {
                     (e) => dragGenerate(e, [h, v].filter((s) => s !== null)),
                     !!(h && v),
                   ))}
-                  {(genPart === "high" || genPart === "low") && funcHandles(genPart, depth)}
+                  {(genPart === "out" || genPart === "in") && funcHandles(genPart, depth)}
                 </g>
               );
             })()}
             {/*
-              Repeat: the copies' time shaded over the pattern box's depths, High's and Low's curves dashed across it, the shown one's bolder, with its handles.
+              Repeat: the copies' time shaded over the pattern box's depths, Out's and In's curves dashed across it, the shown one's bolder, with its handles.
               The pattern box, a click in its time adding a point, its right edge setting Length, its top and bottom its depths; its points over it, dragged.
             */}
             {tool?.kind === "repeat" && repParams && (() => {
               const [left, right, top, bottom] = [x(repBox.from), x(repBox.from + repParams.length), y(repParams.top), y(repParams.bottom)];
-              const depth = (v: number) => y(repParams.bottom + (v * (repParams.top - repParams.bottom)) / 100);
+              const depth = (v: number) => y(repParams.top - (v * (repParams.top - repParams.bottom)) / 100);
               return (
                 <g>
                   {fnBox && <rect x={left} y={top} width={x(fnBox.to) - left} height={bottom - top} style={{ fill: TOOL_BOX.fill, pointerEvents: "none" }} />}
-                  {fnBox && (["high", "low"] as const).map((key) => (
+                  {fnBox && (["out", "in"] as const).map((key) => (
                     <polyline key={key} points={genCurve(key, (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
                   ))}
                   <rect x={left} width={right - left} height={plotHeight} fill="transparent" style={{ cursor: "copy" }} onPointerDown={addPattern} />
@@ -4338,7 +4340,7 @@ export default function EditorPage() {
                   {repBox.pattern.map((a, i) => a.at <= repBox.from + repParams.length && (
                     <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={5} style={{ fill: LINE_COLOR, stroke: "var(--gray-12)", cursor: "move" }} onPointerDown={(e) => dragPattern(e, i)} />
                   ))}
-                  {fnBox && (genPart === "high" || genPart === "low") && funcHandles(genPart, depth)}
+                  {fnBox && (genPart === "out" || genPart === "in") && funcHandles(genPart, depth)}
                 </g>
               );
             })()}
@@ -4350,7 +4352,7 @@ export default function EditorPage() {
                 fontSize={12}
                 style={{ fill: "var(--gray-12)" }}
               >
-                {formatScriptTime((shown[only].at - zero) / 1000, 2)} · {Math.round(shown[only].pos)}
+                {formatScriptTime((shown[only].at - zero) / 1000, 2)} · {Math.round(100 - shown[only].pos)}
               </text>
             )}
           </svg>
@@ -4382,7 +4384,7 @@ export default function EditorPage() {
           <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
           <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
         </Box>
-        {/* The timing function, Generate's Interval or Speed or Repeat's Time, in the graph's time, over the box's, on a scale of its own from 0 at the bottom; with Timing shown, its handles as High's and Low's in the box. */}
+        {/* The timing function, Generate's Interval or Speed or Repeat's Time, in the graph's time, over the box's, on a scale of its own from 0 at the bottom; with Timing shown, its handles as Out's and In's in the box. */}
         {timingShown && (() => {
           const key = timingKey!;
           return (
