@@ -622,6 +622,11 @@ export default function PlayerPage() {
                 onChange={setOffset}
               />
             )}
+            {ready && media && (
+              <Button variant="soft" onClick={() => (paused ? void videoRef.current?.play() : videoRef.current?.pause())}>
+                {paused ? <><PlayIcon /> Play</> : <><PauseIcon /> Pause</>}
+              </Button>
+            )}
             {ready && (
               <Button
                 variant="soft"
@@ -1074,6 +1079,13 @@ function PatternControls({ ossm, state }: {
       <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} ends={STROKE_ENDS} />
       <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
       <SettingSlider ossm={ossm} setting="sensation" label="Sensation" value={state.sensation} />
+      <Button
+        variant="soft"
+        disabled={state.speed <= 0}
+        onClick={() => void ossm.command("set:speed:0")}
+      >
+        <PauseIcon /> Pause
+      </Button>
       <Button
         variant="soft"
         color="red"
