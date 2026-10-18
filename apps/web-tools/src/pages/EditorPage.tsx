@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useId, type CSSProperties, type PointerEvent, type ReactElement, type ReactNode } from "react";
 import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight, bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { SENT_SCRIPT_KEY } from "../StreamPanel";
@@ -229,14 +229,21 @@ const startedAt = ({ actions, chapters, bookmarks, regions }: Content, library: 
 
 /**
  * `tl` going on with the snippet library's changes in the undo history
- * `from`, up to its current entry, each an entry of its own with `tl`'s
- * current content, so they stay undoable when `from` goes; `tl`'s undone
- * entries go.
+ * `from`, up to its current entry, and with `markers` the markers', as the
+ * advanced editor makes with its lane unlocked. Each is an entry of its own
+ * with `tl`'s current points and regions, its Markers regions' points
+ * following the bookmarks, so they stay undoable when `from` goes; `tl`'s
+ * undone entries go.
  */
-function withLibraryChanges(tl: Timeline, from: Timeline): Timeline {
-  const { actions, chapters, bookmarks, regions } = tl.states[tl.index];
+function withLibraryChanges(tl: Timeline, from: Timeline, markers = false): Timeline {
+  const { regions } = tl.states[tl.index];
+  let { actions, chapters, bookmarks } = tl.states[tl.index];
   const steps = from.states.slice(0, from.index + 1);
-  const changes = steps.filter((st, k) => k > 0 && st.library !== steps[k - 1].library).map(({ library, label }) => ({ actions, chapters, bookmarks, regions, library, label }));
+  const shared = (st: Step, k: number) => st.library !== steps[k - 1].library || (markers && (st.chapters !== steps[k - 1].chapters || st.bookmarks !== steps[k - 1].bookmarks));
+  const changes = steps.filter((st, k) => k > 0 && shared(st, k)).map((st) => {
+    if (markers) ({ actions, chapters, bookmarks } = withBookmarks({ actions, chapters: st.chapters, bookmarks, regions }, st.bookmarks));
+    return { actions, chapters, bookmarks, regions, library: st.library, label: st.label };
+  });
   const states = [...tl.states.slice(0, tl.index + 1), ...changes].slice(-UNDO_SIZE - 1);
   return { states, index: states.length - 1 };
 }
@@ -914,13 +921,23 @@ export default function EditorPage() {
   const [main, setMain] = usePersistedState<Script>("ossm:editorScript", EMPTY, localStorage);
   /** The advanced editor's document while it is open; kept across reloads too. */
   const [advanced, setAdvanced] = usePersistedState<Advanced | null>("ossm:editorAdvanced", null, localStorage);
-  /** The script the page shows and edits: the main one, or with the advanced editor's points and regions while it is open, which take only changes to those. */
+  /** The main script for the advanced editor's edits, which callbacks from before its last change make too, as a bookmark's name field. */
+  const mainRef = useRef(main);
+  mainRef.current = main;
+  /**
+   * The script the page shows and edits: the main one, or with the advanced
+   * editor's points and regions while it is open; its marker changes, with
+   * the lane unlocked, go to the main script, whose Markers regions follow.
+   */
   const script = advanced ? { ...main, actions: advanced.actions, regions: advanced.regions } : main;
   const setScript: typeof setMain = (next) => {
     if (!advanced) return setMain(next);
     setAdvanced((d) => {
       if (!d) return d;
-      const { actions, regions } = next instanceof Function ? next({ ...main, actions: d.actions, regions: d.regions }) : next;
+      const m = mainRef.current;
+      const { actions, regions, chapters, bookmarks } = next instanceof Function ? next({ ...m, actions: d.actions, regions: d.regions }) : next;
+      // Run twice in strict mode, which gives the same main script.
+      if (chapters !== m.chapters || bookmarks !== m.bookmarks) setMain((s) => withBookmarks({ ...s, chapters }, bookmarks));
       return { ...d, actions, regions };
     });
   };
@@ -1080,6 +1097,9 @@ export default function EditorPage() {
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
   /** The advanced editor shows times from its 0, earlier ones negative; only as shown, the points keep the main script's times. */
   const [fromZero, setFromZero] = usePersistedState("ossm:editorFromZero", false, localStorage);
+  /** The advanced editor's marker lane and Markers panel take presses, and B adds a bookmark, editing the main script's markers. */
+  const [markersUnlocked, setMarkersUnlocked] = usePersistedState("ossm:editorMarkersUnlocked", false, localStorage);
+  const markersLocked = !!advanced && !markersUnlocked;
   /** In the advanced editor, points are added and dragged onto the nearest bookmark's time; only with bookmarks. */
   const [onMarkers, setOnMarkers] = usePersistedState("ossm:editorOnMarkers", false, localStorage);
   useEffect(() => {
@@ -2387,7 +2407,7 @@ export default function EditorPage() {
       // With a region alone selected, edits it instead.
       if (region) editRegion(region);
       else openAdvanced();
-    } else if (key === "b" && !e.ctrlKey && !e.metaKey && !advanced) {
+    } else if (key === "b" && !e.ctrlKey && !e.metaKey && !markersLocked) {
       // At the playhead, or without media under the pointer.
       const at = videoUrl ? Math.round(time) : hoverAt.current;
       if (at !== null) addBookmark(at);
@@ -2480,8 +2500,13 @@ export default function EditorPage() {
     const { actions: result, regions: made, from, snippet } = advanced!;
     const instance = advanced!.instance === undefined ? null : (main.regions[advanced!.instance] as Instance);
     setLeaving(false);
-    // The snippet library's changes in the advanced editor go on in the main script's history.
-    setTimeline(withLibraryChanges(mainTimeline.current ?? startedAt(main, timeline.states[0].library, "Start"), timeline));
+    // The snippet library's and markers' changes in the advanced editor go on in the main script's history.
+    const base = mainTimeline.current ?? startedAt(main, timeline.states[0].library, "Start");
+    const tl = withLibraryChanges(base, timeline, true);
+    setTimeline(tl);
+    // With the markers changed, its points as the last entry has them, their Markers regions' refilled alike, so they make no further edit.
+    const [was, now] = [base.states[base.index], tl.states[tl.index]];
+    if (now.chapters !== was.chapters || now.bookmarks !== was.bookmarks) setMain((m) => ({ ...m, actions: now.actions }));
     mainTimeline.current = null;
     setAdvanced(null);
     // Cancelled, an open tool goes too, unapplied.
@@ -3272,7 +3297,7 @@ export default function EditorPage() {
    * the selected ones marked. A click on one shows it, and selects it;
    * bookmarks are selected together as on the lane. A double-click renames
    * it. The advanced editor's document has no markers of its own, so there
-   * they only show their times.
+   * they only show their times, unless its lane is unlocked.
    */
   const markerRow = (m: Marker, key: string) => (
     <Flex
@@ -3281,14 +3306,14 @@ export default function EditorPage() {
       gap="2"
       px="1"
       onClick={(e) => {
-        if (!advanced && markerPicked(e, m)) return;
-        if (!advanced) {
+        if (!markersLocked && markerPicked(e, m)) return;
+        if (!markersLocked) {
           markerAnchor.current = m;
           selectMarkers([m]);
         }
         goTo(timeOf(m));
       }}
-      onDoubleClick={() => !advanced && rename([m])}
+      onDoubleClick={() => !markersLocked && rename([m])}
       style={{ minHeight: 28, borderRadius: 4, cursor: "pointer", userSelect: "none", background: marked.has(m) ? "var(--accent-a4)" : undefined }}
     >
       {/* A bookmark's colour, as its flag in the lane. */}
@@ -4533,88 +4558,108 @@ export default function EditorPage() {
         })()}
         {/* The marker lane, in the graph's time: chapters as bands, touching ones in alternating shades, bookmarks as flags over them; names cut off where there is no room. */}
         {/* A press on a marker selects it; on empty lane, a click adds a bookmark and a drag draws a chapter. */}
-        <Box
-          position="relative"
-          flexShrink="0"
-          height={`${LANE_HEIGHT}px`}
-          onPointerDown={laneDown}
-          onPointerEnter={() => void (overLane.current = true)}
-          onPointerLeave={() => void (overLane.current = false)}
-          // The advanced editor's document has no markers, so the lane takes no presses while it is open.
-          style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair", pointerEvents: advanced ? "none" : undefined }}
-        >
-          {chapters.map((c, i) => {
-            if (!inView(c.start, c.end)) return null;
-            // Kept in view, so the name of a chapter that starts before it still shows; it ends at the first flag on it, which goes over it.
-            const left = Math.max(x(c.start), 0);
-            const flag = bookmarks.find((b) => x(b.time) >= left && b.time < c.end);
-            return (
-              <Box
+        {/* In the advanced editor, its lock beside it, where the lane stops short of the graph's end. */}
+        {/* The locked lane takes no pointer, so its hover shows this, the lock its own. */}
+        <Flex gap="2" flexShrink="0" title={markersLocked ? "Unlock to edit" : undefined}>
+          <Box
+            position="relative"
+            flexGrow="1"
+            height={`${LANE_HEIGHT}px`}
+            onPointerDown={laneDown}
+            onPointerEnter={() => void (overLane.current = true)}
+            onPointerLeave={() => void (overLane.current = false)}
+            // The advanced editor's document has no markers, so the lane takes no presses there until unlocked.
+            style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair", pointerEvents: markersLocked ? "none" : undefined }}
+          >
+            {chapters.map((c, i) => {
+              if (!inView(c.start, c.end)) return null;
+              // Kept in view, so the name of a chapter that starts before it still shows; it ends at the first flag on it, which goes over it.
+              const left = Math.max(x(c.start), 0);
+              const flag = bookmarks.find((b) => x(b.time) >= left && b.time < c.end);
+              return (
+                <Box
+                  key={i}
+                  position="absolute"
+                  height="100%"
+                  onPointerDown={(e) => markerDown(e, c)}
+                  style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)", cursor: "grab", ...(marked.has(c) && SELECTED_MARKER) }}
+                >
+                  <Text as="div" size="1" truncate style={{ maxWidth: flag && x(flag.time) - left, boxSizing: "border-box", lineHeight: `${LANE_HEIGHT}px`, padding: "0 4px" }}>
+                    {c.name}
+                  </Text>
+                  {/* Grips on its edges in view resize it. */}
+                  {(["start", "end"] as const).filter((side) => x(c[side]) >= 0 && x(c[side]) <= width).map((side) => (
+                    <Box
+                      key={side}
+                      position="absolute"
+                      top="0"
+                      height="100%"
+                      onPointerDown={(e) => markerDown(e, c, [side])}
+                      style={{ [side === "start" ? "left" : "right"]: 0, width: MARKER_GRIP, cursor: "ew-resize" }}
+                    />
+                  ))}
+                </Box>
+              );
+            })}
+            {/* Each flag's name runs up to the next one; they are sorted by time. */}
+            {bookmarks.map((b, i) => inView(b.time, b.time) && (
+              <Text
                 key={i}
-                position="absolute"
-                height="100%"
-                onPointerDown={(e) => markerDown(e, c)}
-                style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)", cursor: "grab", ...(marked.has(c) && SELECTED_MARKER) }}
+                as="div"
+                size="1"
+                truncate
+                onPointerDown={(e) => markerDown(e, b)}
+                style={{
+                  position: "absolute",
+                  // Its 2px edge centred on its time, like its line through the graph.
+                  left: x(b.time) - 1,
+                  maxWidth: bookmarks[i + 1] && x(bookmarks[i + 1].time) - x(b.time),
+                  boxSizing: "border-box",
+                  height: "100%",
+                  lineHeight: `${LANE_HEIGHT}px`,
+                  padding: "0 4px",
+                  borderLeft: `2px solid var(--${markerColor(b.name)}-9)`,
+                  // Opaque, so it hides what it covers.
+                  background: `linear-gradient(var(--${markerColor(b.name)}-a4), var(--${markerColor(b.name)}-a4)), var(--color-panel-solid)`,
+                  cursor: "grab",
+                  ...(marked.has(b) && SELECTED_MARKER),
+                }}
               >
-                <Text as="div" size="1" truncate style={{ maxWidth: flag && x(flag.time) - left, boxSizing: "border-box", lineHeight: `${LANE_HEIGHT}px`, padding: "0 4px" }}>
-                  {c.name}
-                </Text>
-                {/* Grips on its edges in view resize it. */}
-                {(["start", "end"] as const).filter((side) => x(c[side]) >= 0 && x(c[side]) <= width).map((side) => (
-                  <Box
-                    key={side}
-                    position="absolute"
-                    top="0"
-                    height="100%"
-                    onPointerDown={(e) => markerDown(e, c, [side])}
-                    style={{ [side === "start" ? "left" : "right"]: 0, width: MARKER_GRIP, cursor: "ew-resize" }}
-                  />
-                ))}
-              </Box>
-            );
-          })}
-          {/* Each flag's name runs up to the next one; they are sorted by time. */}
-          {bookmarks.map((b, i) => inView(b.time, b.time) && (
-            <Text
-              key={i}
-              as="div"
-              size="1"
-              truncate
-              onPointerDown={(e) => markerDown(e, b)}
-              style={{
-                position: "absolute",
-                // Its 2px edge centred on its time, like its line through the graph.
-                left: x(b.time) - 1,
-                maxWidth: bookmarks[i + 1] && x(bookmarks[i + 1].time) - x(b.time),
-                boxSizing: "border-box",
-                height: "100%",
-                lineHeight: `${LANE_HEIGHT}px`,
-                padding: "0 4px",
-                borderLeft: `2px solid var(--${markerColor(b.name)}-9)`,
-                // Opaque, so it hides what it covers.
-                background: `linear-gradient(var(--${markerColor(b.name)}-a4), var(--${markerColor(b.name)}-a4)), var(--color-panel-solid)`,
-                cursor: "grab",
-                ...(marked.has(b) && SELECTED_MARKER),
+                {b.name}
+              </Text>
+            ))}
+            {/* Suggests the names in the script. */}
+            {naming && (
+              <NamePopover
+                initial={naming.name}
+                anchor={{ position: "absolute", left: Math.max(x(naming.from), 0), width: Math.min(x(naming.to), width) - Math.max(x(naming.from), 0), height: "100%", pointerEvents: "none" }}
+                suggestions={[...new Set([...chapters, ...bookmarks].map((m) => m.name))]}
+                onName={(name) => closeNaming(name)}
+                onCancel={() => closeNaming(null)}
+                onRemove={naming.remove && (() => {
+                  naming.remove!();
+                  setNaming(null);
+                })}
+              />
+            )}
+          </Box>
+          {advanced && (
+            <IconButton
+              variant="soft"
+              color="gray"
+              aria-pressed={markersUnlocked}
+              aria-label={markersUnlocked ? "Lock markers" : "Unlock markers"}
+              title={markersUnlocked ? "Lock the markers" : "Unlock the markers, to edit the main script's chapters and bookmarks here"}
+              onClick={() => {
+                setMarkersUnlocked(!markersUnlocked);
+                setMarked(new Set());
               }}
+              style={{ width: LANE_HEIGHT, height: LANE_HEIGHT }}
             >
-              {b.name}
-            </Text>
-          ))}
-          {/* Suggests the names in the script. */}
-          {naming && (
-            <NamePopover
-              initial={naming.name}
-              anchor={{ position: "absolute", left: Math.max(x(naming.from), 0), width: Math.min(x(naming.to), width) - Math.max(x(naming.from), 0), height: "100%", pointerEvents: "none" }}
-              suggestions={[...new Set([...chapters, ...bookmarks].map((m) => m.name))]}
-              onName={(name) => closeNaming(name)}
-              onCancel={() => closeNaming(null)}
-              onRemove={naming.remove && (() => {
-                naming.remove!();
-                setNaming(null);
-              })}
-            />
+              {markersUnlocked ? <LockOpen1Icon /> : <LockClosedIcon />}
+            </IconButton>
           )}
-        </Box>
+        </Flex>
       </Flex>
       {minimap ? (
         <svg
