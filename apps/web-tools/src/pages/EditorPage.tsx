@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useId, type CSSProperties, type PointerEvent, type ReactElement, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useId, type CSSProperties, type PointerEvent, type ReactElement, type ReactNode, type SVGProps } from "react";
 import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight, bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { SENT_SCRIPT_KEY } from "../StreamPanel";
@@ -276,6 +276,14 @@ const sortedEntries = (items: Entry[]) => [...items].sort((a, b) => Number(isFol
 const regionKind = (r: Region) => (isInstance(r) ? "Snippet" : isRepeat(r) ? `Repeat · ×${r.repeat.count}` : `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`);
 /** A region's label: an instance's by its name, another's its name or else what made it. */
 const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}` : r.name ?? regionKind(r));
+
+/** A snippet: a stretch of strokes cut out of a script, sized like the icons. */
+const SnippetIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg width="15" height="15" viewBox="0 0 15 15" fill="none" {...props}>
+    <rect x="1.5" y="2.5" width="12" height="10" rx="1.5" stroke="currentColor" />
+    <polyline points="3.5,9.5 6,5 9,10 11.5,5.5" stroke="currentColor" strokeLinejoin="round" strokeLinecap="round" />
+  </svg>
+);
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
@@ -3199,7 +3207,7 @@ export default function EditorPage() {
               onDoubleClick={() => !isFolder(e) && !tool && insertSnippet(e)}
               style={{ cursor: isFolder(e) ? "pointer" : undefined, userSelect: "none" }}
             >
-              {isFolder(e) ? <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} /> : <ComponentInstanceIcon style={{ flexShrink: 0 }} />}
+              {isFolder(e) ? <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} /> : <SnippetIcon style={{ flexShrink: 0 }} />}
               <Text size="2" truncate>{name}</Text>
             </Flex>
           </HoverCard.Trigger>
@@ -3262,7 +3270,7 @@ export default function EditorPage() {
     {/* The dragged row's icon and name follow the pointer. */}
     {rowDrag && (
       <Flex align="center" gap="2" style={{ position: "fixed", left: rowDrag.x + 12, top: rowDrag.y + 12, pointerEvents: "none", zIndex: 1 }}>
-        {entryAt(library, rowDrag.at) && isFolder(entryAt(library, rowDrag.at)!) ? <ChevronRightIcon /> : <ComponentInstanceIcon />}
+        {entryAt(library, rowDrag.at) && isFolder(entryAt(library, rowDrag.at)!) ? <ChevronRightIcon /> : <SnippetIcon />}
         <Text size="2">{rowDrag.at[rowDrag.at.length - 1]}</Text>
       </Flex>
     )}
@@ -3901,7 +3909,7 @@ export default function EditorPage() {
             {/* At the top level of the library; the editor stays open. */}
             <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions, regions })}>
               <Button variant="soft" disabled={actions.length < 2} title="Save the whole document to the snippet library">
-                <ComponentInstanceIcon /> Save as snippet
+                <SnippetIcon /> Save as snippet
               </Button>
             </NamePopover>
             <Flex gap="2">
