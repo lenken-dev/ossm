@@ -105,6 +105,10 @@ _Avoid_: Machine range
 A target location within the stroke range, expressed as a fraction with zero at its shallowest point and one at its deepest point.
 _Avoid_: Machine position
 
+**Script depth**:
+How far in a funscript point goes, from zero (out) to one hundred (fully in): one hundred times its stroke position, the reverse of the funscript position. The editor shows and takes every position as script depth.
+_Avoid_: Position, High, Low
+
 **Sensation**:
 A pattern-specific adjustment from minus one to one whose effect is defined by the selected pattern. While streaming, it sets the jerk setting.
 _Avoid_: Speed, torque
