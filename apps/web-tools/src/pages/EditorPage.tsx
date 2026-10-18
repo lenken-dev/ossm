@@ -2789,15 +2789,18 @@ export default function EditorPage() {
       for (const a of run.slice(Math.max(byTime(run, view.from) - 1, 0), byTime(run, view.from + view.span) + 1)) ctx.lineTo(x(a.at), y(a.pos));
       ctx.stroke();
     }
-    // With a tool open, the points it was opened on, faint and dashed behind its result; Repeat's only in its pattern box.
-    if (tool) {
+    // With a tool open, the points it was opened on, faint and dashed behind its result; Repeat's only in its pattern box. Moving, the lifted points where they were, alike.
+    if (tool || lifted) {
       ctx.save();
       Object.assign(ctx, { lineWidth: 1.5, strokeStyle: css.getPropertyValue("--gray-a9") });
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
-      const all = tool.actions;
-      const a = tool.kind !== "repeat" ? all : repParams ? all.slice(byTime(all, repBox.from), afterTime(all, repBox.from + repParams.length)) : [];
+      const all = tool?.actions ?? actions;
+      const a = !tool ? all.slice(byTime(all, lifted!.from), afterTime(all, lifted!.to))
+        : tool.kind !== "repeat" ? all : repParams ? all.slice(byTime(all, repBox.from), afterTime(all, repBox.from + repParams.length)) : [];
       for (const p of a.slice(Math.max(byTime(a, view.from) - 1, 0), byTime(a, view.from + view.span) + 1)) ctx.lineTo(x(p.at), y(p.pos));
+      // A lone point, which makes no line, as a ring; but a region's, whose band shows.
+      if (!tool && a.length === 1 && !regionAt(regions, a[0].at)) ctx.arc(x(a[0].at), y(a[0].pos), 5, 0, 2 * Math.PI);
       ctx.stroke();
       ctx.restore();
     }
@@ -4023,6 +4026,10 @@ export default function EditorPage() {
             {/* In the advanced editor, the main script's regions faintly, read-only. */}
             {advanced && main.regions.map((r, i) => i !== advanced.instance && inView(r.from, r.to) && (
               <rect key={`m${i}`} x={x(r.from)} width={x(r.to) - x(r.from)} height={plotHeight} strokeDasharray="4 2" style={{ ...bandOf(r), opacity: 0.5 }} />
+            ))}
+            {/* Moving, the lifted regions where they were, dashed. */}
+            {lifted && regions.filter((r) => r.from >= lifted.from && r.to <= lifted.to && inView(r.from, r.to)).map((r, i) => (
+              <rect key={`l${i}`} x={x(r.from)} width={x(r.to) - x(r.from)} height={plotHeight} strokeDasharray="4 3" style={{ fill: "none", stroke: "var(--gray-a9)" }} />
             ))}
             {/* The regions' bands over them, with those being placed, the selected ones outlined as the selected markers; their labels are in the box. */}
             {shownRegions.map((r, i) => inView(r.from, r.to) && (
