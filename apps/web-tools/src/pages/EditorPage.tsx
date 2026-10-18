@@ -2744,6 +2744,12 @@ export default function EditorPage() {
   const outlined = (r: Region) => regionsOn.has(r) || !!going?.regions.includes(r);
   /** Where they can't go in, their points and the time they cover there, drawn red over the rest. */
   const astray = refused ? { points: filledIn(ghost), span: spanOf(ghost) } : null;
+  /** Replacing, the line through the points they would take out, from the point before to the one after, drawn faint red and dashed, as removed points in the undo history. */
+  const removed = landed && !inserting ? (() => {
+    const [start, end] = spanOf(landed);
+    const [lo, hi] = [byTime(kept, start), afterTime(kept, end)];
+    return lo < hi ? kept.slice(Math.max(lo - 1, 0), hi + 1) : null;
+  })() : null;
 
   // A drag's release, or Done, goes in once rendered with where it lands; refused there, a drag goes back, and Done's result follows the pointer as a paste.
   useEffect(() => {
@@ -2801,6 +2807,15 @@ export default function EditorPage() {
       for (const p of a.slice(Math.max(byTime(a, view.from) - 1, 0), byTime(a, view.from + view.span) + 1)) ctx.lineTo(x(p.at), y(p.pos));
       // A lone point, which makes no line, as a ring; but a region's, whose band shows.
       if (!tool && a.length === 1 && !regionAt(regions, a[0].at)) ctx.arc(x(a[0].at), y(a[0].pos), 5, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (removed) {
+      ctx.save();
+      Object.assign(ctx, { globalAlpha: 0.35, lineWidth: 2, strokeStyle: css.getPropertyValue("--red-9") });
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      for (const a of removed.slice(Math.max(byTime(removed, view.from) - 1, 0), byTime(removed, view.from + view.span) + 1)) ctx.lineTo(x(a.at), y(a.pos));
       ctx.stroke();
       ctx.restore();
     }
