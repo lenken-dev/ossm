@@ -30,8 +30,6 @@ interface Script {
 /** What an edit changes, undo restores and saving keeps: the points, markers and regions. */
 type Content = Pick<Script, "actions" | "chapters" | "bookmarks" | "regions">;
 const sameContent = (a: Content, b: Content) => a.actions === b.actions && a.chapters === b.chapters && a.bookmarks === b.bookmarks && a.regions === b.regions;
-/** An undo history starting at `c`, its first entry called `label`. */
-const startedAt = ({ actions, chapters, bookmarks, regions }: Content, label: string) => ({ states: [{ actions, chapters, bookmarks, regions, label }], index: 0 });
 
 /** A named time range, in ms, from `metadata.chapters`; other properties of the loaded one are kept. */
 interface Chapter {
@@ -204,6 +202,51 @@ const matching = (items: Entry[], q: string): Entry[] => items.flatMap((e) => {
   const inner = isFolder(e) ? matching(e.items, q) : [];
   return inner.length ? [{ ...e, items: inner } as Folder] : [];
 });
+
+/** What is selected: points by index, regions and markers. */
+interface Selection {
+  points: Set<number>;
+  regions: Set<Region>;
+  markers: Set<Marker>;
+}
+
+/** An undo history entry: the content after an edit, what the edit is called, and the selection last made on it. */
+interface Step extends Content {
+  label: string;
+  selection?: Selection;
+}
+
+/** An undo history: its entries, and `index`, the current one. */
+interface Timeline {
+  states: Step[];
+  index: number;
+}
+
+/** An undo history starting at `c`, its first entry called `label`. */
+const startedAt = ({ actions, chapters, bookmarks, regions }: Content, label: string): Timeline =>
+  ({ states: [{ actions, chapters, bookmarks, regions, label }], index: 0 });
+
+/**
+ * The time range of what differs between `a` and `b`, null when nothing
+ * does: the points, by value, past those alike at either end, and the markers
+ * and regions only one has, as edits keep the ones they leave alone.
+ */
+function changedSpan(a: Content, b: Content) {
+  const same = (i: number, j: number) => a.actions[i].at === b.actions[j].at && a.actions[i].pos === b.actions[j].pos;
+  let start = 0;
+  while (start < a.actions.length && start < b.actions.length && same(start, start)) start++;
+  let end = 0;
+  while (end < a.actions.length - start && end < b.actions.length - start && same(a.actions.length - 1 - end, b.actions.length - 1 - end)) end++;
+  const only = <T,>(p: T[], q: T[]) => {
+    const kept = new Set(q);
+    return p.filter((m) => !kept.has(m));
+  };
+  const times = [a, b].flatMap((x) => x.actions.slice(start, x.actions.length - end).map((p) => p.at));
+  for (const [p, q] of [[a, b], [b, a]]) {
+    times.push(...only(p.chapters, q.chapters).flatMap((c) => [c.start, c.end]), ...only(p.bookmarks, q.bookmarks).map((m) => m.time), ...only(p.regions, q.regions).flatMap((r) => [r.from, r.to]));
+  }
+  return times.length ? { from: times.reduce((m, t) => Math.min(m, t)), to: times.reduce((m, t) => Math.max(m, t)) } : null;
+}
 
 const sortedEntries = (items: Entry[]) => [...items].sort((a, b) => Number(isFolder(b)) - Number(isFolder(a)) || entryName(a).localeCompare(entryName(b)));
 
@@ -1124,7 +1167,7 @@ export default function EditorPage() {
   /** Undo history: the points, markers and regions after each edit, the first as loaded; `index` is the current one. */
   const [timeline, setTimeline] = useState(() => startedAt(script, advanced ? "Open" : "Start"));
   /** The main script's undo history, put aside while the advanced editor is open; lost on a reload, when it starts over. */
-  const mainTimeline = useRef<typeof timeline | null>(null);
+  const mainTimeline = useRef<Timeline | null>(null);
   /** Set while a drag runs, so the whole drag becomes one edit when it ends; undo and redo wait for it. */
   const [dragging, setDragging] = useState(false);
   /** What the next edit is called in the undo history. */
@@ -1147,17 +1190,28 @@ export default function EditorPage() {
     });
   }, [actions, chapters, bookmarks, regions, dragging]);
 
-  /** Go to the points, markers and regions after edit `index` of the undo history. */
+  // The selection goes with the current entry, to come back with it; not while dragging or placing, so an entry keeps the one from before them.
+  useEffect(() => {
+    if (dragging || placing) return;
+    setTimeline((tl) => ({ ...tl, states: tl.states.map((st, k) => (k === tl.index ? { ...st, selection: { points: selected, regions: regionsOn, markers: marked } } : st)) }));
+  }, [selected, regionsOn, marked, timeline.index, dragging, placing]);
+
+  /** Go to the content after edit `index` of the undo history, with the selection last made there, in selection mode with the box around it, and bring the change into view. */
   const jump = (index: number) => {
-    const { actions, chapters, bookmarks, regions } = timeline.states[index];
+    const step = timeline.states[index];
+    const { actions, chapters, bookmarks, regions } = step;
+    const { points, regions: rs, markers } = step.selection ?? { points: new Set<number>(), regions: new Set<Region>(), markers: new Set<Marker>() };
+    const span = changedSpan(script, step);
     setTimeline((tl) => ({ ...tl, index }));
     setTool(null);
     setScript((s) => ({ ...s, actions, chapters, bookmarks, regions }));
-    select([]);
-    setMarked(new Set());
-    setBox(null);
+    setSelected(points);
+    setRegionsOn(rs);
+    setMarked(markers);
+    setBox(boxMode && (points.size || rs.size) ? boxed(boxAround([...points].map((i) => actions[i]), [...rs])) : null, actions);
     setPlacing(null);
     setLifted(null);
+    if (span) setView((v) => (span.to < v.from || span.from > v.from + v.span ? { ...v, from: Math.max(span.from - v.span * FOLLOW_AT, 0) } : v));
   };
   /** The points and markers as last saved, opened or started anew; unknown after a reload with unsaved changes. */
   const [unsaved, setUnsaved] = usePersistedState("ossm:editorUnsaved", false, localStorage);
