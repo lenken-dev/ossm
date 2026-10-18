@@ -655,22 +655,38 @@ const RANGED: Shape[] = ["ramp", "spline"];
  * by Time, read at the copy's start, end to end, a point at the box's end
  * left to the next copy's first but the last's; their depths mapped from the
  * box's Out–In onto Out's–In's, read at each point's time. Points on the
- * same ms merge, the later kept. Time's ramp and spline run across the copies
- * by number, first to last, as the copies' time depends on them; its waves
- * and Out and In in time. Gives the copies' starts and their end, and their
+ * same ms merge, the later kept. Time is read at each copy's start, its ramp
+ * and spline across the copies' time, which they set, so it is found by
+ * halving; its waves, and Out and In, in time. Gives the copies' starts and their end, and their
  * points, null while a field is refused: the starts then as at 100%; null
  * without a valid Count or Length.
  */
 function repeated(setup: RepeatSetup, from: number, pattern: Action[], length: number, bottom: number, top: number) {
   const count = typed(setup.count);
   if (!(Number.isInteger(count) && count >= 1 && length > 0)) return null;
-  const starts = [from];
-  let refused = false;
-  for (let k = 0; k < count; k++) {
-    const time = RANGED.includes(setup.time.shape) ? funcAt(setup.time, k, count - 1) : funcAt(setup.time, starts[k] - from, 0);
-    refused ||= !(time > 0);
-    starts.push(starts[k] + (length * (time > 0 ? time : 100)) / 100);
+  const ranged = RANGED.includes(setup.time.shape);
+  /** The copies' starts and end with a ramp or spline across `span` ms. */
+  const run = (span: number) => {
+    const starts = [from];
+    let refused = false;
+    for (let k = 0; k < count; k++) {
+      const time = funcAt(setup.time, starts[k] - from, ranged ? span : 0);
+      refused ||= !(time > 0);
+      starts.push(starts[k] + (length * (time > 0 ? time : 100)) / 100);
+    }
+    return { starts, refused };
+  };
+  // The span the copies fill exactly: they outrun one too short, and fall within one long enough.
+  let [lo, hi] = [0, length * count];
+  if (ranged) {
+    for (let i = 0; i < 60 && run(hi).starts[count] - from > hi; i++) hi *= 2;
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (run(mid).starts[count] - from > mid) lo = mid;
+      else hi = mid;
+    }
   }
+  const { starts, refused } = run(hi);
   const end = Math.round(starts[count]);
   const inBox = pattern.filter((a) => a.at >= from && a.at <= from + length);
   if (refused || !inBox.length) return { starts, end, actions: null };
@@ -1902,30 +1918,13 @@ export default function EditorPage() {
     : setGenSetup((s) => ({ ...s, [key]: f(s[key as "interval"]) })));
   /** The open tool's timing function, shown in its own view below the graph: Generate's Interval or Speed, none with Markers timing, or Repeat's Time. */
   const timingKey: FuncKey | null = tool?.kind === "repeat" ? "time" : tool?.kind === "generate" && genSetup.timing !== "markers" ? genSetup.timing : null;
-  /**
-   * Where `u` % of a function's range is, in ms, and back: across the box,
-   * but Repeat's Time's by copy, from the first's start to the last's, between
-   * them in step with the copies' time.
-   */
-  const rangeTime = (key: FuncKey, u: number) => {
-    if (key !== "time" || !repRun) return fnBox!.from + (u / 100) * (fnBox!.to - fnBox!.from);
-    const s = repRun.starts;
-    const k = (u / 100) * (s.length - 2);
-    const j = clamp(Math.floor(k), 0, Math.max(s.length - 3, 0));
-    return s[j] + (k - j) * (s[j + 1] - s[j]);
-  };
-  const rangeU = (key: FuncKey, t: number) => {
-    if (key !== "time" || !repRun) return fnBox!.to > fnBox!.from ? ((t - fnBox!.from) / (fnBox!.to - fnBox!.from)) * 100 : 0;
-    const s = repRun.starts;
-    if (s.length < 3) return 0;
-    const next = s.findIndex((at) => at > t);
-    const j = clamp((next < 0 ? s.length : next) - 1, 0, s.length - 3);
-    return clamp(((j + (t - s[j]) / (s[j + 1] - s[j])) / (s.length - 2)) * 100, 0, 100);
-  };
+  /** Where `u` % of a function's range is, in ms, across the box, and back. */
+  const rangeTime = (u: number) => fnBox!.from + (u / 100) * (fnBox!.to - fnBox!.from);
+  const rangeU = (t: number) => (fnBox!.to > fnBox!.from ? ((t - fnBox!.from) / (fnBox!.to - fnBox!.from)) * 100 : 0);
   /** A function's value at `t` ms, a ramp's or spline's along its range, the rest from the box's start. */
   const valueAt = (key: FuncKey, t: number) => {
     const func = fnSetup[key]!;
-    return RANGED.includes(func.shape) ? funcAt(func, rangeU(key, t), 100) : funcAt(func, t - fnBox!.from, fnBox!.to - fnBox!.from);
+    return RANGED.includes(func.shape) ? funcAt(func, rangeU(t), 100) : funcAt(func, t - fnBox!.from, fnBox!.to - fnBox!.from);
   };
   /** Why the open tool's result, though shown, cannot be applied: it would put points into a region or stretch one. */
   const toolBlocked = genBox && regions.some((r) => r !== tool!.region && r.from <= genBox.to && r.to >= genBox.from) ? "The box overlaps a region"
@@ -2099,7 +2098,7 @@ export default function EditorPage() {
     const [t0, v0] = knots[i];
     const own = ownScale(key);
     dragHandle(e, (dt, dp) => {
-      const t = end ? t0 : clamp(Math.round(rangeU(key, rangeTime(key, t0) + dt) * 100) / 100, knots[i - 1][0] + KNOT_GAP, knots[i + 1][0] - KNOT_GAP);
+      const t = end ? t0 : clamp(Math.round(rangeU(rangeTime(t0) + dt) * 100) / 100, knots[i - 1][0] + KNOT_GAP, knots[i + 1][0] - KNOT_GAP);
       // Out's and In's are depths, deeper down.
       const v = clamp(Math.round(v0 + (own ? dp : high > low ? (-dp / (high - low)) * 100 : 0)), 0, 100);
       setKnots(key, knots.map((k, j) => (j === i ? [t, v] : k)));
@@ -2110,7 +2109,7 @@ export default function EditorPage() {
   const addKnot = (e: PointerEvent<SVGElement>, key: FuncKey) => {
     if (e.button !== 0) return;
     const knots = fnSetup[key]!.knots!;
-    const u = Math.round(rangeU(key, pointerAt(e).at) * 100) / 100;
+    const u = Math.round(rangeU(pointerAt(e).at) * 100) / 100;
     const i = knots.findIndex(([t]) => t > u);
     if (i <= 0 || u - knots[i - 1][0] < KNOT_GAP || knots[i][0] - u < KNOT_GAP) return;
     const next: Knots = [...knots.slice(0, i), [u, Math.round(clamp(splineAt(knots, u), 0, 100))], ...knots.slice(i)];
@@ -2167,7 +2166,7 @@ export default function EditorPage() {
       case "ramp":
         return <>
           {point("start", 0, f("start"), "ns-resize", (e) => drag(e, (_, dv) => ({ start: fit(f("start") + dv) })))}
-          {point("end", rangeTime(key, 100) - from, f("end"), "ns-resize", (e) => drag(e, (_, dv) => ({ end: fit(f("end") + dv) })))}
+          {point("end", rangeTime(100) - from, f("end"), "ns-resize", (e) => drag(e, (_, dv) => ({ end: fit(f("end") + dv) })))}
         </>;
       case "spline": {
         // An Interval or Speed spline's knots on its scale, the timing view's.
@@ -2177,7 +2176,7 @@ export default function EditorPage() {
           <polyline points={curve} fill="none" strokeWidth={GRIP} stroke="transparent" style={{ cursor: "copy" }} onPointerDown={(e) => addKnot(e, key)} />
           {func.knots!.map(([t, v], i, knots) => grip(
             `${key}-${i}`,
-            [x(rangeTime(key, t)) - GRIP / 2, knotY(v) - GRIP / 2, GRIP, GRIP],
+            [x(rangeTime(t)) - GRIP / 2, knotY(v) - GRIP / 2, GRIP, GRIP],
             i === 0 || i === knots.length - 1 ? "ns-resize" : "move",
             (e) => dragKnot(e, key, knots, i),
             true,
