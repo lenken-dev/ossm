@@ -212,10 +212,10 @@ const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
 /** How the selection box and the tools' boxes in the graph fill and outline. */
 const TOOL_BOX = { fill: "var(--accent-a3)", stroke: "var(--accent-9)" };
-/** How a region's band behind the graph fills and outlines, and its label's colour: cyan, an instance's violet, a Repeat one's orange; selected, it outlines as the selected markers. */
+/** How a region's band behind the graph fills and outlines, and its label's colour: cyan, an instance's violet, a Repeat one's orange; selected, it fills stronger and outlines as the selected markers. */
 const bandOf = (r: Region) => {
   const c = isInstance(r) ? "violet" : isRepeat(r) ? "orange" : "cyan";
-  return { fill: `var(--${c}-a3)`, stroke: `var(--${c}-a8)`, label: `var(--${c}-11)` };
+  return { fill: `var(--${c}-a3)`, selectedFill: `var(--${c}-a5)`, stroke: `var(--${c}-a8)`, label: `var(--${c}-11)` };
 };
 /** Size of the selection box's grips, in px. */
 const GRIP = 8;
@@ -2949,7 +2949,10 @@ export default function EditorPage() {
     Object.assign(ctx, { strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
     // Repeat's copies show thin and faded, so its pattern's line stands out; the line breaks between them, to be drawn over.
     const muted = tool?.kind === "repeat" && !ghost;
-    const between = (j: number) => marks.has(first + j - 1) && marks.has(first + j);
+    // A selected region's line shows as the selected points'.
+    const lit = tool ? [] : shownRegions.filter(outlined);
+    const litAt = (j: number) => regionAt(lit, visible[j].at);
+    const between = (j: number) => (marks.has(first + j - 1) && marks.has(first + j)) || (j > 0 && !!litAt(j) && litAt(j) === litAt(j - 1));
     ctx.beginPath();
     visible.forEach((a, j) => (muted && between(j) ? ctx.moveTo(x(a.at), y(a.pos)) : ctx.lineTo(x(a.at), y(a.pos))));
     ctx.stroke();
@@ -4175,13 +4178,15 @@ export default function EditorPage() {
             ))}
             {/* The regions' bands over them, with those being placed, the selected ones outlined as the selected markers; their labels are in the box. */}
             {shownRegions.map((r, i) => inView(r.from, r.to) && (
+              // Selected, inset by half its outline, as the selected markers', so the graph's edges don't cut it.
               <rect
                 key={`r${i}`}
-                x={x(r.from)}
-                width={x(r.to) - x(r.from)}
-                height={plotHeight}
+                x={x(r.from) + (outlined(r) ? 1 : 0)}
+                y={outlined(r) ? 1 : 0}
+                width={Math.max(x(r.to) - x(r.from) - (outlined(r) ? 2 : 0), 0)}
+                height={plotHeight - (outlined(r) ? 2 : 0)}
                 strokeWidth={outlined(r) ? 2 : 1}
-                style={{ fill: bandOf(r).fill, stroke: outlined(r) ? "var(--accent-9)" : bandOf(r).stroke }}
+                style={outlined(r) ? { fill: bandOf(r).selectedFill, stroke: "var(--accent-9)" } : { fill: bandOf(r).fill, stroke: bandOf(r).stroke }}
               />
             ))}
             {[0, 50, 100].map((pos) => (
