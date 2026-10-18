@@ -3010,7 +3010,15 @@ export default function EditorPage() {
       const all = tool?.actions ?? actions;
       const a = !tool ? all.slice(byTime(all, lifted!.from), afterTime(all, lifted!.to))
         : tool.kind !== "repeat" ? all : repParams ? all.slice(byTime(all, repBox.from), afterTime(all, repBox.from + repParams.length)) : [];
-      for (const p of a.slice(Math.max(byTime(a, view.from) - 1, 0), byTime(a, view.from + view.span) + 1)) ctx.lineTo(x(p.at), y(p.pos));
+      // A moved region shows only its dashed outline, not its points' line.
+      const moved = tool ? [] : regions.filter((r) => r.from >= lifted!.from && r.to <= lifted!.to);
+      let prev: Action | undefined;
+      for (const p of a.slice(Math.max(byTime(a, view.from) - 1, 0), byTime(a, view.from + view.span) + 1)) {
+        const r = regionAt(moved, p.at);
+        if (r && prev && regionAt(moved, prev.at) === r) ctx.moveTo(x(p.at), y(p.pos));
+        else ctx.lineTo(x(p.at), y(p.pos));
+        prev = p;
+      }
       // A lone point, which makes no line, as a ring; but a region's, whose band shows.
       if (!tool && a.length === 1 && !regionAt(regions, a[0].at)) ctx.arc(x(a[0].at), y(a[0].pos), 5, 0, 2 * Math.PI);
       ctx.stroke();
@@ -3018,13 +3026,15 @@ export default function EditorPage() {
     }
     // Moved in place, the line as it was where it went through them, from the points either side, dashed alike.
     if (apart) {
-      const { actions: was, moving } = apart;
+      const { actions: was, moving, regions: moved } = apart;
       ctx.save();
       Object.assign(ctx, { lineWidth: 1.5, strokeStyle: css.getPropertyValue("--gray-a9") });
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
       for (let j = Math.max(byTime(was, view.from), 1); j < Math.min(byTime(was, view.from + view.span) + 1, was.length); j++) {
         if (!moving.has(j - 1) && !moving.has(j)) continue;
+        const r = regionAt(moved, was[j].at);
+        if (r && regionAt(moved, was[j - 1].at) === r) continue;
         ctx.moveTo(x(was[j - 1].at), y(was[j - 1].pos));
         ctx.lineTo(x(was[j].at), y(was[j].pos));
       }
