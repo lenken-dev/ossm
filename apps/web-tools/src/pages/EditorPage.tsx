@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useId, type CSSProperties, type PointerEvent, type ReactElement, type ReactNode } from "react";
 import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, ComponentInstanceIcon, MagnifyingGlassIcon, PlusIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight, bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { SENT_SCRIPT_KEY } from "../StreamPanel";
@@ -1777,14 +1777,9 @@ export default function EditorPage() {
     edit(`Rename ${regionNoun(r)} to "${name}"`, (s) => ({ ...s, regions: s.regions.map((o) => (o === r ? renamed : o)) }));
     select([], [renamed]);
   };
-  /** The selected instance's Name field as typed, until accepted with Enter or by leaving it; empty, it is refused. */
-  const [nameDraft, setNameDraft] = useState<string | null>(null);
-
-
-  /** Close the name field, accepting what was typed unless `accept` is false or it is empty. */
-  const closeNaming = (accept: boolean) => {
-    const name = accept ? naming!.name.trim() : "";
-    naming!.done(name || null);
+  /** Close the name field with the accepted `name`, or null to keep the old one. */
+  const closeNaming = (name: string | null) => {
+    naming!.done(name);
     setNaming(null);
   };
 
@@ -3524,22 +3519,14 @@ export default function EditorPage() {
       </Text>
       {/* The selected region, its points locked until unlocked. */}
       {region && <>
-        <Text size="2" weight="medium">{isInstance(region) ? "Snippet" : "Region"}</Text>
-        {isInstance(region) && (
-          <TextField.Root
-            aria-label="Name"
-            value={nameDraft ?? region.snippet.name}
-            onChange={(e) => setNameDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-            onBlur={() => {
-              const name = nameDraft?.trim();
-              if (name && name !== region.snippet.name) renameInstance(region, name);
-              setNameDraft(null);
-            }}
-          >
-            <TextField.Slot side="left">Name</TextField.Slot>
-          </TextField.Root>
-        )}
+        <Flex align="center" gap="2">
+          <Text size="2" weight="medium" truncate>{isInstance(region) ? `Snippet · ${region.snippet.name}` : "Region"}</Text>
+          {isInstance(region) && (
+            <NamePopover initial={region.snippet.name} onName={(n) => n !== region.snippet.name && renameInstance(region, n)}>
+              <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
+            </NamePopover>
+          )}
+        </Flex>
         <Text size="2" color="gray">{isInstance(region) ? "Snippet" : regionName(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
         <Flex gap="2">
           <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title={isInstance(region) ? "Edit its points and regions in the advanced editor (E, or double-click it)" : isRepeat(region) ? "Edit its pattern and setup with Repeat (E, or double-click it)" : "Edit its setup and box with Generate (E, or double-click it)"} onClick={() => editRegion(region)}>
@@ -4599,50 +4586,19 @@ export default function EditorPage() {
               {b.name}
             </Text>
           ))}
-          {/* Accepted with Enter or by clicking away; Escape keeps the old name. Suggests the names in the script. */}
+          {/* Suggests the names in the script. */}
           {naming && (
-            <Popover.Root open modal onOpenChange={(open) => !open && closeNaming(true)}>
-              <Popover.Anchor style={{ position: "absolute", left: Math.max(x(naming.from), 0), width: Math.min(x(naming.to), width) - Math.max(x(naming.from), 0), height: "100%", pointerEvents: "none" }} />
-              <Popover.Content
-                size="1"
-                width="200px"
-                // In a portal, but React still bubbles its presses up to the lane, which would add a marker.
-                onPointerDown={(e) => e.stopPropagation()}
-                onEscapeKeyDown={(e) => {
-                  e.preventDefault();
-                  closeNaming(false);
-                }}
-              >
-                <Flex gap="2">
-                  <TextField.Root
-                    size="1"
-                    aria-label="Name"
-                    list="marker-names"
-                    value={naming.name}
-                    onFocus={(e) => e.target.select()}
-                    onChange={(e) => setNaming({ ...naming, name: e.target.value })}
-                    onKeyDown={(e) => e.key === "Enter" && closeNaming(true)}
-                    style={{ flexGrow: 1 }}
-                  />
-                  {naming.remove && (
-                    <Button
-                      size="1"
-                      variant="soft"
-                      color="red"
-                      onClick={() => {
-                        naming.remove!();
-                        setNaming(null);
-                      }}
-                    >
-                      Delete
-                    </Button>
-                  )}
-                </Flex>
-                <datalist id="marker-names">
-                  {[...new Set([...chapters, ...bookmarks].map((m) => m.name))].map((name) => <option key={name} value={name} />)}
-                </datalist>
-              </Popover.Content>
-            </Popover.Root>
+            <NamePopover
+              initial={naming.name}
+              anchor={{ position: "absolute", left: Math.max(x(naming.from), 0), width: Math.min(x(naming.to), width) - Math.max(x(naming.from), 0), height: "100%", pointerEvents: "none" }}
+              suggestions={[...new Set([...chapters, ...bookmarks].map((m) => m.name))]}
+              onName={(name) => closeNaming(name)}
+              onCancel={() => closeNaming(null)}
+              onRemove={naming.remove && (() => {
+                naming.remove!();
+                setNaming(null);
+              })}
+            />
           )}
         </Box>
       </Flex>
@@ -5011,31 +4967,74 @@ function LanePreview({ lists }: { lists: [LaneItem[], LaneItem[]][] }) {
 }
 
 /**
- * `children`, a button, opening a small field for a name, `initial` at
- * first: Enter gives it, trimmed, to `onName`, unless it is empty or `taken`.
+ * Every name field: a small modal popup for a name, `initial` at first,
+ * opened by `children`, a button, or else open at `anchor` from the start.
+ * Enter or its OK button gives the name, trimmed, to `onName`, unless it is
+ * empty or `taken`; Escape or a press outside closes it with `onCancel`, the
+ * press going no further. It suggests `suggestions`; with `onRemove`, it has
+ * a Delete button.
  */
-function NamePopover({ initial = "", taken, onName, children }: { initial?: string; taken: (name: string) => boolean; onName: (name: string) => void; children: ReactElement }) {
-  const [name, setName] = useState<string | null>(null);
+function NamePopover({ initial = "", taken = () => false, onName, onCancel, onRemove, suggestions, anchor, children }: {
+  initial?: string;
+  taken?: (name: string) => boolean;
+  onName: (name: string) => void;
+  onCancel?: () => void;
+  onRemove?: () => void;
+  suggestions?: string[];
+  anchor?: CSSProperties;
+  children?: ReactElement;
+}) {
+  const [name, setName] = useState<string | null>(anchor ? initial : null);
+  const list = useId();
   const refused = name === null || !name.trim() || taken(name.trim());
+  const accept = () => {
+    if (refused) return;
+    setName(null);
+    onName(name.trim());
+  };
   return (
-    <Popover.Root open={name !== null} onOpenChange={(open) => setName(open ? initial : null)}>
-      <Popover.Trigger>{children}</Popover.Trigger>
-      <Popover.Content size="1" width="200px">
+    <Popover.Root modal open={name !== null} onOpenChange={(open) => {
+      setName(open ? initial : null);
+      if (!open) onCancel?.();
+    }}>
+      {anchor ? <Popover.Anchor style={anchor} /> : <Popover.Trigger>{children}</Popover.Trigger>}
+      <Popover.Content
+        size="1"
+        width={onRemove ? "280px" : "220px"}
+        // In a portal, but React still bubbles its presses and keys up to where it is opened, as to a lane adding a marker or the page's shortcuts.
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
         <Flex direction="column" gap="1">
-          <TextField.Root
-            size="1"
-            aria-label="Name"
-            value={name ?? ""}
-            onFocus={(e) => e.target.select()}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || refused) return;
-              onName(name.trim());
-              setName(null);
-            }}
-          />
+          <Flex gap="2">
+            <TextField.Root
+              size="1"
+              aria-label="Name"
+              list={suggestions && list}
+              value={name ?? ""}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && accept()}
+              style={{ flexGrow: 1 }}
+            />
+            <IconButton size="1" disabled={refused} aria-label="OK" title="OK (Enter)" onClick={accept}><CheckIcon /></IconButton>
+            {onRemove && (
+              <Button
+                size="1"
+                variant="soft"
+                color="red"
+                onClick={() => {
+                  setName(null);
+                  onRemove();
+                }}
+              >
+                Delete
+              </Button>
+            )}
+          </Flex>
           {name?.trim() && refused && <Text size="1" color="red">That name is taken.</Text>}
         </Flex>
+        {suggestions && <datalist id={list}>{suggestions.map((s) => <option key={s} value={s} />)}</datalist>}
       </Popover.Content>
     </Popover.Root>
   );

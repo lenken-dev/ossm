@@ -3,3 +3,8 @@ html, body, #root {
   height: 100%;
 }
 
+
+/* Chrome's suggestions arrow, clipped in Radix fields; the suggestions still show while typing or with ↓. */
+input[list]::-webkit-calendar-picker-indicator {
+  display: none !important;
+}
