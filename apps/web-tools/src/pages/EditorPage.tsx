@@ -3020,19 +3020,21 @@ export default function EditorPage() {
   /**
    * Buttons in the middle of the selection box's edges, in its part in view,
    * that grow it to the start or end of the script, or the top or bottom; each
-   * only while that edge is not there yet. None in a box too small for them.
+   * only while that edge is not there yet; and in its middle, where the By
+   * time toggle goes. None in a box too small for them.
    */
-  const extenders = (() => {
-    if (!boxMode || placing || !box || !edges) return [];
+  const boxButtons = (() => {
+    if (!boxMode || placing || !box || !edges) return null;
     const [left, right] = [Math.max(edges.from, 0), Math.min(edges.to, width)];
     const [midX, midY] = [(left + right) / 2 - EXTEND / 2, (edges.high + edges.low) / 2 - EXTEND / 2];
-    if (right - left < 3 * EXTEND + 16 || edges.low - edges.high < 3 * EXTEND + 16) return [];
-    return ([
+    if (right - left < 3 * EXTEND + 16 || edges.low - edges.high < 3 * EXTEND + 16) return null;
+    const extenders = ([
       ["Extend the selection to the start", DoubleArrowLeftIcon, { from: 0 }, box.from > 0, left + 6, midY],
       ["Extend the selection to the end", DoubleArrowRightIcon, { to: end }, box.to < end, right - 6 - EXTEND, midY],
       ["Extend the selection to the top", DoubleArrowUpIcon, { high: 100 }, box.high < 100, midX, edges.high + 6],
       ["Extend the selection to the bottom", DoubleArrowDownIcon, { low: 0 }, box.low > 0, midX, edges.low - 6 - EXTEND],
     ] as const).filter(([, , , shown]) => shown);
+    return { extenders, middle: { left: midX, top: midY } };
   })();
 
   /**
@@ -4062,20 +4064,6 @@ export default function EditorPage() {
           </svg>
           Select
         </Button>
-        {boxMode && (
-          <Button
-            variant={selectByTime ? "solid" : "soft"}
-            color={selectByTime ? undefined : "gray"}
-            aria-pressed={selectByTime}
-            title="Select by time, at any depth"
-            onClick={() => {
-              setSelectByTime(!selectByTime);
-              if (!selectByTime && box) selectIn({ ...box, low: 0, high: 100 });
-            }}
-          >
-            <HeightIcon /> By time
-          </Button>
-        )}
         <Separator orientation="vertical" size="2" />
         <Button
           variant={advanced ? "solid" : "soft"}
@@ -4363,7 +4351,7 @@ export default function EditorPage() {
               </text>
             )}
           </svg>
-          {extenders.map(([label, Icon, sides, , left, top]) => (
+          {boxButtons?.extenders.map(([label, Icon, sides, , left, top]) => (
             <IconButton
               key={label}
               size="1"
@@ -4376,6 +4364,22 @@ export default function EditorPage() {
               <Icon />
             </IconButton>
           ))}
+          {boxButtons && (
+            <IconButton
+              size="1"
+              variant={selectByTime ? "solid" : "surface"}
+              aria-pressed={selectByTime}
+              aria-label="Select by time, at any depth"
+              title="Select by time, at any depth"
+              style={{ position: "absolute", ...boxButtons.middle }}
+              onClick={() => {
+                setSelectByTime(!selectByTime);
+                if (!selectByTime) selectIn({ ...box!, low: 0, high: 100 });
+              }}
+            >
+              <HeightIcon />
+            </IconButton>
+          )}
           {/* Each region's label in its band's top corner, kept in view and cut off where there is no room. */}
           {shownRegions.map((r, i) => inView(r.from, r.to) && (
             <Text
