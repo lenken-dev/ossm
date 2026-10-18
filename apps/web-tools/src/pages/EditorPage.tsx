@@ -549,7 +549,7 @@ const ownScale = (key: FuncKey) => key !== "out" && key !== "in";
 type GenPart = "position" | "timing" | "out" | "in";
 
 const constant = (value: string): Func => ({ shape: "constant", value });
-const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("500"), speed: constant("200"), out: constant("0"), in: constant("100") };
+const GENERATE_DEFAULTS: GenerateSetup = { timing: "interval", first: "in", interval: constant("1000"), speed: constant("100"), out: constant("0"), in: constant("100") };
 
 /**
  * Whether Generate's point `i` goes on Out: First's side's run, then the
