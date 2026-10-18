@@ -729,12 +729,13 @@ function rangeParams(fields: { from: string; to: string; out: string; in: string
 /** Generate's range fields for `area`, its times in seconds from `zero`, its positions as depths. */
 const rangeFields = (area: Area, zero: number) => ({ from: String((area.from - zero) / 1000), to: String((area.to - zero) / 1000), out: String(100 - area.high), in: String(100 - area.low) });
 
-type ToolKind = "scale" | "shift" | "speed" | "generate" | "repeat";
+type ToolKind = "scale" | "shift" | "invert" | "speed" | "generate" | "repeat";
 
 /** The advanced editor's tools: their names, undo labels, and the before and after strokes of their small graphs, 56×24. */
 const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after: string }[] = [
   { kind: "scale", name: "Scale", verb: "Scale", before: "4,16 12,8 20,16 28,8", after: "4,20 20,4 36,20 52,4" },
   { kind: "shift", name: "Shift depth", verb: "Shift depth of", before: "4,20 14,12 24,20 34,12 44,20 52,12", after: "4,12 14,4 24,12 34,4 44,12 52,4" },
+  { kind: "invert", name: "Invert", verb: "Invert", before: "4,20 14,12 24,20 34,12 44,20 52,12", after: "4,4 14,12 24,4 34,12 44,4 52,12" },
   { kind: "speed", name: "Max speed", verb: "Limit speed of", before: "4,20 12,4 20,20 28,4 36,20 44,4 52,20", after: "4,20 12,12 20,20 28,12 36,20 44,12 52,20" },
   // Strokes up to a sine for Out, down to a constant In; the sine faint behind them.
   { kind: "generate", name: "Generate", verb: "Generate", before: "4,8 6,7 8,6 10,5.2 12,4.5 14,4.1 16,4 18,4.1 20,4.5 22,5.2 24,6 26,7 28,8 30,9 32,10 34,10.8 36,11.5 38,11.9 40,12 42,11.9 44,11.5 46,10.8 48,10 50,9 52,8", after: "4,20 8,6 12,20 16,4 20,20 24,6 28,20 32,10 36,20 40,12 44,20 48,10 52,20" },
@@ -2246,6 +2247,16 @@ export default function EditorPage() {
     else setSelected(next.selected);
   };
 
+  /** Invert the selected points' depths, or all but the regions', at once as one edit, without opening a tool; not when it leaves them as they are. */
+  const invert = () => {
+    const picked = selected.size ? [...selected] : [...actions.keys()].filter((i) => !regionAt(regions, actions[i].at));
+    if (picked.every((i) => actions[i].pos === 50)) return;
+    const hit = new Set(picked);
+    editLabel.current = `Invert ${points(picked.length)}`;
+    setScript((s) => ({ ...s, actions: s.actions.map((a, i) => (hit.has(i) ? { at: a.at, pos: 100 - a.pos } : a)) }));
+    setSelected(hit);
+  };
+
   /** Delete the selected points and regions, the regions with their points, an instance with its regions; `verb` names the edit. */
   const removeSelected = (verb = "Delete") => {
     editLabel.current = `${verb} ${items(selected.size, chosen)}`;
@@ -3477,7 +3488,7 @@ export default function EditorPage() {
               color="gray"
               disabled={(kind === "repeat" ? selected.size < 2 : kind !== "generate" && actions.every((a) => regionAt(regions, a.at))) || !!placing}
               title={kind === "repeat" ? "Repeat the selected points, two or more" : undefined}
-              onClick={() => openTool(kind)}
+              onClick={() => (kind === "invert" ? invert() : openTool(kind))}
               style={{ justifyContent: "flex-start" }}
             >
               <svg width="56" height="24" viewBox="0 0 56 24" fill="none" strokeWidth={1.5} strokeLinejoin="round">
