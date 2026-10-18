@@ -107,8 +107,8 @@ interface Instance {
   snippet: { name: string; regions: Inner[] };
 }
 
-/** A region made by a tool, which an instance can hold: Generate's or Repeat's. */
-type Inner = Generated | Repeated;
+/** A region made by a tool, which an instance can hold: Generate's or Repeat's, with the name given it, if any. */
+type Inner = (Generated | Repeated) & { name?: string };
 /** A locked stretch of points: a generator region or a snippet instance. */
 type Region = Inner | Instance;
 const isInstance = (r: Region): r is Instance => "snippet" in r;
@@ -116,7 +116,7 @@ const isRepeat = (r: Region): r is Repeated => "repeat" in r;
 /** The Markers regions of `regions` and in their instances: those that put points on the bookmarks. */
 const markersRegions = (regions: Region[]) => generators(regions).filter((r): r is Generated => "generate" in r && r.generate.timing === "markers");
 /** What the undo history calls `r`: a region, or a snippet by its name. */
-const regionNoun = (r: Region) => (isInstance(r) ? `snippet "${r.snippet.name}"` : "region");
+const regionNoun = (r: Region) => (isInstance(r) ? `snippet "${r.snippet.name}"` : r.name ? `region "${r.name}"` : "region");
 
 /** An instance named `name` of `clip`'s points and its generator regions: from its first to its last point, widened to their boxes. */
 const instanceOf = (name: string, clip: Clip): Instance => {
@@ -265,8 +265,10 @@ function changedSpan(a: Content, b: Content) {
 
 const sortedEntries = (items: Entry[]) => [...items].sort((a, b) => Number(isFolder(b)) - Number(isFolder(a)) || entryName(a).localeCompare(entryName(b)));
 
-/** A region's label, after the timing that placed its points. */
-const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}` : isRepeat(r) ? `Repeat · ×${r.repeat.count}` : `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`);
+/** What made a region, after the timing that placed its points. */
+const regionKind = (r: Region) => (isInstance(r) ? "Snippet" : isRepeat(r) ? `Repeat · ×${r.repeat.count}` : `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`);
+/** A region's label: an instance's by its name, another's its name or else what made it. */
+const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}` : r.name ?? regionKind(r));
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
@@ -845,12 +847,14 @@ function readMarkers(file: Record<string, unknown>, end: number) {
  * object with a known timing and known shapes, a spline's with knots, a
  * Repeat setup with a pattern of two points or more, a Length and known
  * shapes, nor a snippet with a name; of overlapping ones, all but the first. An instance's
- * regions are read alike, those not inside it left out alone. Field values
- * are not checked.
+ * regions are read alike, those not inside it left out alone. A name that is
+ * not text goes; other field values are not checked.
  */
 function readRegions(list: unknown): Region[] {
   const known = (f?: Func) => !!f && typeof f === "object" && Object.keys(SHAPES).includes(f.shape) && (f.shape !== "spline" || Array.isArray(f.knots));
   const read = (Array.isArray(list) ? list : []).flatMap((r): Region[] => {
+    // A name that is not text goes, as if never given.
+    if (typeof r?.name !== "string") r = { ...r, name: undefined };
     if (typeof r?.from !== "number" || typeof r.to !== "number" || !(r.from < r.to)) return [];
     const g = r.generate as GenerateSetup | undefined;
     if (!!g && typeof g === "object" && ["interval", "speed", "markers"].includes(g.timing) && known(g.interval) && known(g.speed) && known(g.out) && known(g.in)) return [r];
@@ -1771,9 +1775,9 @@ export default function EditorPage() {
   /** The indices of the points in `r`'s time. */
   const pointsOf = (r: Region) => Array.from({ length: afterTime(actions, r.to) - byTime(actions, r.from) }, (_, k) => byTime(actions, r.from) + k);
 
-  /** Give the instance `r` the name `name`. */
-  const renameInstance = (r: Instance, name: string) => {
-    const renamed = { ...r, snippet: { ...r.snippet, name } };
+  /** Give the region `r` the name `name`. */
+  const renameRegion = (r: Region, name: string) => {
+    const renamed = isInstance(r) ? { ...r, snippet: { ...r.snippet, name } } : { ...r, name };
     edit(`Rename ${regionNoun(r)} to "${name}"`, (s) => ({ ...s, regions: s.regions.map((o) => (o === r ? renamed : o)) }));
     select([], [renamed]);
   };
@@ -2314,9 +2318,11 @@ export default function EditorPage() {
     setTool(null);
     // Repeat's pattern, the points in its box, timed from its start.
     const pattern = repBox.pattern.filter((a) => a.at <= repBox.from + (repParams?.length ?? 0)).map((a) => ({ at: a.at - repBox.from, pos: a.pos }));
-    const made: Inner | null = kind === "generate" && genBox!.to > genBox!.from ? { ...genBox!, generate: structuredClone(genSetup) }
+    const built: Inner | null = kind === "generate" && genBox!.to > genBox!.from ? { ...genBox!, generate: structuredClone(genSetup) }
       : kind === "repeat" ? { from: repBox.from, to: repRun!.end, repeat: { ...structuredClone(repSetup), pattern, length: repParams!.length, bottom: repParams!.bottom, top: repParams!.top } }
       : null;
+    // Editing a region keeps its name.
+    const made = built && region?.name ? { ...built, name: region.name } : built;
     const same = next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos);
     if (same && (!made || JSON.stringify(made) === JSON.stringify(region))) return;
     const label = region ? "Edit region"
@@ -3520,14 +3526,12 @@ export default function EditorPage() {
       {/* The selected region, its points locked until unlocked. */}
       {region && <>
         <Flex align="center" gap="2">
-          <Text size="2" weight="medium" truncate>{isInstance(region) ? `Snippet · ${region.snippet.name}` : "Region"}</Text>
-          {isInstance(region) && (
-            <NamePopover initial={region.snippet.name} onName={(n) => n !== region.snippet.name && renameInstance(region, n)}>
-              <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
-            </NamePopover>
-          )}
+          <Text size="2" weight="medium" truncate>{regionName(region)}</Text>
+          <NamePopover initial={isInstance(region) ? region.snippet.name : regionName(region)} onName={(n) => n !== (isInstance(region) ? region.snippet.name : regionName(region)) && renameRegion(region, n)}>
+            <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
+          </NamePopover>
         </Flex>
-        <Text size="2" color="gray">{isInstance(region) ? "Snippet" : regionName(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
+        <Text size="2" color="gray">{regionKind(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
         <Flex gap="2">
           <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title={isInstance(region) ? "Edit its points and regions in the advanced editor (E, or double-click it)" : isRepeat(region) ? "Edit its pattern and setup with Repeat (E, or double-click it)" : "Edit its setup and box with Generate (E, or double-click it)"} onClick={() => editRegion(region)}>
             <Pencil1Icon /> Edit
