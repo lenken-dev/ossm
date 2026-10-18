@@ -30,6 +30,8 @@ interface Script {
 /** What an edit changes, undo restores and saving keeps: the points, markers and regions. */
 type Content = Pick<Script, "actions" | "chapters" | "bookmarks" | "regions">;
 const sameContent = (a: Content, b: Content) => a.actions === b.actions && a.chapters === b.chapters && a.bookmarks === b.bookmarks && a.regions === b.regions;
+/** An undo history starting at `c`, its first entry called `label`. */
+const startedAt = ({ actions, chapters, bookmarks, regions }: Content, label: string) => ({ states: [{ actions, chapters, bookmarks, regions, label }], index: 0 });
 
 /** A named time range, in ms, from `metadata.chapters`; other properties of the loaded one are kept. */
 interface Chapter {
@@ -1120,18 +1122,22 @@ export default function EditorPage() {
   }, [actions, lifted, keptRegions, bookmarks]);
 
   /** Undo history: the points, markers and regions after each edit, the first as loaded; `index` is the current one. */
-  const [timeline, setTimeline] = useState(() => ({ states: [{ actions, chapters, bookmarks, regions, label: advanced ? "Open" : "Start" }], index: 0 }));
+  const [timeline, setTimeline] = useState(() => startedAt(script, advanced ? "Open" : "Start"));
   /** The main script's undo history, put aside while the advanced editor is open; lost on a reload, when it starts over. */
   const mainTimeline = useRef<typeof timeline | null>(null);
-  /** Set while a drag runs, so the whole drag becomes one edit when it ends. */
-  const dragging = useRef(false);
-  const [dragEnds, setDragEnds] = useState(0);
+  /** Set while a drag runs, so the whole drag becomes one edit when it ends; undo and redo wait for it. */
+  const [dragging, setDragging] = useState(false);
   /** What the next edit is called in the undo history. */
   const editLabel = useRef<string | null>(null);
+  /** Change the script as an edit called `label`; in a drag, the whole drag is one edit, called as its last step. */
+  const edit = (label: string, next: Parameters<typeof setScript>[0]) => {
+    editLabel.current = label;
+    setScript(next);
+  };
 
   // Every change of the points, markers or regions, except by undo and redo, is an edit.
   useEffect(() => {
-    if (dragging.current) return;
+    if (dragging) return;
     const label = editLabel.current ?? "Edit";
     editLabel.current = null;
     setTimeline((tl) => {
@@ -1139,7 +1145,7 @@ export default function EditorPage() {
       const states = [...tl.states.slice(0, tl.index + 1), { actions, chapters, bookmarks, regions, label }].slice(-UNDO_SIZE - 1);
       return { states, index: states.length - 1 };
     });
-  }, [actions, chapters, bookmarks, regions, dragEnds]);
+  }, [actions, chapters, bookmarks, regions, dragging]);
 
   /** Go to the points, markers and regions after edit `index` of the undo history. */
   const jump = (index: number) => {
@@ -1161,11 +1167,11 @@ export default function EditorPage() {
   useWindowEvent("beforeunload", (e) => {
     if (changed) e.preventDefault();
   });
-  const canUndo = timeline.index > 0;
-  const canRedo = timeline.index < timeline.states.length - 1;
-  // With a tool open, they discard it first.
-  const undo = () => (tool ? setTool(null) : canUndo && jump(timeline.index - 1));
-  const redo = () => (tool ? setTool(null) : canRedo && jump(timeline.index + 1));
+  const canUndo = !dragging && timeline.index > 0;
+  const canRedo = !dragging && timeline.index < timeline.states.length - 1;
+  // What is pending goes first, as with Escape: an open tool, a drag in place, or what is being placed.
+  const undo = () => discard() || (canUndo && jump(timeline.index - 1));
+  const redo = () => discard() || (canRedo && jump(timeline.index + 1));
   const plotHeight = height - AXIS;
   const x = (at: number) => ((at - view.from) / view.span) * width;
   const y = (pos: number) => PAD + (1 - pos / 100) * (plotHeight - 2 * PAD);
@@ -1467,8 +1473,7 @@ export default function EditorPage() {
       if (done || (!live && Math.hypot(m.clientX - x0, m.clientY - y0) <= 3)) return;
       if (!live) {
         live = true;
-        dragging.current = true;
-        editLabel.current = `Move ${items(ps.length, rs)}`;
+        setDragging(true);
         setApart({ actions, moving, regions: rs, grip: actions[grabbed] });
         cancelApart.current = () => {
           done = true;
@@ -1489,7 +1494,7 @@ export default function EditorPage() {
       const next = markersRegions(moved).reduce((list, r) => refilled(list, r, bookmarks), shifted);
       const times = new Set(ps.map((i) => actions[i].at + dt));
       last = { actions: next, picked: next.flatMap((a, j) => (times.has(a.at) && !regionAt(moved, a.at) ? [j] : [])), regions: moved };
-      setScript((s) => ({ ...s, actions: next, regions: regions.map((r) => moved[rs.indexOf(r)] ?? r) }));
+      edit(`Move ${items(ps.length, rs)}`, (s) => ({ ...s, actions: next, regions: regions.map((r) => moved[rs.indexOf(r)] ?? r) }));
       select(last.picked, moved);
     };
     track(e.currentTarget.closest("svg")!, e, move, () => {
@@ -1497,8 +1502,7 @@ export default function EditorPage() {
       setApart(null);
       if (!live) return;
       if (boxMode && last && !done) setBox(boxed(boxAround(last.picked.map((j) => last!.actions[j]), last.regions)), last.actions);
-      dragging.current = false;
-      setDragEnds((n) => n + 1);
+      setDragging(false);
     });
   };
 
@@ -1565,8 +1569,7 @@ export default function EditorPage() {
   /** Add a bookmark at `time` ms, with the last used name, and select it. */
   const addBookmark = (time: number) => {
     const added = { name: lastName, time };
-    editLabel.current = "Add marker";
-    setScript((s) => withBookmarks(s, [...s.bookmarks, added].sort((a, b) => a.time - b.time)));
+    edit("Add marker", (s) => withBookmarks(s, [...s.bookmarks, added].sort((a, b) => a.time - b.time)));
     selectMarkers([added]);
     markerAnchor.current = added;
   };
@@ -1600,7 +1603,7 @@ export default function EditorPage() {
     const label = group.length > 1 ? `Move ${group.length} markers` : !isChapter(m) ? "Move marker" : sides.length === 1 ? "Resize chapter" : "Move chapter";
     const [origin, x0] = [pointerAt(e).at, e.clientX];
     let moved = false;
-    dragging.current = true;
+    setDragging(true);
     const move = (p: globalThis.PointerEvent) => {
       moved ||= Math.abs(p.clientX - x0) > 3;
       if (!moved) return;
@@ -1609,9 +1612,8 @@ export default function EditorPage() {
       const to = new Map<Marker, Marker>(group.map((g) => [g, isChapter(g)
         ? { ...g, start: g.start + (sides.includes("start") ? dt : 0), end: g.end + (sides.includes("end") ? dt : 0) }
         : { ...g, time: g.time + dt }]));
-      editLabel.current = label;
       // The Markers regions follow each step, from the one before.
-      setScript((s) => withBookmarks({ ...s, chapters: swapped(chapters, to) }, swapped(bookmarks, to).sort((a, z) => a.time - z.time)));
+      edit(label, (s) => withBookmarks({ ...s, chapters: swapped(chapters, to) }, swapped(bookmarks, to).sort((a, z) => a.time - z.time)));
       setMarked(new Set(to.values()));
       markerAnchor.current = to.get(m)!;
     };
@@ -1621,10 +1623,7 @@ export default function EditorPage() {
       return dir > 0 ? dt < dtMax : dt > dtMin;
     };
     // Followed on the graph and lane, which stay, not the marker: a flag's element can go out of view, or over to another bookmark, as it passes them.
-    track(timeRef.current!, e, move, () => {
-      dragging.current = false;
-      setDragEnds((k) => k + 1);
-    }, scrolls);
+    track(timeRef.current!, e, move, () => setDragging(false), scrolls);
   };
 
   /**
@@ -1660,23 +1659,20 @@ export default function EditorPage() {
       if (name && !ms.every(isChapter)) setLastName(name);
       if (!name || ms.every((m) => m.name === name)) return;
       const to = new Map<Marker, Marker>(ms.map((m) => [m, { ...m, name }]));
-      editLabel.current = label;
-      setScript((s) => withBookmarks({ ...s, chapters: swapped(s.chapters, to) }, swapped(s.bookmarks, to)));
+      edit(label, (s) => withBookmarks({ ...s, chapters: swapped(s.chapters, to) }, swapped(s.bookmarks, to)));
       setMarked(new Set(to.values()));
     } });
   };
 
   const removeMarkers = (ms: Marker[]) => {
-    editLabel.current = ms.length > 1 ? `Delete ${ms.length} markers` : isChapter(ms[0]) ? "Delete chapter" : "Delete marker";
-    setScript((s) => withBookmarks({ ...s, chapters: s.chapters.filter((c) => !ms.includes(c)) }, s.bookmarks.filter((b) => !ms.includes(b))));
+    edit(ms.length > 1 ? `Delete ${ms.length} markers` : isChapter(ms[0]) ? "Delete chapter" : "Delete marker", (s) => withBookmarks({ ...s, chapters: s.chapters.filter((c) => !ms.includes(c)) }, s.bookmarks.filter((b) => !ms.includes(b))));
     setMarked(new Set());
   };
 
   /** Unlock the region `r`: it goes, and its points become ordinary points, selected; an instance's regions become regions of their own, their points staying theirs. */
   const unlockRegion = (r: Region) => {
     const inner = isInstance(r) ? r.snippet.regions : [];
-    editLabel.current = `Unlock ${regionNoun(r)}`;
-    setScript((s) => ({ ...s, regions: [...s.regions.filter((o) => o !== r), ...inner].sort((a, b) => a.from - b.from) }));
+    edit(`Unlock ${regionNoun(r)}`, (s) => ({ ...s, regions: [...s.regions.filter((o) => o !== r), ...inner].sort((a, b) => a.from - b.from) }));
     select(pointsOf(r).filter((i) => !regionAt(inner, actions[i].at)));
   };
 
@@ -1686,8 +1682,7 @@ export default function EditorPage() {
   /** Give the instance `r` the name `name`. */
   const renameInstance = (r: Instance, name: string) => {
     const renamed = { ...r, snippet: { ...r.snippet, name } };
-    editLabel.current = `Rename ${regionNoun(r)} to "${name}"`;
-    setScript((s) => ({ ...s, regions: s.regions.map((o) => (o === r ? renamed : o)) }));
+    edit(`Rename ${regionNoun(r)} to "${name}"`, (s) => ({ ...s, regions: s.regions.map((o) => (o === r ? renamed : o)) }));
     select([], [renamed]);
   };
   /** The selected instance's Name field as typed, until accepted with Enter or by leaving it; empty, it is refused. */
@@ -1715,22 +1710,21 @@ export default function EditorPage() {
     if (at < lo) return;
     const x0 = e.clientX;
     let drawn: Chapter | null = null;
-    dragging.current = true;
+    setDragging(true);
     const move = (m: globalThis.PointerEvent) => {
       if (!drawn && Math.abs(m.clientX - x0) <= 3) return;
       const t = clamp(pointerAt(m).at, lo, hi);
       if (t === at) return;
       const [old, chapter] = [drawn, { name: `Chapter ${n + 1}`, start: Math.min(at, t), end: Math.max(at, t) }];
       drawn = chapter;
-      editLabel.current = "Add chapter";
-      setScript((s) => ({ ...s, chapters: [...s.chapters.filter((c) => c !== old), chapter].sort((a, b) => a.start - b.start) }));
+      edit("Add chapter", (s) => ({ ...s, chapters: [...s.chapters.filter((c) => c !== old), chapter].sort((a, b) => a.start - b.start) }));
     };
     // Scrolling stops at the gap's ends.
     const scrolls = (dir: number, m: globalThis.PointerEvent) => (dir > 0 ? pointerAt(m).at < hi : pointerAt(m).at > lo);
     track(e.currentTarget, e, move, () => {
       const chapter = drawn;
       if (!chapter) {
-        dragging.current = false;
+        setDragging(false);
         return addBookmark(at);
       }
       selectMarkers([chapter]);
@@ -1741,8 +1735,7 @@ export default function EditorPage() {
           setScript((s) => ({ ...s, chapters: s.chapters.map((c) => (c === chapter ? renamed : c)) }));
           setMarked(new Set([renamed]));
         }
-        dragging.current = false;
-        setDragEnds((k) => k + 1);
+        setDragging(false);
       } });
     }, scrolls);
   };
@@ -2239,10 +2232,10 @@ export default function EditorPage() {
       : null;
     const same = next.actions.length === actions.length && next.actions.every((a, i) => a.at === actions[i].at && a.pos === actions[i].pos);
     if (same && (!made || JSON.stringify(made) === JSON.stringify(region))) return;
-    editLabel.current = region ? "Edit region"
+    const label = region ? "Edit region"
       : kind === "repeat" ? `Repeat ${points(pattern.length)} ×${repSetup.count}`
       : `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(kind === "generate" ? next.selected.size : picked.length)}`;
-    setScript((s) => ({ ...s, actions: next.actions, regions: made ? [...(next.regions ?? s.regions), made].sort((a, b) => a.from - b.from) : next.regions ?? s.regions }));
+    edit(label, (s) => ({ ...s, actions: next.actions, regions: made ? [...(next.regions ?? s.regions), made].sort((a, b) => a.from - b.from) : next.regions ?? s.regions }));
     if (made) select([], [made]);
     else setSelected(next.selected);
   };
@@ -2252,15 +2245,13 @@ export default function EditorPage() {
     const picked = selected.size ? [...selected] : [...actions.keys()].filter((i) => !regionAt(regions, actions[i].at));
     if (picked.every((i) => actions[i].pos === 50)) return;
     const hit = new Set(picked);
-    editLabel.current = `Invert ${points(picked.length)}`;
-    setScript((s) => ({ ...s, actions: s.actions.map((a, i) => (hit.has(i) ? { at: a.at, pos: 100 - a.pos } : a)) }));
+    edit(`Invert ${points(picked.length)}`, (s) => ({ ...s, actions: s.actions.map((a, i) => (hit.has(i) ? { at: a.at, pos: 100 - a.pos } : a)) }));
     setSelected(hit);
   };
 
   /** Delete the selected points and regions, the regions with their points, an instance with its regions; `verb` names the edit. */
   const removeSelected = (verb = "Delete") => {
-    editLabel.current = `${verb} ${items(selected.size, chosen)}`;
-    setScript((s) => ({ ...s, actions: s.actions.filter((a, j) => !selected.has(j) && !regionAt(chosen, a.at)), regions: s.regions.filter((r) => !chosen.includes(r)) }));
+    edit(`${verb} ${items(selected.size, chosen)}`, (s) => ({ ...s, actions: s.actions.filter((a, j) => !selected.has(j) && !regionAt(chosen, a.at)), regions: s.regions.filter((r) => !chosen.includes(r)) }));
     select([]);
   };
 
@@ -2283,10 +2274,7 @@ export default function EditorPage() {
       if (marked.size || overLane.current) selectMarkers(bookmarks);
       else select([...actions.keys()].filter((i) => !regionAt(regions, actions[i].at)), regions);
     } else if (e.key === "Escape") {
-      // Puts back what is being moved first.
-      if (cancelApart.current) cancelApart.current();
-      else if (placing) cancelPlacing();
-      else {
+      if (!discard()) {
         select([]);
         setMarked(new Set());
         setBox(null);
@@ -2350,6 +2338,15 @@ export default function EditorPage() {
     setLifted(null);
   };
 
+  /** Drop what is pending: the open tool, unapplied, else put back what is dragged in place, else stop placing; returns whether there was any. */
+  const discard = () => {
+    if (tool) setTool(null);
+    else if (cancelApart.current) cancelApart.current();
+    else if (placing) cancelPlacing();
+    else return false;
+    return true;
+  };
+
   /** The library snippet at `path` as the advanced editor opens it: from `zero`, in whole ms; empty when it is gone. */
   const snippetFrom = (path: string[] | null, zero: number) => {
     const s = path && entryAt(library, path);
@@ -2369,7 +2366,7 @@ export default function EditorPage() {
     const zero = Math.round(instance ? instance.from : from ? actions[from[0]].at : view.from);
     const doc = snippet ? snippetFrom(snippet.path, zero) : { actions: from?.map((i) => actions[i]) ?? [], regions: instance?.snippet.regions ?? [] };
     mainTimeline.current = timeline;
-    setTimeline({ states: [{ ...doc, chapters, bookmarks, label: "Open" }], index: 0 });
+    setTimeline(startedAt({ ...doc, chapters, bookmarks }, "Open"));
     setAdvanced({ ...doc, zero, from, snippet, instance: instance && regions.indexOf(instance) });
     select([]);
     setMarked(new Set());
@@ -2390,7 +2387,7 @@ export default function EditorPage() {
     const { actions: result, regions: made, from, snippet } = advanced!;
     const instance = advanced!.instance === undefined ? null : (main.regions[advanced!.instance] as Instance);
     setLeaving(false);
-    setTimeline(mainTimeline.current ?? { states: [{ actions: main.actions, chapters, bookmarks, regions: main.regions, label: "Start" }], index: 0 });
+    setTimeline(mainTimeline.current ?? startedAt(main, "Start"));
     mainTimeline.current = null;
     setAdvanced(null);
     // Cancelled, an open tool goes too, unapplied.
@@ -2730,9 +2727,8 @@ export default function EditorPage() {
     const { placed, carried, points: own, regions: picked } = goingIn(pasted);
     const copies = carried.map((r) => structuredClone(r));
     const chosenCopies = copies.filter((_, k) => picked.includes(carried[k]));
-    editLabel.current = placing!.label ?? `${lifted ? "Move" : "Paste"} ${items(own.length, chosenCopies)}`;
     const next = [...before, ...placed, ...after];
-    setScript({ ...script, actions: next, regions: copies.length ? [...regions, ...copies].sort((a, b) => a.from - b.from) : regions });
+    edit(placing!.label ?? `${lifted ? "Move" : "Paste"} ${items(own.length, chosenCopies)}`, { ...script, actions: next, regions: copies.length ? [...regions, ...copies].sort((a, b) => a.from - b.from) : regions });
     select(own.map((j) => before.length + j), chosenCopies);
     if (boxMode) setBox(boxed(boxAround(own.map((j) => placed[j]), chosenCopies)), next);
     setPlacing(null);
