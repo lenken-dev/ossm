@@ -979,8 +979,19 @@ export default function EditorPage() {
    * drag and drop, so Shift and Ctrl still work over the graph (Wayland
    * browsers don't report them during a native drag).
    */
-  const [rowDrag, setRowDrag] = useState<{ at: string[]; x: number; y: number } | null>(null);
+  const [rowDrag, setRowDrag] = useState<{ paths: string[][]; x: number; y: number; inPanel: boolean } | null>(null);
   const [dropOn, setDropOn] = useState<string | null>(null);
+  /** The library's selected rows, by their paths as JSON, to move together; and the last one clicked, which Shift selects from. */
+  const [rowsPicked, setRowsPicked] = useState<Set<string>>(new Set());
+  const rowAnchor = useRef<string | null>(null);
+  // A press anywhere but on a library row drops the selection.
+  useEffect(() => {
+    if (!rowsPicked.size) return;
+    const down = (e: globalThis.PointerEvent) => !(e.target as Element).closest?.("[data-library-row]") && setRowsPicked(new Set());
+    // Capturing, as the graph's presses stop there.
+    window.addEventListener("pointerdown", down, true);
+    return () => window.removeEventListener("pointerdown", down, true);
+  }, [rowsPicked]);
   const libraryInput = useRef<HTMLInputElement>(null);
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
   /** The view for drags, which read it between renders as they scroll it. */
@@ -2615,47 +2626,85 @@ export default function EditorPage() {
     setLibrary(`Delete ${entryNoun(path)} "${name}"`, (lib) => updatedAt(lib, path.slice(0, -1), (items) => items.filter((o) => entryName(o) !== name)));
   };
 
-  /** Whether the entry at `from` may go into the folder at `to`: not where it is, not into itself, and not onto a name taken there. */
-  const movable = (from: string[], to: string[]) => JSON.stringify(from.slice(0, -1)) !== JSON.stringify(to) && !under(to, from) && !nameTaken(to, from[from.length - 1]);
+  /** Of the entries at `from`, those not in the folder at `to` already. */
+  const outside = (from: string[][], to: string[]) => from.filter((p) => JSON.stringify(p.slice(0, -1)) !== JSON.stringify(to));
 
-  const moveEntry = (from: string[], to: string[]) => {
-    setLibrary(`Move ${entryNoun(from)} "${from[from.length - 1]}" ${to.length ? `into "${to[to.length - 1]}"` : "to the top"}`, (lib) => {
-      const e = entryAt(lib, from)!;
-      return updatedAt(updatedAt(lib, from.slice(0, -1), (items) => items.filter((o) => o !== e)), to, (items) => [...items, e]);
-    });
-    reopened(from, [...to, from[from.length - 1]]);
+  /** Whether the entries at `from` may go into the folder at `to`: not all there already, none into itself, and none onto a name taken there or by another of them. */
+  const movable = (from: string[][], to: string[]) => {
+    const names = outside(from, to).map((p) => p[p.length - 1]);
+    return !!names.length && new Set(names).size === names.length && from.every((p) => !under(to, p)) && !names.some((n) => nameTaken(to, n));
   };
 
-  /** A library row or the panel's top area as a place to drop a dragged row into the folder at `to`, the top level for none; only in the main script. */
+  /** Move the entries at `from` into the folder at `to`, the ones there already staying; selected there after. */
+  const moveEntries = (from: string[][], to: string[]) => {
+    const going = outside(from, to);
+    const where = to.length ? `into "${to[to.length - 1]}"` : "to the top";
+    setLibrary(going.length === 1 ? `Move ${entryNoun(going[0])} "${going[0][going[0].length - 1]}" ${where}` : `Move ${going.length} entries ${where}`, (lib) => {
+      const es = going.map((p) => entryAt(lib, p)!);
+      const left = going.reduce((l, p, k) => updatedAt(l, p.slice(0, -1), (items) => items.filter((o) => o !== es[k])), lib);
+      return updatedAt(left, to, (items) => [...items, ...es]);
+    });
+    going.forEach((p) => reopened(p, [...to, p[p.length - 1]]));
+    setRowsPicked(new Set(from.map((p) => JSON.stringify([...to, p[p.length - 1]]))));
+  };
+
+  /** A library row or the panel's top area as a place to drop the dragged rows into the folder at `to`, the top level for none; only in the main script. */
   const dropInto = (to: string[]) => advanced ? {} : {
-    onPointerMove: () => rowDrag && movable(rowDrag.at, to) && setDropOn(JSON.stringify(to)),
+    onPointerMove: () => rowDrag && movable(rowDrag.paths, to) && setDropOn(JSON.stringify(to)),
     onPointerLeave: () => setDropOn(null),
-    onPointerUp: () => rowDrag && movable(rowDrag.at, to) && moveEntry(rowDrag.at, to),
+    onPointerUp: () => rowDrag && movable(rowDrag.paths, to) && moveEntries(rowDrag.paths, to),
+  };
+
+  /**
+   * Pick the library row `key` clicked with a modifier: Ctrl/Cmd toggles it
+   * in the selection, Shift selects the rows shown from the last clicked to
+   * it, in `shown`, the rows shown by key in order.
+   */
+  const rowPicked = (e: PointerEvent, key: string, shown: string[]) => {
+    if (e.shiftKey && rowAnchor.current && shown.includes(rowAnchor.current)) {
+      const [i, j] = [shown.indexOf(rowAnchor.current), shown.indexOf(key)];
+      return setRowsPicked(new Set(shown.slice(Math.min(i, j), Math.max(i, j) + 1)));
+    }
+    rowAnchor.current = key;
+    setRowsPicked(toggled(key));
   };
 
   /**
    * Drag the library row of `entry` at `at` once the pointer moves from where
-   * it was pressed: a snippet follows the pointer onto the graph, as a paste,
-   * until released there or elsewhere.
+   * it was pressed, with the other selected rows if it is one: they go into
+   * a folder row they are released on, and a lone snippet follows the pointer
+   * onto the graph, as a paste, until released there or elsewhere. In the
+   * main script, a press with Ctrl/Cmd or Shift picks the row instead, and
+   * a click selects only it.
    */
-  const dragRow = (e: PointerEvent, at: string[], entry: Entry) => {
+  const dragRow = (e: PointerEvent, at: string[], entry: Entry, shown: string[]) => {
     if (e.button !== 0) return;
+    const key = JSON.stringify(at);
+    if (!advanced && (e.ctrlKey || e.metaKey || e.shiftKey)) return rowPicked(e, key, shown);
+    // The selected entries still there, but those in a selected folder, which go with it.
+    const picked = [...rowsPicked].map((k) => JSON.parse(k) as string[]).filter((p) => entryAt(library, p));
+    const paths = !advanced && rowsPicked.has(key) ? picked.filter((p) => !picked.some((o) => o !== p && under(p, o))) : [at];
+    if (!advanced && !rowsPicked.has(key)) setRowsPicked(new Set([key]));
     const [x, y] = [e.clientX, e.clientY];
     let started = false;
     const move = (m: globalThis.PointerEvent) => {
       if (!started && Math.hypot(m.clientX - x, m.clientY - y) < 4) return;
       if (!started) {
         cancelPlacing();
-        if (!isFolder(entry) && !tool) insertSnippet(entry);
+        if (paths.length === 1 && !isFolder(entry) && !tool) insertSnippet(entry);
       }
       started = true;
-      setRowDrag({ at, x: m.clientX, y: m.clientY });
+      setRowDrag({ paths, x: m.clientX, y: m.clientY, inPanel: !!(m.target as Element).closest?.("[data-aside]") });
     };
     // After the row or graph under the pointer has taken it.
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      if (!started) return;
+      if (!started) {
+        rowAnchor.current = key;
+        if (!advanced) setRowsPicked(new Set([key]));
+        return;
+      }
       setRowDrag(null);
       setDropOn(null);
       setPlacing(null);
@@ -3176,14 +3225,16 @@ export default function EditorPage() {
 
   /**
    * The library's rows in the folder at `path`, `depth` deep, an open
-   * folder's rows after it. In the main script a row is dragged onto a folder
-   * row to move it there, and has Rename and Delete; a folder's New folder, a
-   * snippet's Edit. Everywhere a snippet's row is dragged onto the graph to
-   * insert it.
+   * folder's rows after it, each added to `shownRows`. In the main script
+   * rows are selected, and dragged onto a folder row to move them there, and
+   * a row has Rename and Delete; a folder's New folder, a snippet's Edit.
+   * Everywhere a snippet's row is dragged onto the graph to insert it.
    */
+  const shownRows: string[] = [];
   const libraryRows = (items: Entry[], path: string[], depth: number): ReactElement[] => sortedEntries(items).flatMap((e) => {
     const [name, at] = [entryName(e), [...path, entryName(e)]];
     const key = JSON.stringify(at);
+    shownRows.push(key);
     const open = isFolder(e) && (!!snippetQuery || openFolders.includes(key));
     const toggle = () => setOpenFolders((keys) => (open ? keys.filter((k) => k !== key) : [...keys, key]));
     const row = (
@@ -3191,9 +3242,10 @@ export default function EditorPage() {
         key={key}
         align="center"
         gap="1"
-        onPointerDown={!advanced || !isFolder(e) ? (p) => dragRow(p, at, e) : undefined}
+        data-library-row
+        onPointerDown={!advanced || !isFolder(e) ? (p) => dragRow(p, at, e, shownRows) : undefined}
         {...(isFolder(e) ? dropInto(at) : {})}
-        style={{ paddingLeft: depth * 16, minHeight: 28, borderRadius: 4, userSelect: "none", background: dropOn === key ? "var(--accent-a4)" : undefined }}
+        style={{ paddingLeft: depth * 16, minHeight: 28, borderRadius: 4, userSelect: "none", background: dropOn === key ? "var(--accent-a4)" : !advanced && rowsPicked.has(key) ? "var(--accent-a3)" : undefined }}
       >
         {/* A snippet's name shows a preview beside the panel: its points, its regions' boxes behind, its length and point count. */}
         <HoverCard.Root openDelay={300} closeDelay={0} open={isFolder(e) ? false : undefined}>
@@ -3267,11 +3319,12 @@ export default function EditorPage() {
     <Flex direction="column">
       {shownLibrary.length ? libraryRows(shownLibrary, [], 0) : <Text size="1" color="gray">{library.length ? "No matches." : "No snippets yet."}</Text>}
     </Flex>
-    {/* The dragged row's icon and name follow the pointer. */}
+    {/* The dragged row's icon and name follow the pointer; for several, the first's icon and their count. Outside the panel, where nothing takes them, the cursor says so. */}
+    {rowDrag && !rowDrag.inPanel && !placing && <style>{"* { cursor: not-allowed !important; }"}</style>}
     {rowDrag && (
       <Flex align="center" gap="2" style={{ position: "fixed", left: rowDrag.x + 12, top: rowDrag.y + 12, pointerEvents: "none", zIndex: 1 }}>
-        {entryAt(library, rowDrag.at) && isFolder(entryAt(library, rowDrag.at)!) ? <ChevronRightIcon /> : <SnippetIcon />}
-        <Text size="2">{rowDrag.at[rowDrag.at.length - 1]}</Text>
+        {entryAt(library, rowDrag.paths[0]) && isFolder(entryAt(library, rowDrag.paths[0])!) ? <ChevronRightIcon /> : <SnippetIcon />}
+        <Text size="2">{rowDrag.paths.length > 1 ? `${rowDrag.paths.length} entries` : rowDrag.paths[0][rowDrag.paths[0].length - 1]}</Text>
       </Flex>
     )}
   </Flex>;
@@ -4727,7 +4780,7 @@ export default function EditorPage() {
   );
 
   /** Beside the graph: the markers or the snippets, switched at its top as the player's modes. */
-  const asidePanel = <Flex direction="column">
+  const asidePanel = <Flex data-aside direction="column" minHeight="100%">
     <Box p="3" pb="0">
       <SegmentedControl.Root value={asideTab} onValueChange={(v) => setAsideTab(v as "markers" | "snippets")} style={{ width: "100%" }}>
         <SegmentedControl.Item value="markers">Markers</SegmentedControl.Item>
