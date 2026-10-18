@@ -1221,6 +1221,8 @@ export default function EditorPage() {
   useWindowEvent("beforeunload", (e) => {
     if (changed) e.preventDefault();
   });
+  /** Whether the script may be replaced, as Open and New do, starting its undo history anew: without unsaved changes, or once confirmed. */
+  const discardable = () => !changed || confirm("Discard the unsaved changes?");
   const canUndo = !dragging && timeline.index > 0;
   const canRedo = !dragging && timeline.index < timeline.states.length - 1;
   // What is pending goes first, as with Escape: an open tool, a drag in place, or what is being placed.
@@ -2845,7 +2847,6 @@ export default function EditorPage() {
       setLifted(null);
       setSelected(new Set());
       setMarked(new Set());
-      editLabel.current = `Open ${file.name}`;
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
       const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, videoDuration));
       // Taken as they are, never generated again.
@@ -2853,6 +2854,7 @@ export default function EditorPage() {
       const next = { name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers, regions };
       setSaved(next);
       setScript(next);
+      setTimeline(startedAt(next, `Open ${file.name}`));
       setView((v) => ({ ...v, from: 0 }));
       setError(null);
     } catch (e) {
@@ -3369,19 +3371,19 @@ export default function EditorPage() {
           variant="soft"
           style={{ flex: 1 }}
           onClick={() => {
-            if ((actions.length || chapters.length || bookmarks.length) && !confirm("Discard the current script?")) return;
+            if (!discardable()) return;
             setLifted(null);
             setSelected(new Set());
             setMarked(new Set());
-            editLabel.current = "New script";
             setSaved(EMPTY);
             setScript(EMPTY);
+            setTimeline(startedAt(EMPTY, "New script"));
             setView((v) => ({ ...v, from: 0 }));
           }}
         >
           <FileIcon /> New
         </Button>
-        <Button variant="soft" style={{ flex: 1 }} onClick={() => input.current?.click()}>
+        <Button variant="soft" style={{ flex: 1 }} onClick={() => discardable() && input.current?.click()}>
           <UploadIcon /> Open
         </Button>
       </Flex>}
