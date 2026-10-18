@@ -817,7 +817,7 @@ function readMarkers(file: Record<string, unknown>, end: number) {
     })
     .filter((c) => c.end > c.start);
   const bookmarks: Bookmark[] = list(meta.bookmarks)
-    .map(({ time, ...rest }) => ({ ...rest, name: (typeof rest.name === "string" && rest.name) || "Marker", time: readTime(time) }))
+    .map(({ time, ...rest }) => ({ ...rest, name: (typeof rest.name === "string" && rest.name) || "Bookmark", time: readTime(time) }))
     .filter((b): b is Bookmark => b.time !== null)
     .sort((a, b) => a.time - b.time);
   return { chapters, bookmarks };
@@ -961,8 +961,8 @@ export default function EditorPage() {
   const markerAnchor = useRef<Marker | null>(null);
   /** Whether the pointer is over the marker lane, where Ctrl/Cmd+A selects all bookmarks. */
   const overLane = useRef(false);
-  /** What a new bookmark is called: the name last given to one, for this visit to the page. */
-  const [lastName, setLastName] = useState("Marker");
+  /** What a new bookmark is called: the name last given to one, for this visit to the page; none until then. */
+  const [lastName, setLastName] = useState<string | null>(null);
   /**
    * The name field open over the time from `from` to `to` in the marker lane;
    * `done` gets the accepted name, or null to keep the old one. With `remove`,
@@ -1622,12 +1622,27 @@ export default function EditorPage() {
   const isChapter = (m: Marker): m is Chapter => chapters.includes(m as Chapter);
   const timeOf = (m: Marker) => (isChapter(m) ? m.start : m.time);
 
-  /** Add a bookmark at `time` ms, with the last used name, and select it. */
+  /**
+   * Add a bookmark at `time` ms, with the last used name, and select it.
+   * Without one yet, it opens its name field; naming it is part of adding it.
+   */
   const addBookmark = (time: number) => {
-    const added = { name: lastName, time };
-    edit("Add marker", (s) => withBookmarks(s, [...s.bookmarks, added].sort((a, b) => a.time - b.time)));
+    const added = { name: lastName ?? "Bookmark", time };
+    if (lastName === null) setDragging(true);
+    edit(`Add bookmark "${added.name}"`, (s) => withBookmarks(s, [...s.bookmarks, added].sort((a, b) => a.time - b.time)));
     selectMarkers([added]);
     markerAnchor.current = added;
+    if (lastName !== null) return;
+    setNaming({ from: time, to: time, name: added.name, done: (name) => {
+      if (name) setLastName(name);
+      if (name && name !== added.name) {
+        const renamed = { ...added, name };
+        edit(`Add bookmark "${name}"`, (s) => withBookmarks(s, s.bookmarks.map((b) => (b === added ? renamed : b))));
+        setMarked(new Set([renamed]));
+        markerAnchor.current = renamed;
+      }
+      setDragging(false);
+    } });
   };
 
   /**
@@ -1656,7 +1671,7 @@ export default function EditorPage() {
       sides.includes("start") ? lo - m.start : m.start + 1 - m.end,
       sides.includes("end") ? hi - m.end : m.end - 1 - m.start,
     ];
-    const label = group.length > 1 ? `Move ${group.length} markers` : !isChapter(m) ? "Move marker" : sides.length === 1 ? "Resize chapter" : "Move chapter";
+    const label = group.length > 1 ? `Move ${group.length} bookmarks` : `${isChapter(m) && sides.length === 1 ? "Resize" : "Move"} ${isChapter(m) ? "chapter" : "bookmark"} "${m.name}"`;
     const [origin, x0] = [pointerAt(e).at, e.clientX];
     let moved = false;
     setDragging(true);
@@ -1710,18 +1725,18 @@ export default function EditorPage() {
   const rename = (ms: Marker[]) => {
     ms = [...ms].sort((a, b) => timeOf(a) - timeOf(b));
     const times = ms.flatMap((m) => (isChapter(m) ? [m.start, m.end] : [m.time]));
-    const label = ms.length > 1 ? `Rename ${ms.length} markers` : isChapter(ms[0]) ? "Rename chapter" : "Rename marker";
     setNaming({ from: Math.min(...times), to: Math.max(...times), name: ms[0].name, remove: () => removeMarkers(ms), done: (name) => {
       if (name && !ms.every(isChapter)) setLastName(name);
       if (!name || ms.every((m) => m.name === name)) return;
       const to = new Map<Marker, Marker>(ms.map((m) => [m, { ...m, name }]));
-      edit(label, (s) => withBookmarks({ ...s, chapters: swapped(s.chapters, to) }, swapped(s.bookmarks, to)));
+      const label = ms.length > 1 ? `Rename ${ms.length} bookmarks` : `Rename ${isChapter(ms[0]) ? "chapter" : "bookmark"} "${ms[0].name}"`;
+      edit(`${label} to "${name}"`, (s) => withBookmarks({ ...s, chapters: swapped(s.chapters, to) }, swapped(s.bookmarks, to)));
       setMarked(new Set(to.values()));
     } });
   };
 
   const removeMarkers = (ms: Marker[]) => {
-    edit(ms.length > 1 ? `Delete ${ms.length} markers` : isChapter(ms[0]) ? "Delete chapter" : "Delete marker", (s) => withBookmarks({ ...s, chapters: s.chapters.filter((c) => !ms.includes(c)) }, s.bookmarks.filter((b) => !ms.includes(b))));
+    edit(ms.length > 1 ? `Delete ${ms.length} bookmarks` : `Delete ${isChapter(ms[0]) ? "chapter" : "bookmark"} "${ms[0].name}"`, (s) => withBookmarks({ ...s, chapters: s.chapters.filter((c) => !ms.includes(c)) }, s.bookmarks.filter((b) => !ms.includes(b))));
     setMarked(new Set());
   };
 
@@ -1773,7 +1788,7 @@ export default function EditorPage() {
       if (t === at) return;
       const [old, chapter] = [drawn, { name: `Chapter ${n + 1}`, start: Math.min(at, t), end: Math.max(at, t) }];
       drawn = chapter;
-      edit("Add chapter", (s) => ({ ...s, chapters: [...s.chapters.filter((c) => c !== old), chapter].sort((a, b) => a.start - b.start) }));
+      edit(`Add chapter "${chapter.name}"`, (s) => ({ ...s, chapters: [...s.chapters.filter((c) => c !== old), chapter].sort((a, b) => a.start - b.start) }));
     };
     // Scrolling stops at the gap's ends.
     const scrolls = (dir: number, m: globalThis.PointerEvent) => (dir > 0 ? pointerAt(m).at < hi : pointerAt(m).at > lo);
@@ -1788,7 +1803,7 @@ export default function EditorPage() {
       setNaming({ from: chapter.start, to: chapter.end, name: chapter.name, done: (name) => {
         if (name && name !== chapter.name) {
           const renamed = { ...chapter, name };
-          setScript((s) => ({ ...s, chapters: s.chapters.map((c) => (c === chapter ? renamed : c)) }));
+          edit(`Add chapter "${name}"`, (s) => ({ ...s, chapters: s.chapters.map((c) => (c === chapter ? renamed : c)) }));
           setMarked(new Set([renamed]));
         }
         setDragging(false);
