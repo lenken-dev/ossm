@@ -4028,11 +4028,12 @@ export default function EditorPage() {
                         {k > 0 && (() => {
                           const before = timeline.states[k - 1];
                           const markersChanged = before.chapters !== state.chapters || before.bookmarks !== state.bookmarks;
-                          // A change only to the regions has no points to show.
-                          if (before.actions === state.actions && !markersChanged && before.regions !== state.regions) return <Text size="1" color="gray">Regions changed</Text>;
+                          const regionsChanged = before.regions !== state.regions;
+                          const others = markersChanged || regionsChanged;
                           return <>
-                            {(before.actions !== state.actions || !markersChanged) && <PreviewGraph pieces={diffPieces(before.actions, state.actions)} />}
-                            {markersChanged && <MarkerPreview before={before} after={state} />}
+                            {(before.actions !== state.actions || !others) && <PreviewGraph pieces={diffPieces(before.actions, state.actions)} />}
+                            {markersChanged && <LanePreview lists={[[before.chapters.map(chapterItem), state.chapters.map(chapterItem)], [before.bookmarks.map(bookmarkItem), state.bookmarks.map(bookmarkItem)]]} />}
+                            {regionsChanged && <LanePreview lists={[[before.regions.map(regionItem), state.regions.map(regionItem)]]} />}
                           </>;
                         })()}
                       </Flex>
@@ -4878,42 +4879,53 @@ function PreviewGraph({ pieces, bands = [] }: { pieces: Piece[]; bands?: { from:
   );
 }
 
-/** Changes a marker diff lists, past which it says how many more. */
+/** Changes a lane diff lists, past which it says how many more. */
 const MARKER_DIFF_LINES = 4;
 
+/** A marker or region as a lane diff shows it: its object, what it is and is called, and its time, a range or a moment. */
+interface LaneItem {
+  of: object;
+  kind: string;
+  name: string;
+  span: number[];
+}
+const chapterItem = (c: Chapter): LaneItem => ({ of: c, kind: "chapter", name: c.name, span: [c.start, c.end] });
+const bookmarkItem = (b: Bookmark): LaneItem => ({ of: b, kind: "bookmark", name: b.name, span: [b.time] });
+const regionItem = (r: Region): LaneItem => ({ of: r, kind: isInstance(r) ? "snippet" : "region", name: isInstance(r) ? r.snippet.name : regionName(r), span: [r.from, r.to] });
+
 /**
- * A diff of two scripts' markers, like the points' one: a small lane over the
- * time they changed in, the markers as they were in red and dashed, as they
+ * A diff of two scripts' markers or regions, like the points' one: a small
+ * lane over the time they changed in, as they were in red and dashed, as they
  * are in green, unchanged ones in grey, each moved one joined to where it
- * went; then the changes in words.
+ * went; then the changes in words. Each of `lists` is one kind's items before
+ * and after; nothing when none changed.
  */
-function MarkerPreview({ before, after }: { before: Content; after: Content }) {
-  // Edits keep the markers they leave alone, so the changed ones are those only one side has.
-  const only = <T extends Marker>(a: T[], b: T[]) => {
-    const kept = new Set(b);
-    return a.filter((m) => !kept.has(m));
+function LanePreview({ lists }: { lists: [LaneItem[], LaneItem[]][] }) {
+  // Edits keep the items they leave alone, so the changed ones are those only one side has.
+  const only = (a: LaneItem[], b: LaneItem[]) => {
+    const kept = new Set(b.map((m) => m.of));
+    return a.filter((m) => !kept.has(m.of));
   };
-  const lists = [[before.chapters, after.chapters], [before.bookmarks, after.bookmarks]] as const;
   const changes = lists.flatMap(([a, b]) => {
-    const [gone, come] = [only<Marker>(a, b), only<Marker>(b, a)];
+    const [gone, come] = [only(a, b), only(b, a)];
     // As many on each side, as a move or rename leaves, they pair up in time order.
-    if (gone.length === come.length) return gone.map((old, i) => ({ old, now: come[i] as Marker | undefined, chapter: a === before.chapters }));
-    return [...gone.map((old) => ({ old, now: undefined, chapter: a === before.chapters })), ...come.map((now) => ({ old: undefined as Marker | undefined, now, chapter: a === before.chapters }))];
+    if (gone.length === come.length) return gone.map((old, i) => ({ old, now: come[i] as LaneItem | undefined }));
+    return [...gone.map((old) => ({ old, now: undefined })), ...come.map((now) => ({ old: undefined as LaneItem | undefined, now }))];
   });
-  const chapters = new Set([...before.chapters, ...after.chapters]);
-  const span = (m: Marker) => (chapters.has(m as Chapter) ? [(m as Chapter).start, (m as Chapter).end] : [(m as Bookmark).time]);
+  if (!changes.length) return null;
+  const span = (m: LaneItem) => m.span;
   const times = changes.flatMap(({ old, now }) => [old, now].flatMap((m) => (m ? span(m) : [])));
   const [lo, hi] = [Math.min(...times), Math.max(...times)];
   const pad = Math.max((hi - lo) * 0.15, 2000);
   const [from, to] = [Math.max(lo - pad, 0), hi + pad];
   const [width, height, inset] = [200, 28, 4];
   const x = (at: number) => inset + ((at - from) / (to - from)) * (width - 2 * inset);
-  const inRange = (m: Marker) => span(m).some((t) => t >= from && t <= to) || (span(m)[0] < from && span(m)[1] > to);
-  const changed = new Set(changes.flatMap(({ old, now }) => [old, now]));
-  const unchanged = [...after.chapters, ...after.bookmarks].filter((m) => !changed.has(m) && inRange(m));
-  const when = (m: Marker) => span(m).map((t) => formatScriptTime(t / 1000, 2)).join("–");
-  /** A marker drawn in `color`: a chapter as a band, a bookmark as a line. */
-  const draw = (m: Marker, key: string, color: string, dashed: boolean, band?: string) => {
+  const inRange = (m: LaneItem) => span(m).some((t) => t >= from && t <= to) || (span(m)[0] < from && span(m)[1] > to);
+  const changed = new Set(changes.flatMap(({ old, now }) => [old?.of, now?.of]));
+  const unchanged = lists.flatMap(([, b]) => b).filter((m) => !changed.has(m.of) && inRange(m));
+  const when = (m: LaneItem) => span(m).map((t) => formatScriptTime(t / 1000, 2)).join("–");
+  /** An item drawn in `color`: a range as a band, a moment as a line. */
+  const draw = (m: LaneItem, key: string, color: string, dashed: boolean, band?: string) => {
     const [a, b] = span(m);
     const stroke = { stroke: color, strokeWidth: 1.5, strokeDasharray: dashed ? "3 2" : undefined };
     return b === undefined
@@ -4921,14 +4933,14 @@ function MarkerPreview({ before, after }: { before: Content; after: Content }) {
       : <rect key={key} x={x(a)} width={Math.max(x(b) - x(a), 1)} y={height / 2} height={height / 2} style={{ fill: band ?? "none" }} {...stroke} />;
   };
   const ticks = timeTicks(from / 1000, to / 1000, 3);
-  const lines = changes.map(({ old, now, chapter }) => {
-    const kind = chapter ? "chapter" : "marker";
+  const lines = changes.map(({ old, now }) => {
+    const { kind } = (now ?? old)!;
     if (!old) return `Added ${kind} ${now!.name} at ${when(now!)}`;
-    if (!now) return `Deleted ${kind} ${old.name} at ${when(old)}`;
+    if (!now) return `Removed ${kind} ${old.name} at ${when(old)}`;
     const named = old.name === now.name ? old.name : `${old.name} → ${now.name}`;
-    if (when(old) === when(now)) return `Renamed ${kind} ${named} at ${when(now)}`;
+    if (when(old) === when(now)) return `${old.name === now.name ? "Changed" : "Renamed"} ${kind} ${named} at ${when(now)}`;
     const [a, b] = [span(old), span(now)];
-    return `${chapter && a[1] - a[0] !== b[1] - b[0] ? "Resized" : "Moved"} ${kind} ${named} from ${when(old)} to ${when(now)}`;
+    return `${a.length > 1 && a[1] - a[0] !== b[1] - b[0] ? "Resized" : "Moved"} ${kind} ${named} from ${when(old)} to ${when(now)}`;
   });
   return (
     <Flex direction="column" gap="1">
