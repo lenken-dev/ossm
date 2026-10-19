@@ -6,6 +6,7 @@ import { usePersistedState } from "../hooks/usePersistedState";
 import { SENT_SCRIPT_KEY } from "../StreamPanel";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
+import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { GraphLayout } from "./GraphPage";
 
 interface Action {
@@ -1132,6 +1133,14 @@ export default function EditorPage() {
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
   /** The sidebar's stats are expanded, else just their header. */
   const [statsShown, setStatsShown] = usePersistedState("ossm:editorStatsShown", true, localStorage);
+  /** The calculator's machine range, in mm, shared with the player's; the share of it the stroke range takes (depth times stroke), its speed and sensation settings, in percent. */
+  const [calcShown, setCalcShown] = usePersistedState("ossm:editorCalcShown", false, localStorage);
+  const [rangeMm, setRangeMm] = usePersistedState(RANGE_KEY, FIRMWARE_RANGE_MM, localStorage);
+  const [calcSpeed, setCalcSpeed] = usePersistedState("ossm:editorCalcSpeed", 100, localStorage);
+  const [calcStroke, setCalcStroke] = usePersistedState("ossm:editorCalcStroke", 100, localStorage);
+  const [calcSensation, setCalcSensation] = usePersistedState("ossm:editorCalcSensation", 50, localStorage);
+  // Only the stroke range's length matters, so it reaches from the out end.
+  const calcMax = useFollow(useMemo(() => ({ kind: "max" as const, settings: { rangeMm, depth: calcStroke / 100, stroke: 1, speed: calcSpeed / 100, jerk: calcSensation / 100 } }), [rangeMm, calcStroke, calcSpeed, calcSensation]));
   /** The advanced editor shows times from its 0, earlier ones negative; only as shown, the points keep the main script's times. */
   const [fromZero, setFromZero] = usePersistedState("ossm:editorFromZero", false, localStorage);
   /** The advanced editor's marker lane and Markers panel take presses, and B adds a bookmark, editing the main script's markers. */
@@ -3694,24 +3703,30 @@ export default function EditorPage() {
         const average = !statsShown && stats(actions, picked).average;
         return <>
           <Separator size="4" />
-          <Flex
-            align="center"
-            gap="2"
-            role="button"
-            tabIndex={0}
-            aria-expanded={statsShown}
-            onClick={() => setStatsShown(!statsShown)}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setStatsShown(!statsShown))}
-            style={{ cursor: "pointer", userSelect: "none" }}
-          >
-            <ChevronRightIcon style={{ flexShrink: 0, transform: statsShown ? "rotate(90deg)" : undefined }} />
-            <Heading size="3">{on ? "Selection stats" : "Stats"}</Heading>
-            {/* Collapsed, the average speed, when there are moves. */}
-            {!!average && <Text size="2" color="gray" ml="auto">{Math.round(average)}/s avg</Text>}
-          </Flex>
+          {/* Collapsed, the average speed, when there are moves. */}
+          <SectionHeader title={on ? "Selection stats" : "Stats"} open={statsShown} setOpen={setStatsShown} summary={!!average && `${Math.round(average)}/s avg`} />
           {statsShown && <Stats actions={actions} picked={picked} size="2" />}
         </>;
       })()}
+      {/* The fastest full strokes the machine follows at a target speed and sensation, from the firmware's motion. */}
+      <Separator size="4" />
+      <SectionHeader title="Calculator" open={calcShown} setOpen={setCalcShown} summary={`${calcMax ?? "…"}/s max`} />
+      {calcShown && <>
+        {/* Typing keeps the last range from 10 mm on. */}
+        <TextField.Root type="number" min={10} step="any" aria-label="Machine range" defaultValue={rangeMm} onChange={(e) => Number(e.target.value) >= 10 && setRangeMm(Number(e.target.value))}>
+          <TextField.Slot side="left">Machine range</TextField.Slot>
+          <TextField.Slot side="right">mm</TextField.Slot>
+        </TextField.Root>
+        <LabeledSlider label="Stroke range" value={calcStroke} display={`${calcStroke}%`} min={1} max={100} step={1} onChange={setCalcStroke} />
+        <LabeledSlider label="Speed" value={calcSpeed} display={`${calcSpeed}%`} min={0} max={100} step={1} onChange={setCalcSpeed} />
+        <LabeledSlider label="Sensation" value={calcSensation} display={`${calcSensation}%`} min={0} max={100} step={1} ends={["Smooth", "Hard"]} onChange={setCalcSensation} />
+        <DataList.Root size="2">
+          <DataList.Item>
+            <DataList.Label color="gray">Max speed</DataList.Label>
+            <DataList.Value>{calcMax ?? "…"}/s</DataList.Value>
+          </DataList.Item>
+        </DataList.Root>
+      </>}
       </>}
       {/* In the main script, only a region's Generate. */}
       {(advanced || tool) && <>
@@ -5135,6 +5150,26 @@ function LanePreview({ lists }: { lists: [LaneItem[], LaneItem[]][] }) {
       </svg>
       {lines.slice(0, MARKER_DIFF_LINES).map((line, i) => <Text key={i} size="1" color="gray">{line}</Text>)}
       {lines.length > MARKER_DIFF_LINES && <Text size="1" color="gray">and {lines.length - MARKER_DIFF_LINES} more</Text>}
+    </Flex>
+  );
+}
+
+/** A sidebar section's title, pressed to expand or collapse it; collapsed, `summary` at its end. */
+function SectionHeader({ title, open, setOpen, summary }: { title: string; open: boolean; setOpen: (open: boolean) => void; summary?: ReactNode }) {
+  return (
+    <Flex
+      align="center"
+      gap="2"
+      role="button"
+      tabIndex={0}
+      aria-expanded={open}
+      onClick={() => setOpen(!open)}
+      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpen(!open))}
+      style={{ cursor: "pointer", userSelect: "none" }}
+    >
+      <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} />
+      <Heading size="3">{title}</Heading>
+      {!open && summary && <Text size="2" color="gray" ml="auto">{summary}</Text>}
     </Flex>
   );
 }

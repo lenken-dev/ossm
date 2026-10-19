@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type RefObject, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
-import { AlertDialog, Box, Button, Callout, Dialog, Flex, Heading, IconButton, SegmentedControl, Select, Separator, Switch, Text, Theme, Tooltip } from "@radix-ui/themes";
+import { AlertDialog, Box, Button, Callout, DataList, Dialog, Flex, Heading, IconButton, SegmentedControl, Select, Separator, Switch, Text, TextField, Theme, Tooltip } from "@radix-ui/themes";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -25,6 +25,7 @@ import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm, type Ossm, type OssmState, type PatternInfo } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
 import { parseFunscript, readFunscript, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
+import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 
@@ -479,6 +480,19 @@ export default function PlayerPage() {
   /** The Funscript and Graph sections of the controls show only their titles until expanded. */
   const [funscriptOpen, setFunscriptOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
+  const [calcOpen, setCalcOpen] = useState(false);
+  /** The calculator's machine range, in mm, shared with the editor's. */
+  const [rangeMm, setRangeMm] = usePersistedState(RANGE_KEY, FIRMWARE_RANGE_MM, localStorage);
+  /** The machine's settings, 0–100, or until connected full depth and stroke at the middle sensation. */
+  const calcSettings = { depth: state?.depth ?? 100, stroke: state?.stroke ?? 100, sensation: state?.sensation ?? 50, speed: state?.speed ?? 0 };
+  /** The speed the script needs, and the share of its points reached at the machine's speed. */
+  const calc = useFollow(useMemo(() => {
+    if (!calcOpen || !played) return null;
+    const { depth, stroke, sensation, speed } = calcSettings;
+    return { kind: "script" as const, script: played, rate: scriptSpeed, settings: { rangeMm, depth: depth / 100, stroke: stroke / 100, jerk: sensation / 100 }, speed: speed / 100 };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- its values, not the object made each render
+  }, [calcOpen, played, scriptSpeed, rangeMm, calcSettings.depth, calcSettings.stroke, calcSettings.sensation, calcSettings.speed]));
+  const needed = calc?.needed;
   /** A section's title, pressed to expand or collapse it. */
   const sectionHeader = (title: string, open: boolean, setOpen: (open: boolean) => void) => (
     <Flex
@@ -698,6 +712,37 @@ export default function PlayerPage() {
                   <Switch checked={looped} onCheckedChange={setLooped} />
                 </Flex>
               </Text>
+            </>}
+            <Separator size="4" />
+            {sectionHeader("Calculator", calcOpen, setCalcOpen)}
+            {calcOpen && <>
+              {/* Typing keeps the last range from 10 mm on. */}
+              <TextField.Root type="number" min={10} step="any" aria-label="Machine range" defaultValue={rangeMm} onChange={(e) => Number(e.target.value) >= 10 && setRangeMm(Number(e.target.value))}>
+                <TextField.Slot side="left">Machine range</TextField.Slot>
+                <TextField.Slot side="right">mm</TextField.Slot>
+              </TextField.Root>
+              {!played ? (
+                <Text size="2" color="gray">Load a script to see the speed it needs.</Text>
+              ) : <>
+                <DataList.Root size="2">
+                  <Tooltip
+                    container={inPopout ? popout?.document.body : undefined}
+                    content={`The lowest speed at which the machine reaches 95% of the script's points on time, at depth ${calcSettings.depth.toFixed(0)}%, stroke ${calcSettings.stroke.toFixed(0)}% and sensation ${calcSettings.sensation.toFixed(0)}%${scriptSpeed !== 1 ? ` played x${scriptSpeed}` : ""}.${needed === null ? " Raise the sensation or shorten the stroke." : ""}`}
+                  >
+                    <DataList.Item>
+                      <DataList.Label color="gray">Speed needed</DataList.Label>
+                      <DataList.Value>{needed === undefined ? "…" : needed === null ? "Over 100%" : `${needed}%`}</DataList.Value>
+                    </DataList.Item>
+                  </Tooltip>
+                  {/* Only the connected machine has a speed. */}
+                  {state && calc && (
+                    <DataList.Item>
+                      <DataList.Label color="gray">Points reached</DataList.Label>
+                      <DataList.Value>{(calc.reached * 100).toFixed(1)}%</DataList.Value>
+                    </DataList.Item>
+                  )}
+                </DataList.Root>
+              </>}
             </>}
             <Separator size="4" />
             {sectionHeader("Graph", graphOpen, setGraphOpen)}
