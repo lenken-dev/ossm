@@ -3209,10 +3209,10 @@ export default function EditorPage() {
     Object.assign(ctx, { strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
     // Repeat's copies show thin and faded, so its pattern's line stands out; the line breaks between them, to be drawn over.
     const muted = tool?.kind === "repeat" && !ghost;
-    // A selected region's line shows as the selected points'.
+    // A selected region's line shows as the selected points', as does the line joining it to a selected point or region next to it.
     const lit = tool ? [] : shownRegions.filter(outlined);
-    const litAt = (j: number) => regionAt(lit, visible[j].at);
-    const between = (j: number) => (marks.has(first + j - 1) && marks.has(first + j)) || (j > 0 && !!litAt(j) && litAt(j) === litAt(j - 1));
+    const on = (j: number) => j >= 0 && (marks.has(first + j) || !!regionAt(lit, visible[j].at));
+    const between = (j: number) => on(j - 1) && on(j);
     ctx.beginPath();
     visible.forEach((a, j) => (muted && between(j) ? ctx.moveTo(x(a.at), y(a.pos)) : ctx.lineTo(x(a.at), y(a.pos))));
     ctx.stroke();
