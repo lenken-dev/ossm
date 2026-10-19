@@ -1130,6 +1130,8 @@ export default function EditorPage() {
   const [videoHeight, setVideoHeight] = pip ? [pipHeight, setPipHeight] : [normalHeight, setNormalHeight];
   /** A minimap of the whole script to scroll with, instead of the slider. */
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
+  /** The sidebar's stats are expanded, else just their header. */
+  const [statsShown, setStatsShown] = usePersistedState("ossm:editorStatsShown", true, localStorage);
   /** The advanced editor shows times from its 0, earlier ones negative; only as shown, the points keep the main script's times. */
   const [fromZero, setFromZero] = usePersistedState("ossm:editorFromZero", false, localStorage);
   /** The advanced editor's marker lane and Markers panel take presses, and B adds a bookmark, editing the main script's markers. */
@@ -3689,10 +3691,25 @@ export default function EditorPage() {
         const on = selected.size || chosen.length;
         const picked = on ? [...new Set([...selected, ...chosen.flatMap(pointsOf)])].sort((a, b) => a - b) : [...actions.keys()];
         if (!picked.length) return null;
+        const average = !statsShown && stats(actions, picked).average;
         return <>
           <Separator size="4" />
-          <Heading size="3">{on ? "Selection stats" : "Stats"}</Heading>
-          <Stats actions={actions} picked={picked} size="2" />
+          <Flex
+            align="center"
+            gap="2"
+            role="button"
+            tabIndex={0}
+            aria-expanded={statsShown}
+            onClick={() => setStatsShown(!statsShown)}
+            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setStatsShown(!statsShown))}
+            style={{ cursor: "pointer", userSelect: "none" }}
+          >
+            <ChevronRightIcon style={{ flexShrink: 0, transform: statsShown ? "rotate(90deg)" : undefined }} />
+            <Heading size="3">{on ? "Selection stats" : "Stats"}</Heading>
+            {/* Collapsed, the average speed, when there are moves. */}
+            {!!average && <Text size="2" color="gray" ml="auto">{Math.round(average)}/s avg</Text>}
+          </Flex>
+          {statsShown && <Stats actions={actions} picked={picked} size="2" />}
         </>;
       })()}
       </>}
