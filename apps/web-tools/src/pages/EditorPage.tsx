@@ -3635,6 +3635,25 @@ export default function EditorPage() {
           <Switch checked={minimap} onCheckedChange={setMinimap} /> Minimap
         </Flex>
       </Text>
+      {advanced && <>
+      <Text as="label" size="2">
+        <Flex gap="2" align="center">
+          <Switch
+            checked={fromZero}
+            onCheckedChange={(on) => {
+              setFromZero(on);
+              // Generate's From and To follow, so its box stays.
+              if (genBox) setGenRange(rangeFields(genBox, on ? advanced.zero : 0));
+            }}
+          /> Time from 0
+        </Flex>
+      </Text>
+      <Text as="label" size="2" title="New and dragged points go to the nearest bookmark's time">
+        <Flex gap="2" align="center">
+          <Switch checked={onMarkers} disabled={!bookmarks.length} onCheckedChange={setOnMarkers} /> Place points on markers
+        </Flex>
+      </Text>
+      </>}
       {/* The selected region, its points locked until unlocked. */}
       {region && <>
         <Separator size="4" />
@@ -3679,26 +3698,7 @@ export default function EditorPage() {
       </>}
       {/* In the main script, only a region's Generate. */}
       {(advanced || tool) && <>
-        {advanced && !tool && <>
-        <Text as="label" size="2">
-          <Flex gap="2" align="center">
-            <Switch
-              checked={fromZero}
-              onCheckedChange={(on) => {
-                setFromZero(on);
-                // Generate's From and To follow, so its box stays.
-                if (genBox) setGenRange(rangeFields(genBox, on ? advanced.zero : 0));
-              }}
-            /> Time from 0
-          </Flex>
-        </Text>
-        <Text as="label" size="2" title="New and dragged points go to the nearest bookmark's time">
-          <Flex gap="2" align="center">
-            <Switch checked={onMarkers} disabled={!bookmarks.length} onCheckedChange={setOnMarkers} /> Place points on markers
-          </Flex>
-        </Text>
-        <Separator size="4" />
-        </>}
+        {advanced && !tool && <Separator size="4" />}
         {!tool ? <>
           {/* The tools, on the selected points or all but the regions', each with a small graph of what it does; Generate needs none, Repeat a pattern of two selected. */}
           <Text size="2" weight="medium">Tools</Text>
