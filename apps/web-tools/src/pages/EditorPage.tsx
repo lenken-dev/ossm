@@ -3621,13 +3621,16 @@ export default function EditorPage() {
       </Text>
       {/* The selected region, its points locked until unlocked. */}
       {region && <>
+        <Separator size="4" />
+        <Heading size="3">{regionKind(region)}</Heading>
+        {/* Its own name, a region's only once given. */}
         <Flex align="center" gap="2">
-          <Text size="2" weight="medium" truncate>{regionName(region)}</Text>
+          {isInstance(region) || region.name ? <Text size="2" weight="medium" truncate>{isInstance(region) ? region.snippet.name : region.name}</Text> : <Text size="2" color="gray">Unnamed</Text>}
           <NamePopover initial={isInstance(region) ? region.snippet.name : regionName(region)} onName={(n) => n !== (isInstance(region) ? region.snippet.name : regionName(region)) && renameRegion(region, n)}>
             <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
           </NamePopover>
         </Flex>
-        <Text size="2" color="gray">{regionKind(region)} · {points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
+        <Text size="2" color="gray">{points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
         <Flex gap="2">
           <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title={isInstance(region) ? "Edit its points and regions in the advanced editor (E, or double-click it)" : isRepeat(region) ? "Edit its pattern and setup with Repeat (E, or double-click it)" : "Edit its setup and box with Generate (E, or double-click it)"} onClick={() => editRegion(region)}>
             <Pencil1Icon /> Edit
