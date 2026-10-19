@@ -362,7 +362,7 @@ const SELECTED_MARKER = { outline: "2px solid var(--accent-9)", outlineOffset: -
 const MARKER_GRIP = 6;
 /** Bookmark colours, Radix scales; a bookmark's name picks one, so bookmarks named alike match. */
 const MARKER_COLORS = ["blue", "green", "orange", "purple", "cyan", "crimson", "amber", "teal"];
-const markerColor = (name: string) => MARKER_COLORS[Math.abs([...name].reduce((h, c) => (h * 31 + c.codePointAt(0)!) | 0, 0)) % MARKER_COLORS.length];
+export const markerColor = (name: string) => MARKER_COLORS[Math.abs([...name].reduce((h, c) => (h * 31 + c.codePointAt(0)!) | 0, 0)) % MARKER_COLORS.length];
 
 /** Default and smallest height of the reference video, in px. */
 const VIDEO_HEIGHT = 300;
@@ -846,12 +846,18 @@ function readTime(t: unknown) {
 /** `ms` as `"HH:MM:SS.mmm"`, as markers are saved; the hours go past 24. */
 const writeTime = (ms: number) => `${String(Math.floor(ms / 3_600_000)).padStart(2, "0")}:${new Date(ms).toISOString().slice(14, 23)}`;
 
+/** The chapters and bookmarks as a file's `metadata` has them, sorted. */
+const writeMarkers = (chapters: Chapter[], bookmarks: Bookmark[]) => ({
+  chapters: [...chapters].sort((a, b) => a.start - b.start).map(({ start, end, ...rest }) => ({ ...rest, startTime: writeTime(start), endTime: writeTime(end) })),
+  bookmarks: [...bookmarks].sort((a, b) => a.time - b.time).map(({ time, ...rest }) => ({ ...rest, time: writeTime(time) })),
+});
+
 /**
  * The chapters and bookmarks in `file`'s metadata, sorted. A chapter without an
  * end runs to the next one's start, the last to `end`; overlapping chapters are
  * cut where the later one starts.
  */
-function readMarkers(file: Record<string, unknown>, end: number) {
+export function readMarkers(file: Record<string, unknown>, end: number) {
   const meta = (file.metadata ?? {}) as { chapters?: unknown; bookmarks?: unknown };
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((o): o is Record<string, unknown> => !!o && typeof o === "object") : []);
   const starts = list(meta.chapters)
@@ -3017,12 +3023,9 @@ export default function EditorPage() {
     const { file = {} } = script;
     // Into the opened file's metadata; the lists only when there are markers or the file had them.
     const metadata = { ...(file.metadata as Record<string, unknown> | undefined) };
-    if (chapters.length || "chapters" in metadata) {
-      metadata.chapters = [...chapters].sort((a, b) => a.start - b.start).map(({ start, end, ...rest }) => ({ ...rest, startTime: writeTime(start), endTime: writeTime(end) }));
-    }
-    if (bookmarks.length || "bookmarks" in metadata) {
-      metadata.bookmarks = [...bookmarks].sort((a, b) => a.time - b.time).map(({ time, ...rest }) => ({ ...rest, time: writeTime(time) }));
-    }
+    const written = writeMarkers(chapters, bookmarks);
+    if (chapters.length || "chapters" in metadata) metadata.chapters = written.chapters;
+    if (bookmarks.length || "bookmarks" in metadata) metadata.bookmarks = written.bookmarks;
     // Into the opened file's "ossmRsWebTools", our own key; the regions only when there are some or the file had them.
     const ossmRsWebTools = { ...(file.ossmRsWebTools as Record<string, unknown> | undefined) };
     if (regions.length || "regions" in ossmRsWebTools) Object.assign(ossmRsWebTools, { version: 1, regions: [...regions].sort((a, b) => a.from - b.from) });
@@ -3368,10 +3371,11 @@ export default function EditorPage() {
   /** What the advanced editor is editing, in place of the script's name. */
   const advancedTitle = advanced && (advanced.instance !== undefined ? `Snippet · ${(main.regions[advanced.instance] as Instance).snippet.name}` : !advanced.snippet ? "Advanced editor" : advanced.snippet.path ? `Snippet · ${advanced.snippet.path[advanced.snippet.path.length - 1]}` : "New snippet");
 
-  /** Send the points to the player, which loads them at once in other tabs and here on switching to it; the advanced editor's from 0. */
+  /** Send the points to the player, which loads them at once in other tabs and here on switching to it; the advanced editor's from 0, without the markers. */
   const sendToPlayer = () => {
     const sent = advanced ? actions.map((a) => ({ ...a, at: a.at - actions[0].at })) : actions;
-    localStorage.setItem(SENT_SCRIPT_KEY, JSON.stringify({ name: advancedTitle || script.name || "untitled", actions: sent, sent: Date.now() }));
+    const metadata = advanced ? undefined : writeMarkers(chapters, bookmarks);
+    localStorage.setItem(SENT_SCRIPT_KEY, JSON.stringify({ name: advancedTitle || script.name || "untitled", actions: sent, metadata, sent: Date.now() }));
   };
 
   /** Show the time `t` ms: the view centred on it when it is out of view, and the playhead there. */

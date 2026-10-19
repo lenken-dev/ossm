@@ -23,13 +23,19 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm, type Ossm, type OssmState, type PatternInfo } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
-import { parseFunscript, readFunscript, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
+import { formatScriptTime, parseFunscript, readFunscript, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
-import { SectionHeader, Stats, stats, type Action } from "./EditorPage";
+import { markerColor, readMarkers, SectionHeader, Stats, stats, type Action } from "./EditorPage";
 
 type PlayerMode = "pattern" | "funscript";
+
+/** A script's chapters and bookmarks, in script ms. */
+type Markers = ReturnType<typeof readMarkers>;
+const NO_MARKERS: Markers = { chapters: [], bookmarks: [] };
+/** The markers in the .funscript `text` that parsed to `script`. */
+const markersOf = (text: string, script: Funscript): Markers => readMarkers(JSON.parse(text) as Record<string, unknown>, script.at[script.at.length - 1]);
 
 /** Where dialogs, menus and tooltips open: the popout window's body while the controls are in it. */
 const PortalContainer = createContext<HTMLElement | undefined>(undefined);
@@ -234,6 +240,7 @@ export default function PlayerPage() {
   const [paused, setPaused] = useState(true);
   const syncPaused = (e: { currentTarget: HTMLMediaElement }) => setPaused(e.currentTarget.paused);
   const [script, setScript] = useState<Funscript | null>(null);
+  const [markers, setMarkers] = useState(NO_MARKERS);
   const [scriptError, setScriptError] = useState<string | null>(null);
   const [reverse, setReverse] = useState(false);
   const [simplified, setSimplified] = usePersistedState("ossm:playerSimplify", true, localStorage);
@@ -419,6 +426,7 @@ export default function PlayerPage() {
       const parsed = await readFunscript(file);
       endStream("script");
       setScript(parsed);
+      setMarkers(markersOf(await file.text(), parsed));
       setScriptError(null);
     } catch (e) {
       setScriptError((e as Error).message);
@@ -432,6 +440,7 @@ export default function PlayerPage() {
       const parsed = parseFunscript((JSON.parse(raw) as { name: string }).name, raw);
       endStream("script");
       setScript(parsed);
+      setMarkers(markersOf(raw, parsed));
       setScriptError(null);
     } catch (e) {
       setScriptError((e as Error).message);
@@ -481,6 +490,17 @@ export default function PlayerPage() {
   const [funscriptOpen, setFunscriptOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [markersOpen, setMarkersOpen] = useState(false);
+  /** The index of the chapter the playhead is in, or -1; followed only while the Markers list shows. */
+  const [chapterAt, setChapterAt] = useState(-1);
+  useEffect(() => {
+    if (!markersOpen || !markers.chapters.length) return;
+    const id = setInterval(() => {
+      const t = playhead.current.get();
+      setChapterAt(markers.chapters.findIndex((c) => c.start <= t && t < c.end));
+    }, 250);
+    return () => clearInterval(id);
+  }, [markersOpen, markers]);
   /** The played script's points, for its stats. */
   const playedActions = useMemo<Action[]>(() => played ? Array.from(played.at, (at, i) => ({ at, pos: played.pos[i] })) : [], [played]);
   const playedAverage = useMemo(() => playedActions.length && stats(playedActions, [...playedActions.keys()]).average, [playedActions]);
@@ -701,6 +721,35 @@ export default function PlayerPage() {
               </Text>
             </>}
             <Separator size="4" />
+            {/* The script's chapters and bookmarks in time; a click plays from there. */}
+            {played && (markers.chapters.length > 0 || markers.bookmarks.length > 0) && <>
+              <SectionHeader title="Markers" open={markersOpen} setOpen={setMarkersOpen} summary={`${markers.chapters.length + markers.bookmarks.length}`} />
+              {markersOpen && (
+                <Flex direction="column">
+                  {[...markers.chapters.map((c, k) => ({ name: c.name, at: c.start, end: c.end, k })), ...markers.bookmarks.map((b) => ({ name: b.name, at: b.time, end: null, k: -1 }))]
+                    .sort((a, b) => a.at - b.at)
+                    .map(({ name, at, end, k }, i) => (
+                      <Flex
+                        key={i}
+                        align="center"
+                        gap="2"
+                        px="1"
+                        role="button"
+                        onClick={() => playhead.current.set(at)}
+                        style={{ minHeight: 28, borderRadius: 4, cursor: "pointer", userSelect: "none", background: k >= 0 && k === chapterAt ? "var(--accent-a4)" : undefined }}
+                      >
+                        {/* A bookmark's colour, as in the editor. */}
+                        {end === null && <Box flexShrink="0" width="8px" height="8px" style={{ borderRadius: "50%", background: `var(--${markerColor(name)}-9)` }} />}
+                        <Text size="2" truncate style={{ flexGrow: 1 }}>{name}</Text>
+                        <Text size="1" color="gray" style={{ flexShrink: 0 }}>
+                          {formatScriptTime(at / 1000)}{end !== null && `–${formatScriptTime(end / 1000)}`}
+                        </Text>
+                      </Flex>
+                    ))}
+                </Flex>
+              )}
+              <Separator size="4" />
+            </>}
             {/* The played script's stats; collapsed, its average speed. */}
             {played && <>
               <SectionHeader title="Stats" open={statsOpen} setOpen={setStatsOpen} summary={!!playedAverage && `${Math.round(playedAverage)}/s avg`} />
@@ -977,7 +1026,7 @@ export default function PlayerPage() {
             </Box>
           )}
           {inTheater && mode === "funscript" && played && theaterMinimap && (
-            <ScriptMinimap script={played} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />
+            <ScriptMinimap script={played} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />
           )}
         </>
       ) : (
@@ -1023,6 +1072,7 @@ export default function PlayerPage() {
                     dropSilence("close");
                     endStream("close");
                     setScript(null);
+                    setMarkers(NO_MARKERS);
                     setScriptError(null);
                   }}
                 >
@@ -1047,7 +1097,7 @@ export default function PlayerPage() {
                 onPointerDown={dragGraphHeight}
               />
             </Box>
-            {minimap && <ScriptMinimap script={played} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />}
+            {minimap && <ScriptMinimap script={played} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />}
           </>
         ) : (
           <Flex align="center" justify="center" flexShrink="0" height={`${graphHeight}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
@@ -1567,13 +1617,14 @@ function ScriptPreview({ script, speed, playhead, reverse, videoRef, ossm, machi
 const MINIMAP_HEIGHT = 40;
 
 /**
- * The whole script with the graph's time and the playhead, as in the
- * editor's minimap. Dragging moves the graph's time and with it the
+ * The whole script with its markers, the graph's time and the playhead, as
+ * in the editor's minimap. Dragging moves the graph's time and with it the
  * playhead; pressed outside the graph's time, it centres on the pointer
  * first. Playback pauses while dragging, as in the graph.
  */
-function ScriptMinimap({ script, speed, playhead, reverse, videoRef, span: { before, after } }: {
+function ScriptMinimap({ script, markers: { chapters, bookmarks }, speed, playhead, reverse, videoRef, span: { before, after } }: {
   script: Funscript;
+  markers: Markers;
   speed: number;
   playhead: RefObject<Playhead>;
   reverse: boolean;
@@ -1638,7 +1689,14 @@ function ScriptMinimap({ script, speed, playhead, reverse, videoRef, span: { bef
       onPointerDown={drag}
       style={{ display: "block", flexShrink: 0, width: "100%", borderRadius: 6, background: "var(--gray-a2)", touchAction: "none", userSelect: "none" }}
     >
+      {/* A run of touching chapters alternates light and dark, as in the editor. */}
+      {chapters.map((c, i) => (
+        <rect key={`c${i}`} x={x(c.start)} width={x(c.end) - x(c.start)} height={MINIMAP_HEIGHT} style={{ fill: i % 2 && chapters[i - 1].end === c.start ? "var(--gray-a3)" : "var(--gray-a4)" }} />
+      ))}
       <polyline points={points} fill="none" stroke="#ec4899" strokeWidth={1} />
+      {bookmarks.map((b, i) => (
+        <line key={`b${i}`} x1={x(b.time)} x2={x(b.time)} y1={0} y2={6} strokeWidth={2} style={{ stroke: `var(--${markerColor(b.name)}-9)` }} />
+      ))}
       <g ref={shownRef}>
         <rect
           x={-x(before * speed)}
