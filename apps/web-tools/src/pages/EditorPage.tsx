@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useId, type CSSProperties, type PointerEvent, type ReactElement, type ReactNode, type SVGProps } from "react";
-import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
+import { AlertDialog, Box, Button, Callout, Checkbox, DataList, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
 import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight, bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -377,6 +377,22 @@ const afterTime = bisector((a: Action) => a.at).right;
 /** The speed from `a` to `b`, in depth per second. */
 const speed = (a: Action, b: Action) => (Math.abs(b.pos - a.pos) / (b.at - a.at)) * 1000;
 const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
+
+/** Stats of picked points, sorted; speeds only over moves between picked neighbours, the average their travel over their time. */
+function stats(actions: Action[], picked: number[]) {
+  let low = Infinity, high = -Infinity, top = 0, travel = 0, time = 0;
+  picked.forEach((i, k) => {
+    const a = actions[i];
+    low = Math.min(low, a.pos);
+    high = Math.max(high, a.pos);
+    if (k && picked[k - 1] === i - 1) {
+      top = Math.max(top, speed(actions[i - 1], a));
+      travel += Math.abs(a.pos - actions[i - 1].pos);
+      time += a.at - actions[i - 1].at;
+    }
+  });
+  return { top, average: time ? (travel / time) * 1000 : 0, low, high, duration: actions[picked[picked.length - 1]].at - actions[picked[0]].at };
+}
 /** A typed number; NaN when empty. */
 const typed = (v: string) => (v.trim() ? Number(v) : NaN);
 
@@ -3649,6 +3665,25 @@ export default function EditorPage() {
           </Button>
         </NamePopover>
       </>}
+      {/* Stats of the selected points and regions' points, or of all points. */}
+      {actions.length > 0 && (() => {
+        const on = selected.size || chosen.length;
+        const picked = on ? [...new Set([...selected, ...chosen.flatMap(pointsOf)])].sort((a, b) => a - b) : [...actions.keys()];
+        if (!picked.length) return null;
+        const { top, average, low, high, duration } = stats(actions, picked);
+        return <>
+          <Separator size="4" />
+          <Heading size="3">{on ? "Selection stats" : "Stats"}</Heading>
+          <DataList.Root size="2">
+            {([["Max speed", `${Math.round(top)}/s`], ["Average speed", `${Math.round(average)}/s`], ["Min depth", 100 - high], ["Max depth", 100 - low], ["Duration", formatScriptTime(duration / 1000)], ["Points", picked.length]] as const).map(([label, value]) => (
+              <DataList.Item key={label}>
+                <DataList.Label color="gray">{label}</DataList.Label>
+                <DataList.Value>{value}</DataList.Value>
+              </DataList.Item>
+            ))}
+          </DataList.Root>
+        </>;
+      })()}
       </>}
       {/* In the main script, only a region's Generate. */}
       {(advanced || tool) && <>
