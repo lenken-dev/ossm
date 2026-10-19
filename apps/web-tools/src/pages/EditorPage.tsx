@@ -1111,8 +1111,8 @@ export default function EditorPage() {
   const carrying = useRef(false);
   /** Set on a drag's release, to put in what it carried, or by Done, to put in its result; see where it is used. */
   const [settle, setSettle] = useState<"drop" | "try" | null>(null);
-  /** While a selection that is not consecutive is dragged in place, the points as they were, which of them move, its regions as they were, drawn dashed, and the point dragged by, else the first, as it was. */
-  const [apart, setApart] = useState<{ actions: Action[]; moving: Set<number>; regions: Region[]; grip?: Action } | null>(null);
+  /** While a selection that is not consecutive is dragged in place, the points as they were, which of them move, its regions as they were, drawn dashed, and the point dragged by, else the first, as it was and, once moved, as it is `now`. */
+  const [apart, setApart] = useState<{ actions: Action[]; moving: Set<number>; regions: Region[]; grip?: Action; now?: Action } | null>(null);
   /** While one is dragged, puts it back where it was, for Escape. */
   const cancelApart = useRef<(() => void) | null>(null);
   /** Selection mode's box selects by time: it takes in whole stretches of the script, whatever their depth. */
@@ -1685,6 +1685,7 @@ export default function EditorPage() {
       last = { actions: next, picked: next.flatMap((a, j) => (times.has(a.at) && !regionAt(moved, a.at) ? [j] : [])), regions: moved };
       edit(`Move ${items(ps.length, rs)}`, (s) => ({ ...s, actions: next, regions: regions.map((r) => moved[rs.indexOf(r)] ?? r) }));
       select(last.picked, moved);
+      if (actions[grabbed]) setApart((a) => a && { ...a, now: { at: lead.at + dt, pos: lead.pos + dp } });
     };
     track(e.currentTarget.closest("svg")!, e, move, () => {
       cancelApart.current = null;
@@ -4136,8 +4137,8 @@ export default function EditorPage() {
 
   const light = lightChapters(chapters);
 
-  /** The selected point when there is just one, labelled with its time and position. */
-  const only = marks.size === 1 ? [...marks][0] : null;
+  /** The point labelled with its time and position: the one dragged by while moving, else the selected point when there is just one. */
+  const labelled = (placing?.grip !== undefined && landed ? landed[placing.grip] : apart?.now) ?? (marks.size === 1 ? shown[[...marks][0]] : undefined);
 
   const content = (
     <Flex direction="column" gap="3" p="3" height="100%">
@@ -4665,15 +4666,15 @@ export default function EditorPage() {
                 </g>
               );
             })()}
-            {only !== null && shown[only] && (
+            {labelled && (
               <text
-                x={x(shown[only].at)}
-                y={y(shown[only].pos) + (shown[only].pos > 80 ? 22 : -12)}
+                x={x(labelled.at)}
+                y={y(labelled.pos) + (labelled.pos > 80 ? 22 : -12)}
                 textAnchor="middle"
                 fontSize={12}
                 style={{ fill: "var(--gray-12)" }}
               >
-                {formatScriptTime((shown[only].at - zero) / 1000, 2)} · {Math.round(100 - shown[only].pos)}
+                {formatScriptTime((labelled.at - zero) / 1000, 2)} · {Math.round(100 - labelled.pos)}
               </text>
             )}
           </svg>
