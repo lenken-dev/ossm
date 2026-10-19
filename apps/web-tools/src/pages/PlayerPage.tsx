@@ -304,8 +304,8 @@ export default function PlayerPage() {
   const [configured, setConfigured] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [speedLimit, setSpeedLimit] = usePersistedState("ossm:playerSpeedLimit", DEFAULT_SPEED_LIMIT, localStorage);
-  /** Depth and stroke sliders in the controls, changed while playing; kept for the session only, as it risks going too deep. */
-  const [depthSliders, setDepthSliders] = usePersistedState("ossm:playerDepthSliders", false);
+  /** Depth and stroke sliders in the controls, changed while playing. */
+  const [depthSliders, setDepthSliders] = usePersistedState("ossm:playerDepthSliders", false, localStorage);
   const blocked = blockReason(ossm, state, configured, setupOpen);
   /**
    * Why the mode cannot change while it plays, or `null` when it can; the
@@ -337,13 +337,6 @@ export default function PlayerPage() {
     setConfigured(false);
     setSetupOpen(false);
   }, [ossm, mode]);
-
-  // The machine rests at home after homing; a depth of 0 starts the depth setup from there.
-  const lastState = useRef(state?.state);
-  useEffect(() => {
-    if (mode === "funscript" && lastState.current === "homing" && isHomed(state)) void ossm?.command("set:depth:0");
-    lastState.current = state?.state;
-  }, [mode, ossm, state]);
 
   // The setup's speed limit also holds for a speed raised while playing or a lowered limit.
   useEffect(() => {
@@ -1362,8 +1355,7 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSliders, set
                 <AlertDialog.Title>Change depth while playing?</AlertDialog.Title>
                 <AlertDialog.Description size="2">
                   The script plays between depth and stroke, so a depth that feels right in a shallow part of the
-                  script goes that much deeper once the script does. Raise it only a little at a time. The sliders
-                  stay until you close the browser.
+                  script goes that much deeper once the script does. Raise it only a little at a time.
                 </AlertDialog.Description>
                 <Flex gap="3" mt="4" justify="end">
                   <AlertDialog.Cancel>
