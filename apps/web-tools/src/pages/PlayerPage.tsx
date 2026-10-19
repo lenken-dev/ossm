@@ -27,7 +27,7 @@ import { formatScriptTime, parseFunscript, readFunscript, SENT_SCRIPT_KEY, type 
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
-import { markerColor, readMarkers, SectionHeader, Stats, stats, type Action } from "./EditorPage";
+import { lightChapters, markerColor, readMarkers, SectionHeader, Stats, stats, type Action } from "./EditorPage";
 
 type PlayerMode = "pattern" | "funscript";
 
@@ -1643,6 +1643,7 @@ function ScriptMinimap({ script, markers: { chapters, bookmarks }, speed, playhe
 
   const total = script.at[script.at.length - 1] || 1;
   const x = (at: number) => (at / total) * width;
+  const light = lightChapters(chapters);
   const points = useMemo(
     () => Array.from(script.at, (at, i) => `${(at / total) * width},${2 + (1 - (reverse ? 100 - script.pos[i] : script.pos[i]) / 100) * (MINIMAP_HEIGHT - 4)}`).join(" "),
     [script, reverse, total, width],
@@ -1691,7 +1692,7 @@ function ScriptMinimap({ script, markers: { chapters, bookmarks }, speed, playhe
     >
       {/* A run of touching chapters alternates light and dark, as in the editor. */}
       {chapters.map((c, i) => (
-        <rect key={`c${i}`} x={x(c.start)} width={x(c.end) - x(c.start)} height={MINIMAP_HEIGHT} style={{ fill: i % 2 && chapters[i - 1].end === c.start ? "var(--gray-a3)" : "var(--gray-a4)" }} />
+        <rect key={`c${i}`} x={x(c.start)} width={x(c.end) - x(c.start)} height={MINIMAP_HEIGHT} style={{ fill: light[i] ? "var(--gray-a3)" : "var(--gray-a4)" }} />
       ))}
       <polyline points={points} fill="none" stroke="#ec4899" strokeWidth={1} />
       {bookmarks.map((b, i) => (

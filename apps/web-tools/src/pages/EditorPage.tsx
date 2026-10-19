@@ -363,6 +363,14 @@ const MARKER_GRIP = 6;
 /** Bookmark colours, Radix scales; a bookmark's name picks one, so bookmarks named alike match. */
 const MARKER_COLORS = ["blue", "green", "orange", "purple", "cyan", "crimson", "amber", "teal"];
 export const markerColor = (name: string) => MARKER_COLORS[Math.abs([...name].reduce((h, c) => (h * 31 + c.codePointAt(0)!) | 0, 0)) % MARKER_COLORS.length];
+/**
+ * Which chapters are drawn light: those touching a dark one before them, so only
+ * a run of touching chapters alternates; less than 100 ms apart counts as touching.
+ */
+export const lightChapters = (chapters: { start: number; end: number }[]) => {
+  let lightBefore = false;
+  return chapters.map((c, i) => (lightBefore = i > 0 && c.start - chapters[i - 1].end < 100 && !lightBefore));
+};
 
 /** Default and smallest height of the reference video, in px. */
 const VIDEO_HEIGHT = 300;
@@ -4070,9 +4078,7 @@ export default function EditorPage() {
   /** Whether the time from `from` to `to` is in view, to draw only the markers there. */
   const inView = (from: number, to: number) => to >= view.from && from <= view.from + view.span;
 
-  /** Which chapters are drawn light: those touching a dark one before them, so only a run of touching chapters alternates. */
-  let lightBefore = false;
-  const light = chapters.map((c, i) => (lightBefore = i > 0 && chapters[i - 1].end === c.start && !lightBefore));
+  const light = lightChapters(chapters);
 
   /** The selected point when there is just one, labelled with its time and position. */
   const only = marks.size === 1 ? [...marks][0] : null;
