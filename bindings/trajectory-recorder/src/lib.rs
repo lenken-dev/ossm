@@ -1,6 +1,7 @@
 extern crate alloc;
 use alloc::string::String;
 
+mod follow;
 mod recorder;
 mod stream_recorder;
 
