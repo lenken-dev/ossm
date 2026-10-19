@@ -3722,7 +3722,7 @@ export default function EditorPage() {
       })()}
       {/* The fastest full strokes the machine follows at a target speed and sensation, from the firmware's motion. */}
       <Separator size="4" />
-      <SectionHeader title="Calculator" open={calcShown} setOpen={setCalcShown} summary={`${calcMax ?? "…"}/s max`} />
+      <SectionHeader title="Speed Calculator" open={calcShown} setOpen={setCalcShown} summary={`${calcMax ?? "…"}/s max`} />
       {calcShown && <>
         {/* Typing keeps the last range from 10 mm on. */}
         <TextField.Root type="number" min={10} step="any" aria-label="Machine range" defaultValue={rangeMm} onChange={(e) => Number(e.target.value) >= 10 && setRangeMm(Number(e.target.value))}>

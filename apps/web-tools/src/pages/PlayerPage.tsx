@@ -756,7 +756,7 @@ export default function PlayerPage() {
               {statsOpen && <Stats actions={playedActions} picked={[...playedActions.keys()]} size="2" />}
               <Separator size="4" />
             </>}
-            <SectionHeader title="Calculator" open={calcOpen} setOpen={setCalcOpen} />
+            <SectionHeader title="Speed Calculator" open={calcOpen} setOpen={setCalcOpen} />
             {calcOpen && <>
               {/* Typing keeps the last range from 10 mm on. */}
               <TextField.Root type="number" min={10} step="any" aria-label="Machine range" defaultValue={rangeMm} onChange={(e) => Number(e.target.value) >= 10 && setRangeMm(Number(e.target.value))}>
