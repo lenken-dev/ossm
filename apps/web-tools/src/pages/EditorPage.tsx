@@ -831,7 +831,22 @@ function rangeParams(fields: { from: string; to: string; out: string; in: string
 /** Generate's range fields for `area`, its times in seconds from `zero`, its positions as depths. */
 const rangeFields = (area: Area, zero: number) => ({ from: String((area.from - zero) / 1000), to: String((area.to - zero) / 1000), out: String(100 - area.high), in: String(100 - area.low) });
 
-type ToolKind = "scale" | "shift" | "invert" | "speed" | "generate" | "repeat";
+/** The grid tool's fields as typed: its time interval in seconds, its depth interval and its own depths. */
+type GridFields = { time: string; depth: string; depths: string };
+
+/**
+ * The grid tool's fields as numbers: the time interval in ms, null unless
+ * positive, and the positions of its depths, whole: the depth interval's
+ * multiples from 0 and the listed ones, those outside 0–100 left out.
+ */
+function gridParams(fields: GridFields) {
+  const [step, every] = [Math.round(typed(fields.time) * 1000), typed(fields.depth)];
+  const multiples = every > 0 ? Array.from({ length: Math.floor(100 / every) + 1 }, (_, k) => k * every) : [];
+  const depths = [...multiples, ...fields.depths.split(/[\s,;]+/).map(typed)].filter((d) => d >= 0 && d <= 100);
+  return { step: step > 0 ? step : null, positions: [...new Set(depths.map((d) => 100 - Math.round(d)))] };
+}
+
+type ToolKind = "scale" | "shift" | "invert" | "speed" | "generate" | "repeat" | "grid";
 
 /** The advanced editor's tools: their names, undo labels, and the before and after strokes of their small graphs, 56×24. */
 const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after: string }[] = [
@@ -843,6 +858,8 @@ const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after
   { kind: "generate", name: "Generate", verb: "Generate", before: "4,8 6,7 8,6 10,5.2 12,4.5 14,4.1 16,4 18,4.1 20,4.5 22,5.2 24,6 26,7 28,8 30,9 32,10 34,10.8 36,11.5 38,11.9 40,12 42,11.9 44,11.5 46,10.8 48,10 50,9 52,8", after: "4,20 8,6 12,20 16,4 20,20 24,6 28,20 32,10 36,20 40,12 44,20 48,10 52,20" },
   // The pattern in pink, then its two copies in grey.
   { kind: "repeat", name: "Repeat", verb: "Repeat", before: "20,20 24,6 28,20 32,12 36,20 40,6 44,20 48,12 52,20", after: "4,20 8,6 12,20 16,12 20,20" },
+  // The grid in grey, as one line, and strokes on its crossings.
+  { kind: "grid", name: "Grid", verb: "", before: "4,4 52,4 52,12 4,12 4,20 52,20 52,4 40,4 40,20 28,20 28,4 16,4 16,20 4,20 4,4", after: "4,20 16,4 28,12 40,4 52,20" },
 ];
 
 /** A marker time from a file, in ms: ms as a number or `"HH:MM:SS.mmm"`; null when unusable. */
@@ -1167,6 +1184,15 @@ export default function EditorPage() {
   }, [script.bookmarks.length, setOnMarkers]);
   /** The time shown as 0. */
   const zero = advanced && fromZero ? advanced.zero : 0;
+  /** The grid tool is open; unlike the other tools, editing goes on, points added, dragged and placed snapping to it. */
+  const [gridOpen, setGridOpen] = useState(false);
+  const [gridFields, setGridFields] = usePersistedState<GridFields>("ossm:editorGrid", { time: "1", depth: "10", depths: "" }, localStorage);
+  /** The grid, while its tool is open in the advanced editor and no other tool is. */
+  const grid = advanced && gridOpen && !tool ? gridParams(gridFields) : null;
+  /** `at` on the nearest of the grid's times, counted from the time shown as 0; as it is without them. */
+  const gridAt = (at: number) => (grid?.step ? zero + Math.round((at - zero) / grid.step) * grid.step : at);
+  /** `pos` on the nearest of the grid's depths; as it is without any. */
+  const gridPos = (pos: number) => (grid?.positions.length ? grid.positions.reduce((a, b) => (Math.abs(b - pos) < Math.abs(a - pos) ? b : a)) : pos);
   const [steps, setSteps] = usePersistedState("ossm:editorSteps", DEFAULT_STEPS, localStorage);
   /** The steps in use; a first step that is not a positive number falls back to the default. */
   const shownSteps = steps.map(Number).map((v, i) => (v > 0 ? v : i === 0 ? Number(DEFAULT_STEPS[0]) : null)).filter((v) => v !== null);
@@ -1647,8 +1673,10 @@ export default function EditorPage() {
       const lock = m.ctrlKey || m.metaKey;
       setHeld({ shift: m.shiftKey, ctrl: lock });
       const up = Math.abs(y(p.pos) - y(origin.pos)) > Math.abs(x(p.at) - x(origin.at));
-      const dt = lock && up ? 0 : clamp(p.at - origin.at, dtMin, dtMax);
-      const dp = rs.length || (lock && !up) ? 0 : clamp(p.pos - origin.pos, -Math.min(...depths), 100 - Math.max(...depths));
+      // The point dragged by, or the first region's start, goes on the grid.
+      const lead = actions[grabbed] ?? { at: rs[0].from, pos: 0 };
+      const dt = lock && up ? 0 : clamp(gridAt(lead.at + p.at - origin.at) - lead.at, dtMin, dtMax);
+      const dp = rs.length || (lock && !up) ? 0 : clamp(gridPos(lead.pos + p.pos - origin.pos) - lead.pos, -Math.min(...depths), 100 - Math.max(...depths));
       const moved = rs.map((r) => movedBy(r, dt));
       const shifted = actions.map((a, i) => (!moving.has(i) ? a : { at: a.at + dt, pos: own.has(i) ? a.pos + dp : a.pos }));
       // A moved Markers region's points go on the bookmarks in its new box; the selected points are found again by their times.
@@ -2447,7 +2475,10 @@ export default function EditorPage() {
       if (marked.size || overLane.current) selectMarkers(bookmarks);
       else select([...actions.keys()].filter((i) => !regionAt(regions, actions[i].at)), regions);
     } else if (e.key === "Escape") {
-      if (!discard()) {
+      // What is pending goes first, then the grid, then the selection.
+      if (discard()) return;
+      if (gridOpen) setGridOpen(false);
+      else {
         select([]);
         setMarked(new Set());
         setBox(null);
@@ -2569,8 +2600,9 @@ export default function EditorPage() {
     if (now.chapters !== was.chapters || now.bookmarks !== was.bookmarks) setMain((m) => ({ ...m, actions: now.actions }));
     mainTimeline.current = null;
     setAdvanced(null);
-    // Cancelled, an open tool goes too, unapplied.
+    // Cancelled, an open tool goes too, unapplied, and the grid.
     setTool(null);
+    setGridOpen(false);
     setBox(null);
     if (snippet) {
       if (done) saveSnippet(snippet.path ?? [name!], { actions: result, regions: made });
@@ -2803,16 +2835,17 @@ export default function EditorPage() {
    * shape and stay within 0–100, and their regions from 0 on. Only the picked
    * ones take the depth change, and none carrying regions, which keep their
    * depths, as the regions' boxes do. Locked, they keep their time instead
-   * where `upright`.
+   * where `upright`. The point dragged by, else the first, goes on the grid's depths.
    */
   const positioned = (at: number, pos: number, lock: boolean) => {
-    const { actions: shape, regions, picked, from } = placing!;
+    const { actions: shape, regions, picked, from, grip } = placing!;
     const keepTime = lock && upright(at, pos);
     const keepDepth = lock && !keepTime;
     if (keepTime) at = from!;
     const follows = (j: number) => !picked || picked.actions[j];
     const depths = shape.filter((_, j) => follows(j)).map((a) => a.pos);
-    const dp = keepDepth || regions.length || !depths.length ? 0 : clamp(pos - shape[0].pos, -Math.min(...depths), 100 - Math.max(...depths));
+    const lead = shape[grip ?? 0].pos;
+    const dp = keepDepth || regions.length || !depths.length ? 0 : clamp(gridPos(lead + pos - shape[0].pos) - lead, -Math.min(...depths), 100 - Math.max(...depths));
     const first = Math.max(at, 0, ...regions.map((r) => -r.from));
     return shape.map((a, j) => ({ at: first + a.at, pos: follows(j) ? a.pos + dp : a.pos }));
   };
@@ -2827,10 +2860,12 @@ export default function EditorPage() {
     return from !== undefined && Math.abs(y(pos) - y(shape[0].pos)) > Math.abs(x(at) - x(from));
   };
 
-  /** Placing on markers, the time `at` on the nearest bookmark out of the regions; as it is otherwise, or without one. */
+  /** The time `at` of the first point being placed: placing on markers, on the nearest bookmark out of the regions; else with the point dragged by, or the first, on the grid. */
   const snapAt = (at: number) => {
     const free = advanced && onMarkers ? bookmarks.filter((b) => !regionAt(keptRegions, b.time)) : [];
-    return free.length ? free.reduce((a, b) => (Math.abs(b.time - at) < Math.abs(a.time - at) ? b : a)).time : at;
+    if (free.length) return free.reduce((a, b) => (Math.abs(b.time - at) < Math.abs(a.time - at) ? b : a)).time;
+    const lead = placing!.actions[placing!.grip ?? 0].at;
+    return gridAt(at + lead) - lead;
   };
 
   /** The regions the points being placed carry, with the first point at `pasted`'s. */
@@ -3639,8 +3674,8 @@ export default function EditorPage() {
           <Callout.Text>{error}</Callout.Text>
         </Callout.Root>
       )}
-      {/* With a tool open, the panel only has the tool. */}
-      {!tool && <>
+      {/* With a tool open, the grid's too, the panel only has the tool. */}
+      {!tool && !gridOpen && <>
       <Text size="2" color="gray">
         {actions.length} points{selected.size > 1 && ` · ${selected.size} selected`} · {formatScriptTime((actions.length ? end - zero : 0) / 1000)}
       </Text>
@@ -3742,8 +3777,8 @@ export default function EditorPage() {
       </>}
       {/* In the main script, only a region's Generate. */}
       {(advanced || tool) && <>
-        {advanced && !tool && <Separator size="4" />}
-        {!tool ? <>
+        {advanced && !tool && !gridOpen && <Separator size="4" />}
+        {!tool && !gridOpen ? <>
           {/* The tools, on the selected points or all but the regions', each with a small graph of what it does; Generate needs none, Repeat a pattern of two selected. */}
           <Text size="2" weight="medium">Tools</Text>
           {TOOLS.map(({ kind, name, before, after }) => (
@@ -3751,9 +3786,9 @@ export default function EditorPage() {
               key={kind}
               variant="soft"
               color="gray"
-              disabled={(kind === "repeat" ? selected.size < 2 : kind !== "generate" && actions.every((a) => regionAt(regions, a.at))) || !!placing}
-              title={kind === "repeat" ? "Repeat the selected points, two or more" : undefined}
-              onClick={() => (kind === "invert" ? invert() : openTool(kind))}
+              disabled={(kind === "repeat" ? selected.size < 2 : kind !== "generate" && kind !== "grid" && actions.every((a) => regionAt(regions, a.at))) || !!placing}
+              title={kind === "repeat" ? "Repeat the selected points, two or more" : kind === "grid" ? "Snap points to a grid while it is open" : undefined}
+              onClick={() => (kind === "invert" ? invert() : kind === "grid" ? setGridOpen(true) : openTool(kind))}
               style={{ justifyContent: "flex-start" }}
             >
               <svg width="56" height="24" viewBox="0 0 56 24" fill="none" strokeWidth={1.5} strokeLinejoin="round">
@@ -3763,7 +3798,7 @@ export default function EditorPage() {
               {name}
             </Button>
           ))}
-        </> : <>
+        </> : tool ? <>
           <Flex gap="2" align="center">
             <IconButton size="1" variant="ghost" color="gray" aria-label="Back to the tools" title="Back to the tools (Escape)" onClick={() => setTool(null)}>
               <ArrowLeftIcon />
@@ -4029,10 +4064,31 @@ export default function EditorPage() {
               <Button variant="soft" color="gray" onClick={() => setTool(null)} style={{ flex: 1 }}>Discard</Button>
             </Flex>
           </Flex>
+        </> : <>
+          {/* The grid, without Apply: editing goes on while it is open. Escape in its fields closes it too, as a tool's. */}
+          <Flex gap="2" align="center">
+            <IconButton size="1" variant="ghost" color="gray" aria-label="Back to the tools" title="Back to the tools (Escape)" onClick={() => setGridOpen(false)}>
+              <ArrowLeftIcon />
+            </IconButton>
+            <Text size="2" weight="medium">Grid</Text>
+          </Flex>
+          <Text size="1" color="gray">Points added, dragged and placed go to the nearest line. Leave a field empty to not snap that way.</Text>
+          <Flex direction="column" gap="2" onKeyDown={(e) => e.key === "Escape" && setGridOpen(false)}>
+            <TextField.Root type="number" min={0} step="any" aria-label="Time interval" value={gridFields.time} onChange={(e) => setGridFields({ ...gridFields, time: e.target.value })}>
+              <TextField.Slot side="left">Time every</TextField.Slot>
+              <TextField.Slot side="right">s</TextField.Slot>
+            </TextField.Root>
+            <TextField.Root type="number" min={0} step="any" aria-label="Depth interval" value={gridFields.depth} onChange={(e) => setGridFields({ ...gridFields, depth: e.target.value })}>
+              <TextField.Slot side="left">Depth every</TextField.Slot>
+            </TextField.Root>
+            <TextField.Root aria-label="Depths" placeholder="33, 66" title="Depths of their own, apart by commas" value={gridFields.depths} onChange={(e) => setGridFields({ ...gridFields, depths: e.target.value })}>
+              <TextField.Slot side="left">Depths</TextField.Slot>
+            </TextField.Root>
+          </Flex>
         </>}
       </>}
-      {/* At the panel's bottom as a tool's Apply, which takes its place while a tool is open. */}
-      {!tool && (
+      {/* At the panel's bottom as a tool's Apply, which takes its place while a tool is open, or the grid. */}
+      {!tool && !gridOpen && (
         <Flex direction="column" gap="2" py="3" mb="-3" style={{ marginTop: "auto", position: "sticky", bottom: 0, background: "var(--color-background)" }}>
           {/* The sent stamp makes every send a change, which other tabs hear of. */}
           <Button variant="soft" disabled={actions.length < 2} title="Play these points in the player" onClick={sendToPlayer}>
@@ -4449,6 +4505,16 @@ export default function EditorPage() {
                 </text>
               </g>
             ))}
+            {/* The grid's lines while it is open; its times only while 4 px apart or more. */}
+            {grid && (
+              <g strokeDasharray="2 3" style={{ stroke: "var(--accent-a7)" }}>
+                {grid.positions.map((pos) => <line key={`gp${pos}`} x1={0} x2={width} y1={y(pos)} y2={y(pos)} />)}
+                {grid.step && (grid.step / view.span) * width >= 4 && (() => {
+                  const [k0, k1] = [Math.ceil((view.from - zero) / grid.step), Math.floor((view.from + view.span - zero) / grid.step)];
+                  return Array.from({ length: Math.max(k1 - k0 + 1, 0) }, (_, k) => zero + (k0 + k) * grid.step!).map((t) => <line key={`gt${t}`} x1={x(t)} x2={x(t)} y1={0} y2={plotHeight} />);
+                })()}
+              </g>
+            )}
             {/* Faint lines from the bookmarks in the lane up through the graph. */}
             {bookmarks.filter((b) => inView(b.time, b.time)).map((b, i) => (
               <line key={`b${i}`} x1={x(b.time)} x2={x(b.time)} y1={0} y2={height} style={{ stroke: `var(--${markerColor(b.name)}-a6)` }} />
