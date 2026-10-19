@@ -3639,6 +3639,12 @@ export default function EditorPage() {
             <TrashIcon /> Delete
           </Button>
         </Flex>
+        {/* Its points and generator regions, at the top level of the library. */}
+        <NamePopover initial={isInstance(region) ? region.snippet.name : region.name} taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions: actions.slice(byTime(actions, region.from), afterTime(actions, region.to)), regions: generators([region]) })}>
+          <Button variant="soft" color="gray" disabled={afterTime(actions, region.to) - byTime(actions, region.from) < 2} title="Save its points and regions to the snippet library">
+            <SnippetIcon /> Save as snippet
+          </Button>
+        </NamePopover>
       </>}
       </>}
       {/* In the main script, only a region's Generate. */}
