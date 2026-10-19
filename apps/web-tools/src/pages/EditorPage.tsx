@@ -3263,7 +3263,7 @@ export default function EditorPage() {
         {...(isFolder(e) ? dropInto(at) : {})}
         style={{ paddingLeft: depth * 16, minHeight: 28, borderRadius: 4, userSelect: "none", background: dropOn === key ? "var(--accent-a4)" : !advanced && rowsPicked.has(key) ? "var(--accent-a3)" : undefined }}
       >
-        {/* A snippet's name shows a preview beside the panel: its points, its regions' boxes behind, its length and point count. */}
+        {/* A snippet's name shows a preview beside the panel: its points, its regions' boxes behind, and their stats. */}
         <HoverCard.Root openDelay={300} closeDelay={0} open={isFolder(e) ? false : undefined}>
           <HoverCard.Trigger>
             <Flex
@@ -3281,9 +3281,9 @@ export default function EditorPage() {
           </HoverCard.Trigger>
           {!isFolder(e) && (
             <HoverCard.Content side="left" size="1">
-              <Flex direction="column" gap="1">
+              <Flex direction="column" gap="3">
                 <PreviewGraph pieces={[{ kind: "plain", points: e.actions }]} bands={generators(e.regions)} />
-                <Text size="1" color="gray">{formatScriptTime(e.actions[e.actions.length - 1].at / 1000)} · {points(e.actions.length)}</Text>
+                <Stats actions={e.actions} picked={[...e.actions.keys()]} size="1" />
               </Flex>
             </HoverCard.Content>
           )}
@@ -3670,18 +3670,10 @@ export default function EditorPage() {
         const on = selected.size || chosen.length;
         const picked = on ? [...new Set([...selected, ...chosen.flatMap(pointsOf)])].sort((a, b) => a - b) : [...actions.keys()];
         if (!picked.length) return null;
-        const { top, average, low, high, duration } = stats(actions, picked);
         return <>
           <Separator size="4" />
           <Heading size="3">{on ? "Selection stats" : "Stats"}</Heading>
-          <DataList.Root size="2">
-            {([["Max speed", `${Math.round(top)}/s`], ["Average speed", `${Math.round(average)}/s`], ["Min depth", 100 - high], ["Max depth", 100 - low], ["Duration", formatScriptTime(duration / 1000)], ["Points", picked.length]] as const).map(([label, value]) => (
-              <DataList.Item key={label}>
-                <DataList.Label color="gray">{label}</DataList.Label>
-                <DataList.Value>{value}</DataList.Value>
-              </DataList.Item>
-            ))}
-          </DataList.Root>
+          <Stats actions={actions} picked={picked} size="2" />
         </>;
       })()}
       </>}
@@ -5127,6 +5119,21 @@ function LanePreview({ lists }: { lists: [LaneItem[], LaneItem[]][] }) {
       {lines.slice(0, MARKER_DIFF_LINES).map((line, i) => <Text key={i} size="1" color="gray">{line}</Text>)}
       {lines.length > MARKER_DIFF_LINES && <Text size="1" color="gray">and {lines.length - MARKER_DIFF_LINES} more</Text>}
     </Flex>
+  );
+}
+
+/** The stats of the points `picked` of `actions`, sorted: speeds, depths, duration and count. */
+function Stats({ actions, picked, size }: { actions: Action[]; picked: number[]; size: "1" | "2" }) {
+  const { top, average, low, high, duration } = stats(actions, picked);
+  return (
+    <DataList.Root size={size}>
+      {([["Max speed", `${Math.round(top)}/s`], ["Average speed", `${Math.round(average)}/s`], ["Min depth", 100 - high], ["Max depth", 100 - low], ["Duration", formatScriptTime(duration / 1000)], ["Points", picked.length]] as const).map(([label, value]) => (
+        <DataList.Item key={label}>
+          <DataList.Label color="gray">{label}</DataList.Label>
+          <DataList.Value>{value}</DataList.Value>
+        </DataList.Item>
+      ))}
+    </DataList.Root>
   );
 }
 
