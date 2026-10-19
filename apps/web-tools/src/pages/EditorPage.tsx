@@ -9,7 +9,7 @@ import { LabeledSlider } from "../TrajectoryPanel";
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { GraphLayout } from "./GraphPage";
 
-interface Action {
+export interface Action {
   /** Time in ms. */
   at: number;
   /** 0 (deep end) to 100 (shallow end). */
@@ -380,7 +380,7 @@ const speed = (a: Action, b: Action) => (Math.abs(b.pos - a.pos) / (b.at - a.at)
 const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
 
 /** Stats of picked points, sorted; speeds only over moves between picked neighbours, the average their travel over their time. */
-function stats(actions: Action[], picked: number[]) {
+export function stats(actions: Action[], picked: number[]) {
   let low = Infinity, high = -Infinity, top = 0, travel = 0, time = 0;
   picked.forEach((i, k) => {
     const a = actions[i];
@@ -5155,7 +5155,7 @@ function LanePreview({ lists }: { lists: [LaneItem[], LaneItem[]][] }) {
 }
 
 /** A sidebar section's title, pressed to expand or collapse it; collapsed, `summary` at its end. */
-function SectionHeader({ title, open, setOpen, summary }: { title: string; open: boolean; setOpen: (open: boolean) => void; summary?: ReactNode }) {
+export function SectionHeader({ title, open, setOpen, summary }: { title: string; open: boolean; setOpen: (open: boolean) => void; summary?: ReactNode }) {
   return (
     <Flex
       align="center"
@@ -5175,7 +5175,7 @@ function SectionHeader({ title, open, setOpen, summary }: { title: string; open:
 }
 
 /** The stats of the points `picked` of `actions`, sorted: speeds, depths, duration and count. */
-function Stats({ actions, picked, size }: { actions: Action[]; picked: number[]; size: "1" | "2" }) {
+export function Stats({ actions, picked, size }: { actions: Action[]; picked: number[]; size: "1" | "2" }) {
   const { top, average, low, high, duration } = stats(actions, picked);
   return (
     <DataList.Root size={size}>

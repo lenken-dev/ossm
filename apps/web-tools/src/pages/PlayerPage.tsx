@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { AlertDialog, Box, Button, Callout, DataList, Dialog, Flex, Heading, IconButton, SegmentedControl, Select, Separator, Switch, Text, TextField, Theme, Tooltip } from "@radix-ui/themes";
 import {
   CheckIcon,
-  ChevronRightIcon,
   Cross2Icon,
   EnterFullScreenIcon,
   ExclamationTriangleIcon,
@@ -28,6 +27,7 @@ import { parseFunscript, readFunscript, SENT_SCRIPT_KEY, type Funscript } from "
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
+import { SectionHeader, Stats, stats, type Action } from "./EditorPage";
 
 type PlayerMode = "pattern" | "funscript";
 
@@ -480,6 +480,10 @@ export default function PlayerPage() {
   /** The Funscript and Graph sections of the controls show only their titles until expanded. */
   const [funscriptOpen, setFunscriptOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
+  /** The played script's points, for its stats. */
+  const playedActions = useMemo<Action[]>(() => played ? Array.from(played.at, (at, i) => ({ at, pos: played.pos[i] })) : [], [played]);
+  const playedAverage = useMemo(() => playedActions.length && stats(playedActions, [...playedActions.keys()]).average, [playedActions]);
   const [calcOpen, setCalcOpen] = useState(false);
   /** The calculator's machine range, in mm, shared with the editor's. */
   const [rangeMm, setRangeMm] = usePersistedState(RANGE_KEY, FIRMWARE_RANGE_MM, localStorage);
@@ -493,23 +497,6 @@ export default function PlayerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- its values, not the object made each render
   }, [calcOpen, played, scriptSpeed, rangeMm, calcSettings.depth, calcSettings.stroke, calcSettings.sensation, calcSettings.speed]));
   const needed = calc?.needed;
-  /** A section's title, pressed to expand or collapse it. */
-  const sectionHeader = (title: string, open: boolean, setOpen: (open: boolean) => void) => (
-    <Flex
-      align="center"
-      gap="2"
-      role="button"
-      tabIndex={0}
-      aria-expanded={open}
-      onClick={() => setOpen(!open)}
-      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpen(!open))}
-      style={{ cursor: "pointer", userSelect: "none" }}
-    >
-      <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} />
-      <Heading size="3">{title}</Heading>
-    </Flex>
-  );
-
   const media = videoUrl || silentUrl;
   const controls = (inPopout: boolean) => (
     <>
@@ -664,7 +651,7 @@ export default function PlayerPage() {
               </Button>
             )}
             <Separator size="4" />
-            {sectionHeader("Funscript", funscriptOpen, setFunscriptOpen)}
+            <SectionHeader title="Funscript" open={funscriptOpen} setOpen={setFunscriptOpen} />
             {funscriptOpen && <>
               <LabeledSlider
                 label="Script speed"
@@ -714,7 +701,13 @@ export default function PlayerPage() {
               </Text>
             </>}
             <Separator size="4" />
-            {sectionHeader("Calculator", calcOpen, setCalcOpen)}
+            {/* The played script's stats; collapsed, its average speed. */}
+            {played && <>
+              <SectionHeader title="Stats" open={statsOpen} setOpen={setStatsOpen} summary={!!playedAverage && `${Math.round(playedAverage)}/s avg`} />
+              {statsOpen && <Stats actions={playedActions} picked={[...playedActions.keys()]} size="2" />}
+              <Separator size="4" />
+            </>}
+            <SectionHeader title="Calculator" open={calcOpen} setOpen={setCalcOpen} />
             {calcOpen && <>
               {/* Typing keeps the last range from 10 mm on. */}
               <TextField.Root type="number" min={10} step="any" aria-label="Machine range" defaultValue={rangeMm} onChange={(e) => Number(e.target.value) >= 10 && setRangeMm(Number(e.target.value))}>
@@ -745,7 +738,7 @@ export default function PlayerPage() {
               </>}
             </>}
             <Separator size="4" />
-            {sectionHeader("Graph", graphOpen, setGraphOpen)}
+            <SectionHeader title="Graph" open={graphOpen} setOpen={setGraphOpen} />
             {graphOpen && <>
               {inTheater && (
                 <Text as="label" size="2" weight="medium">
