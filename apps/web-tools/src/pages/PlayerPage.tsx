@@ -995,7 +995,7 @@ export default function PlayerPage() {
                   }}
                   onPointerDown={(e) => dragOverlay(e, "nsew")}
                 >
-                  <ScriptPreview script={played} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
+                  <ScriptPreview script={played} chapters={markers.chapters} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
                   {arranging &&
                     RESIZE_HANDLES.map((h) => <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />)}
                   {/* Stops the pointer here, so pressing Done does not start a drag. */}
@@ -1081,7 +1081,7 @@ export default function PlayerPage() {
               </Flex>
             </Flex>
             <Box position="relative" flexShrink="0">
-              <ScriptPreview script={played} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
+              <ScriptPreview script={played} chapters={markers.chapters} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
               <Box
                 title="Drag to resize"
                 style={{
@@ -1403,12 +1403,13 @@ const POSITION_INTERVAL_MS = 100;
 
 /**
  * The script's raw points around the video time, redrawn every animation
- * frame. Works without a video (time 0). `notice` says why the machine does
- * not follow. The machine's planned position is a dot on the playhead, and
+ * frame, a line and the name where each chapter starts. Works without a
+ * video (time 0). `notice` says why the machine does not follow. The machine's planned position is a dot on the playhead, and
  * with `machineLine` also a line trailing it.
  */
-function ScriptPreview({ script, speed, playhead, reverse, videoRef, ossm, machineLine, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
+function ScriptPreview({ script, chapters, speed, playhead, reverse, videoRef, ossm, machineLine, notice, lineWidth, span: { before, after }, height: cssHeight, overlay }: {
   script: Funscript;
+  chapters: Markers["chapters"];
   /** Script time per video time; the script's points show at their video time. */
   speed: number;
   playhead: RefObject<Playhead>;
@@ -1448,6 +1449,10 @@ function ScriptPreview({ script, speed, playhead, reverse, videoRef, ossm, machi
     const isDark = overlaid || appearance === "dark";
     const gridColor = isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.15)";
     const playheadColor = isDark ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.7)";
+    const chapterColor = isDark ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.45)";
+    const labelBackground = overlaid ? "rgba(0,0,0,0.7)" : getComputedStyle(canvas).getPropertyValue("--color-panel-solid");
+    ctx.font = `11px ${getComputedStyle(canvas).fontFamily}`;
+    ctx.textBaseline = "middle";
     const lineColor = "#ec4899";
     const machineColor = "#22d3ee";
     const pad = 6;
@@ -1512,6 +1517,31 @@ function ScriptPreview({ script, speed, playhead, reverse, videoRef, ossm, machi
         ctx.fill();
       }
 
+      // Over the script's line, each in view with its name in a box against the line's top; over
+      // the video, a dark halo keeps the line visible on bright frames, as the playhead.
+      ctx.lineWidth = 1;
+      for (const c of chapters) {
+        if (c.start < from * speed || c.start > to * speed) continue;
+        const cx = Math.round(x(c.start / speed)) + 0.5;
+        ctx.strokeStyle = chapterColor;
+        if (overlaid) {
+          ctx.shadowColor = "black";
+          ctx.shadowBlur = 4;
+        }
+        ctx.beginPath();
+        ctx.moveTo(cx, 0);
+        ctx.lineTo(cx, height);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = labelBackground;
+        ctx.beginPath();
+        ctx.roundRect(cx, 2.5, Math.ceil(ctx.measureText(c.name).width) + 8, 16, 3);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = playheadColor;
+        ctx.fillText(c.name, cx + 4, 10.5);
+      }
+
       // Over the video, a dark halo keeps the playhead visible on bright frames.
       const px = Math.round(x(now));
       ctx.strokeStyle = playheadColor;
@@ -1558,7 +1588,7 @@ function ScriptPreview({ script, speed, playhead, reverse, videoRef, ossm, machi
       cancelAnimationFrame(frame);
       ossm?.removeEventListener("position", record);
     };
-  }, [script, speed, playhead, reverse, appearance, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
+  }, [script, chapters, speed, playhead, reverse, appearance, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
 
   /**
    * Drag the graph sideways to seek, as if grabbing the line; playback pauses
