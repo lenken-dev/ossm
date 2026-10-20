@@ -1178,8 +1178,7 @@ function PatternControls({ ossm, state }: {
         </Select.Root>
         {description && <Text size="1" color="gray" as="p" mt="1">{description}</Text>}
       </Box>
-      <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} ends={DEPTH_ENDS} />
-      <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} ends={STROKE_ENDS} />
+      <DepthStrokeSliders ossm={ossm} state={state} />
       <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
       <SettingSlider ossm={ossm} setting="sensation" label="Sensation" value={state.sensation} />
       <Button
@@ -1203,26 +1202,41 @@ function PatternControls({ ossm, state }: {
 }
 
 /**
- * A device setting (0–100). Follows the device's value, except that it shows
- * the user's latest value for a while after a change, so state reported
- * before the device applied it does not make the slider jump back. Only user
- * changes are written.
+ * `value`, except the user's latest value for a while after a change, so
+ * state reported before the device applied it does not make it jump back.
+ * Returns the value to show and the change handler.
  */
-function SettingSlider({ ossm, setting, label, value, max = 100, disabled, ends, onChange }: {
+function usePending(value: number): [number, (changed: number) => void] {
+  const [pending, setPending] = useState<number | null>(null);
+  const timer = useRef<number>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  return [pending ?? value, (changed) => {
+    setPending(changed);
+    clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setPending(null), PENDING_MS);
+  }];
+}
+
+/**
+ * A device setting (0–100). Follows the device's value, except that it shows
+ * the user's latest value for a while after a change (see {@link usePending}).
+ * Only user changes are written.
+ */
+function SettingSlider({ ossm, setting, label, value, pending, max = 100, disabled, ends, onChange }: {
   ossm: Ossm;
   setting: string;
   label: string;
   value: number;
+  /** The slider's {@link usePending} of `value`, for a parent that shows the value too. */
+  pending?: [number, (changed: number) => void];
   max?: number;
   disabled?: boolean;
   ends?: [string, string];
   /** Called after each write is queued. */
   onChange?: () => void;
 }) {
-  const [pending, setPending] = useState<number | null>(null);
-  const timer = useRef<number>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  const shown = pending ?? value;
+  const own = usePending(value);
+  const [shown, change] = pending ?? own;
 
   return (
     <LabeledSlider
@@ -1236,9 +1250,7 @@ function SettingSlider({ ossm, setting, label, value, max = 100, disabled, ends,
       ends={ends}
       onChange={(v) => {
         const rounded = Math.round(v * 10) / 10;
-        setPending(rounded);
-        clearTimeout(timer.current);
-        timer.current = window.setTimeout(() => setPending(null), PENDING_MS);
+        change(rounded);
         void ossm.command(`set:${setting}:${rounded}`);
         onChange?.();
       }}
@@ -1279,6 +1291,30 @@ function SpeedSlider({ ossm, value, limit, setLimit }: {
         </Dialog.Content>
       </Dialog.Root>
     </Flex>
+  );
+}
+
+/**
+ * The depth and stroke sliders, and the stroke length in mm of the values
+ * they show, on firmware that publishes its travel.
+ */
+function DepthStrokeSliders({ ossm, state, disabled, onDepth, onStroke }: {
+  ossm: Ossm;
+  state: OssmState;
+  disabled?: boolean;
+  onDepth?: () => void;
+  onStroke?: () => void;
+}) {
+  const depth = usePending(state.depth);
+  const stroke = usePending(state.stroke);
+  // The stroke is a share of the depth (`StrokeRange` in ossm/crates/stream-engine/src/range.rs).
+  const mm = ossm.travelMm === null ? null : (depth[0] / 100) * (stroke[0] / 100) * ossm.travelMm;
+  return (
+    <>
+      <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} pending={depth} ends={DEPTH_ENDS} disabled={disabled} onChange={onDepth} />
+      <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} pending={stroke} ends={STROKE_ENDS} disabled={disabled} onChange={onStroke} />
+      {mm !== null && <Text size="2" color="gray">Stroke length: {mm.toFixed(0)} mm</Text>}
+    </>
   );
 }
 
@@ -1325,8 +1361,6 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSliders, set
 
   const still = state.speed <= 0;
   const container = useContext(PortalContainer);
-  // The stroke is a share of the depth (`StrokeRange` in ossm/crates/stream-engine/src/range.rs).
-  const strokeMm = ossm.travelMm === null ? null : (state.depth / 100) * (state.stroke / 100) * ossm.travelMm;
   return (
     <Dialog.Root open onOpenChange={(open) => !open && close()}>
       <Dialog.Content maxWidth="420px" container={container}>
@@ -1337,9 +1371,7 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSliders, set
         </Dialog.Description>
         <Flex direction="column" gap="3">
           <SpeedSlider ossm={ossm} value={state.speed} limit={speedLimit} setLimit={setSpeedLimit} />
-          <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} ends={DEPTH_ENDS} disabled={still} onChange={() => track(0)} />
-          <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} ends={STROKE_ENDS} disabled={still} onChange={() => track(100)} />
-          {strokeMm !== null && <Text size="2" color="gray">Stroke length: {strokeMm.toFixed(0)} mm</Text>}
+          <DepthStrokeSliders ossm={ossm} state={state} disabled={still} onDepth={() => track(0)} onStroke={() => track(100)} />
           <Flex gap="2">
             <Button variant="soft" disabled={still} style={{ flex: 1 }} onClick={() => track(0)}>
               Move to depth
