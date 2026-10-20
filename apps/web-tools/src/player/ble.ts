@@ -152,8 +152,17 @@ export class Ossm extends EventTarget {
     return this.device.name ?? this.device.id;
   }
 
-  disconnect() {
+  /**
+   * Stop a stream or pattern first, so the machine halts now rather than once
+   * it notices the lost connection or runs out of points. Pending writes are
+   * dropped.
+   */
+  async disconnect() {
     this.userDisconnect = true;
+    for (const job of this.queue.splice(0)) job.reject(new Error("Disconnected"));
+    if (this.state && ["streaming", "playing", "paused"].includes(this.state.state)) {
+      await this.command("go:menu", "(disconnect)");
+    }
     this.device.gatt?.disconnect();
   }
 
@@ -307,7 +316,7 @@ export function useOssm() {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      ossmRef.current?.disconnect();
+      void ossmRef.current?.disconnect();
     };
   }, []);
 
@@ -318,7 +327,7 @@ export function useOssm() {
       const next = await Ossm.connect();
       if (!next) return;
       if (!mounted.current) {
-        next.disconnect();
+        void next.disconnect();
         return;
       }
       ossmRef.current = next;
@@ -339,7 +348,7 @@ export function useOssm() {
     }
   };
 
-  const disconnect = () => ossmRef.current?.disconnect();
+  const disconnect = () => void ossmRef.current?.disconnect();
 
   return { ossm, state, connecting, error, connect, disconnect };
 }
