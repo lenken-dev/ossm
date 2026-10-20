@@ -1932,6 +1932,16 @@ export default function EditorPage() {
 
   /** The indices of the points in `r`'s time. */
   const pointsOf = (r: Region) => Array.from({ length: afterTime(actions, r.to) - byTime(actions, r.from) }, (_, k) => byTime(actions, r.from) + k);
+  /** The selected points and regions' points, or all points, as the stats take them. */
+  const statsPicked = selected.size || chosen.length ? [...new Set([...selected, ...chosen.flatMap(pointsOf)])].sort((a, b) => a - b) : [...actions.keys()];
+  /** The speed setting the calculator's points need with its other settings. */
+  const calcNeeded = useFollow(useMemo(() => {
+    if (!calcShown || statsPicked.length < 2) return null;
+    const picked = statsPicked.map((i) => actions[i]);
+    const script = { name: "", at: Uint32Array.from(picked, (a) => a.at), pos: Float64Array.from(picked, (a) => a.pos) };
+    return { kind: "script" as const, script, rate: 1, settings: { rangeMm, depth: calcStroke / 100, stroke: 1, jerk: calcSensation / 100 }, speed: 1 };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the picked points follow from these
+  }, [calcShown, actions, selected, regionsOn, regions, rangeMm, calcStroke, calcSensation]))?.needed;
 
   /** Give the region `r` the name `name`. */
   const renameRegion = (r: Region, name: string) => {
@@ -3798,7 +3808,7 @@ export default function EditorPage() {
       {/* Stats of the selected points and regions' points, or of all points. */}
       {actions.length > 0 && (() => {
         const on = selected.size || chosen.length;
-        const picked = on ? [...new Set([...selected, ...chosen.flatMap(pointsOf)])].sort((a, b) => a - b) : [...actions.keys()];
+        const picked = statsPicked;
         if (!picked.length) return null;
         const average = !statsShown && stats(actions, picked).average;
         return <>
@@ -3822,9 +3832,16 @@ export default function EditorPage() {
         <LabeledSlider label="Sensation" value={calcSensation} display={`${calcSensation}%`} min={0} max={100} step={1} ends={["Smooth", "Hard"]} onChange={setCalcSensation} />
         <DataList.Root size="2">
           <DataList.Item>
-            <DataList.Label color="gray">Max speed</DataList.Label>
+            <DataList.Label color="gray">Max funscript speed</DataList.Label>
             <DataList.Value>{calcMax ?? "…"}/s</DataList.Value>
           </DataList.Item>
+          {/* Of the stats' points, at least two. */}
+          {statsPicked.length > 1 && (
+            <DataList.Item title={`The lowest speed at which the machine reaches 95% of the ${selected.size || chosen.length ? "selected" : "script's"} points on time, with the stroke range and sensation above.${calcNeeded === null ? " Raise the sensation or shorten the stroke range." : ""}`}>
+              <DataList.Label color="gray">Machine speed needed</DataList.Label>
+              <DataList.Value>{calcNeeded === undefined ? "…" : calcNeeded === null ? "Over 100%" : `${calcNeeded}%`}</DataList.Value>
+            </DataList.Item>
+          )}
         </DataList.Root>
       </>}
       </>}
