@@ -2735,11 +2735,8 @@ export default function EditorPage() {
     return under(p, from) ? JSON.stringify([...to, ...p.slice(from.length)]) : k;
   }));
 
-  /** Add an empty folder `name` in the folder at `path`, and open that. */
-  const addFolder = (path: string[], name: string) => {
-    setLibrary(`Add folder "${name}"`, (lib) => updatedAt(lib, path, (items) => [...items, { folder: name, items: [] }]));
-    if (path.length) setOpenFolders((keys) => [...new Set([...keys, JSON.stringify(path)])]);
-  };
+  /** Add an empty folder `name` at the top level. */
+  const addFolder = (name: string) => setLibrary(`Add folder "${name}"`, (lib) => [...lib, { folder: name, items: [] }]);
 
   const renameEntry = (path: string[], name: string) => {
     const old = path[path.length - 1];
@@ -3354,7 +3351,7 @@ export default function EditorPage() {
    * The library's rows in the folder at `path`, `depth` deep, an open
    * folder's rows after it, each added to `shownRows`. In the main script
    * rows are selected, and dragged onto a folder row to move them there, and
-   * a row has Rename and Delete; a folder's New folder, a snippet's Edit.
+   * a row has Rename and Delete, a snippet's also Edit.
    * Everywhere a snippet's row is dragged onto the graph to insert it.
    */
   const shownRows: string[] = [];
@@ -3399,11 +3396,6 @@ export default function EditorPage() {
             </HoverCard.Content>
           )}
         </HoverCard.Root>
-        {!advanced && isFolder(e) && (
-          <NamePopover taken={(n) => nameTaken(at, n)} onName={(n) => addFolder(at, n)}>
-            <IconButton size="1" variant="ghost" color="gray" aria-label="New folder in it" title="New folder in it"><PlusIcon /></IconButton>
-          </NamePopover>
-        )}
         {!advanced && !isFolder(e) && (
           <IconButton size="1" variant="ghost" color="gray" disabled={!!placing} aria-label="Edit" title="Edit it in the advanced editor" onClick={() => openAdvanced({ path: at })}><MixerHorizontalIcon /></IconButton>
         )}
@@ -3427,7 +3419,7 @@ export default function EditorPage() {
         <Button size="1" variant="soft" color="gray" disabled={!!placing} title="Make a snippet in the advanced editor" onClick={() => openAdvanced({ path: null })}>
           <PlusIcon /> New snippet
         </Button>
-        <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => addFolder([], n)}>
+        <NamePopover taken={(n) => nameTaken([], n)} onName={addFolder}>
           <Button size="1" variant="soft" color="gray"><PlusIcon /> New folder</Button>
         </NamePopover>
         <Button size="1" variant="soft" color="gray" disabled={!library.length} title="Save the library to a file" onClick={exportLibrary}>
