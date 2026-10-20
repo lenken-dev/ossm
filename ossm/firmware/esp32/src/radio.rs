@@ -1,7 +1,7 @@
 use embassy_executor::Spawner;
 use esp_hal::peripherals::BT;
 use esp_radio::ble::controller::BleConnector;
-use ossm::MotionObserver;
+use ossm::{MotionLimits, MotionObserver};
 use pattern_engine::PatternSender;
 
 use crate::mk_static;
@@ -11,6 +11,7 @@ pub fn start(
     bt: BT<'static>,
     patterns: &'static PatternSender,
     motion: &'static MotionObserver,
+    limits: &MotionLimits,
 ) {
     let radio = &*mk_static!(
         esp_radio::Controller<'static>,
@@ -21,5 +22,5 @@ pub fn start(
         .expect("Could not create BleConnector");
     // No streaming on this firmware yet: the OSSM-Lite service is not
     // advertised and ignores streamed points.
-    ble_remote::start(spawner, connector, patterns, None, motion);
+    ble_remote::start(spawner, connector, patterns, None, motion, limits);
 }

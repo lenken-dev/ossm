@@ -149,7 +149,7 @@ where
 
     indicator::start(&spawner, indicator, motion_observer, pattern_observer);
 
-    radio::start(&spawner, config.bt, patterns, motion_observer);
+    radio::start(&spawner, config.bt, patterns, motion_observer, &limits);
 
     runner.run(&motion, AnyPattern::all_builtin(), Delay).await
 }

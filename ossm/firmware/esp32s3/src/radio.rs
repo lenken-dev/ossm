@@ -55,5 +55,5 @@ pub fn start(
 
     let connector =
         BleConnector::new(radio, bt, Default::default()).expect("Could not create BleConnector");
-    ble_remote::start(spawner, connector, patterns, Some(stream), motion);
+    ble_remote::start(spawner, connector, patterns, Some(stream), motion, limits);
 }

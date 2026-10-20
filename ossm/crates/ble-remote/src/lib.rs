@@ -23,7 +23,7 @@ use embassy_time::{Duration, Ticker, Timer};
 use esp_radio::ble::controller::BleConnector;
 use heapless::String;
 use log::{debug, error, info, warn};
-use ossm::MotionObserver;
+use ossm::{MotionLimits, MotionObserver};
 use pattern_engine::{EngineState, PatternInput, PatternSender, commands};
 use static_cell::StaticCell;
 use stream_engine::StreamSender;
@@ -40,6 +40,7 @@ const CURRENT_STATE_UUID: Uuid = uuid!("522b443a-4f53-534d-2000-420badbabe69");
 const CURRENT_POSITION_UUID: Uuid = uuid!("522b443a-4f53-534d-2010-420badbabe69");
 const PATTERN_LIST_UUID: Uuid = uuid!("522b443a-4f53-534d-3000-420badbabe69");
 const PATTERN_DESCRIPTION_UUID: Uuid = uuid!("522b443a-4f53-534d-3010-420badbabe69");
+const USABLE_TRAVEL_UUID: Uuid = uuid!("522b443a-4f53-534d-4000-420badbabe69");
 const STREAM_LOOKAHEAD_UUID: Uuid = uuid!("522b443a-4f53-534d-5000-420badbabe69");
 
 /// AD type of an incomplete list of 128-bit service UUIDs. The advertisement
@@ -86,6 +87,10 @@ struct OssmService {
 
     #[characteristic(uuid = PATTERN_DESCRIPTION_UUID, read, write)]
     pattern_description: String<MAX_PATTERN_LENGTH>,
+
+    /// Usable travel between the position limits, in mm with one decimal.
+    #[characteristic(uuid = USABLE_TRAVEL_UUID, read)]
+    usable_travel: String<8>,
 
     #[characteristic(uuid = STREAM_LOOKAHEAD_UUID, read)]
     stream_lookahead: String<{ stream::MAX_LOOKAHEAD_LENGTH }>,
@@ -154,7 +159,15 @@ pub fn start(
     patterns: &'static PatternSender,
     stream: Option<&'static StreamSender>,
     motion: &'static MotionObserver,
+    limits: &MotionLimits,
 ) {
+    let mut usable_travel = String::new();
+    let _ = write!(
+        usable_travel,
+        "{:.1}",
+        limits.max_position_mm - limits.min_position_mm
+    );
+
     let bt_controller: ExternalController<_, 20> = ExternalController::new(connector);
 
     let resources = mk_static!(HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX>, HostResources::new());
@@ -172,7 +185,14 @@ pub fn start(
     } = stack.build();
 
     spawner.must_spawn(ble_runner_task(runner));
-    spawner.must_spawn(ble_events_task(stack, peripheral, patterns, stream, motion));
+    spawner.must_spawn(ble_events_task(
+        stack,
+        peripheral,
+        patterns,
+        stream,
+        motion,
+        usable_travel,
+    ));
 
     info!("BLE remote tasks started, waiting for connection...");
 }
@@ -192,6 +212,7 @@ pub async fn ble_events_task(
     patterns: &'static PatternSender,
     stream: Option<&'static StreamSender>,
     motion: &'static MotionObserver,
+    usable_travel: String<8>,
 ) {
     info!("Starting advertising and GATT service");
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
@@ -199,6 +220,9 @@ pub async fn ble_events_task(
         appearance: &appearance::motorized_device::GENERIC_MOTORIZED_DEVICE,
     }))
     .unwrap();
+    server
+        .set(&server.ossm_service.usable_travel, &usable_travel)
+        .expect("Usable travel fits");
 
     loop {
         match advertise("OSSM-rs", &mut peripheral, stream.is_some()).await {
