@@ -1629,17 +1629,13 @@ export default function EditorPage() {
   };
 
   /**
-   * Drag a selection that is not consecutive, the points `ps` and the regions
-   * `rs`, once it has gone 3 px: in place and live, each staying between the
-   * other points and regions either side of it, from 0 on, so it passes none;
-   * to pass them, select the whole stretch. The selected points follow the
-   * pointer's depth, but not with a region. Ctrl (or Cmd) keeps their times
-   * while dragged further in depth than in time on screen, else their depths.
-   * Escape puts it back. One edit. Dragged by the point `grabbed`.
+   * The points `ps` and the regions `rs` moved in place: how far in time,
+   * each staying between the other points and regions either side of it,
+   * from 0 on, and in depth, within 0 to 100; and `shifted`, which moves them
+   * `dt` ms and the points `dp` in depth as one edit, selects them and
+   * returns the points, the selected ones among them and the regions.
    */
-  const dragApart = (e: PointerEvent<Element>, ps: number[], rs: Region[], grabbed = ps[0]) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const inPlace = (ps: number[], rs: Region[]) => {
     const own = new Set(ps);
     const moving = new Set(actions.flatMap((a, i) => (own.has(i) || regionAt(rs, a.at) ? [i] : [])));
     // What stops them: the other points and the other regions' edges.
@@ -1651,6 +1647,66 @@ export default function EditorPage() {
       dtMax = Math.min(dtMax, after === undefined ? Infinity : after - 1 - b);
     }
     const depths = ps.map((i) => actions[i].pos);
+    const shifted = (dt: number, dp: number) => {
+      const moved = rs.map((r) => movedBy(r, dt));
+      const points = actions.map((a, i) => (!moving.has(i) ? a : { at: a.at + dt, pos: own.has(i) ? a.pos + dp : a.pos }));
+      // A moved Markers region's points go on the bookmarks in its new box; the selected points are found again by their times.
+      const next = markersRegions(moved).reduce((list, r) => refilled(list, r, bookmarks), points);
+      const times = new Set(ps.map((i) => actions[i].at + dt));
+      const picked = next.flatMap((a, j) => (times.has(a.at) && !regionAt(moved, a.at) ? [j] : []));
+      edit(`Move ${items(ps.length, rs)}`, (s) => ({ ...s, actions: next, regions: regions.map((r) => moved[rs.indexOf(r)] ?? r) }));
+      select(picked, moved);
+      return { actions: next, picked, regions: moved };
+    };
+    return { moving, dtMin, dtMax, dpMin: -Math.min(...depths), dpMax: 100 - Math.max(...depths), shifted };
+  };
+
+  /**
+   * Move the selected points and regions in place one step with the arrow
+   * key `key`, the regions only in time. In time, the first point, or the
+   * first region's start, goes to the next of the whole 100 ms, with Shift
+   * 1 s, counted from the time shown as 0; of the grid's lines; or, placing
+   * on markers, the next bookmark out of the other regions; the next they can
+   * reach. In depth, by 1, with Shift 10, or to the grid's next depth. One
+   * edit per press.
+   */
+  const nudge = (key: string, far: boolean) => {
+    const ps = [...selected].sort((a, b) => a - b);
+    const { dtMin, dtMax, dpMin, dpMax, shifted } = inPlace(ps, chosen);
+    const sign = key === "ArrowRight" || key === "ArrowUp" ? 1 : -1;
+    const lead = actions[ps[0]] ?? { at: chosen[0].from, pos: 0 };
+    /** The nearest of `stops` past `from` the way it goes, as a change within `min` to `max`; 0 without one. */
+    const next = (from: number, stops: number[], min: number, max: number) => {
+      const d = stops.map((v) => v - from).filter((d) => d * sign > 0 && d >= min && d <= max);
+      return d.length ? d.reduce((a, b) => (Math.abs(b) < Math.abs(a) ? b : a)) : 0;
+    };
+    let [dt, dp] = [0, 0];
+    if (key === "ArrowLeft" || key === "ArrowRight") {
+      const free = advanced && onMarkers ? bookmarks.filter((b) => !regionAt(regions.filter((r) => !chosen.includes(r)), b.time)).map((b) => b.time) : [];
+      const every = grid?.step ?? (far ? 1000 : 100);
+      const lines = [-1, 0, 1].map((k) => zero + (Math.round((lead.at - zero) / every) + k) * every);
+      dt = next(lead.at, free.length ? free : lines, dtMin, dtMax);
+    } else if (ps.length && !chosen.length) {
+      dp = grid?.positions.length ? next(lead.pos, grid.positions, dpMin, dpMax) : clamp(sign * (far ? 10 : 1), dpMin, dpMax);
+    }
+    if (!dt && !dp) return;
+    const last = shifted(dt, dp);
+    if (boxMode) setBox(boxed(boxAround(last.picked.map((j) => last.actions[j]), last.regions)), last.actions);
+  };
+
+  /**
+   * Drag a selection that is not consecutive, the points `ps` and the regions
+   * `rs`, once it has gone 3 px: in place and live, each staying between the
+   * other points and regions either side of it, from 0 on, so it passes none;
+   * to pass them, select the whole stretch. The selected points follow the
+   * pointer's depth, but not with a region. Ctrl (or Cmd) keeps their times
+   * while dragged further in depth than in time on screen, else their depths.
+   * Escape puts it back. One edit. Dragged by the point `grabbed`.
+   */
+  const dragApart = (e: PointerEvent<Element>, ps: number[], rs: Region[], grabbed = ps[0]) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const { moving, dtMin, dtMax, dpMin, dpMax, shifted } = inPlace(ps, rs);
     const [start, origin, x0, y0] = [{ actions, regions }, pointerAt(e), e.clientX, e.clientY];
     /** Whether it has started, and whether Escape has put it back since. */
     let [live, done] = [false, false];
@@ -1676,15 +1732,8 @@ export default function EditorPage() {
       // The point dragged by, or the first region's start, goes on the grid.
       const lead = actions[grabbed] ?? { at: rs[0].from, pos: 0 };
       const dt = lock && up ? 0 : clamp(gridAt(lead.at + p.at - origin.at) - lead.at, dtMin, dtMax);
-      const dp = rs.length || (lock && !up) ? 0 : clamp(gridPos(lead.pos + p.pos - origin.pos) - lead.pos, -Math.min(...depths), 100 - Math.max(...depths));
-      const moved = rs.map((r) => movedBy(r, dt));
-      const shifted = actions.map((a, i) => (!moving.has(i) ? a : { at: a.at + dt, pos: own.has(i) ? a.pos + dp : a.pos }));
-      // A moved Markers region's points go on the bookmarks in its new box; the selected points are found again by their times.
-      const next = markersRegions(moved).reduce((list, r) => refilled(list, r, bookmarks), shifted);
-      const times = new Set(ps.map((i) => actions[i].at + dt));
-      last = { actions: next, picked: next.flatMap((a, j) => (times.has(a.at) && !regionAt(moved, a.at) ? [j] : [])), regions: moved };
-      edit(`Move ${items(ps.length, rs)}`, (s) => ({ ...s, actions: next, regions: regions.map((r) => moved[rs.indexOf(r)] ?? r) }));
-      select(last.picked, moved);
+      const dp = rs.length || (lock && !up) ? 0 : clamp(gridPos(lead.pos + p.pos - origin.pos) - lead.pos, dpMin, dpMax);
+      last = shifted(dt, dp);
       if (actions[grabbed]) setApart((a) => a && { ...a, now: { at: lead.at + dt, pos: lead.pos + dp } });
     };
     track(e.currentTarget.closest("svg")!, e, move, () => {
@@ -2459,7 +2508,8 @@ export default function EditorPage() {
 
   // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. Ctrl/Cmd+A selects all points but the regions', and the regions, or all bookmarks with markers
   // selected or over the marker lane; Escape none, Delete (or Backspace, the Mac's delete key) removes the selected ones; F2 renames the selected
-  // markers, B adds a bookmark, P hides or shows the player, also with a tool open. Not while typing in a field.
+  // markers, B adds a bookmark, P hides or shows the player, also with a tool open. The arrow keys move the selected points and regions, with Shift
+  // further. Not while typing in a field.
   // With a tool open, Escape (also in its fields) discards it, and only undo and redo do the same; other keys do nothing.
   useWindowEvent("keydown", (e) => {
     if (tool && e.key === "Escape") return setTool(null);
@@ -2484,6 +2534,9 @@ export default function EditorPage() {
         setMarked(new Set());
         setBox(null);
       }
+    } else if (e.key.startsWith("Arrow") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.defaultPrevented && !dragging && (selected.size || chosen.length)) {
+      e.preventDefault();
+      nudge(e.key, e.shiftKey);
     } else if (e.key === "s" && !e.ctrlKey && !e.metaKey) {
       toggleBoxMode();
     } else if ((e.key === "Delete" || e.key === "Backspace") && (selected.size || chosen.length)) {
