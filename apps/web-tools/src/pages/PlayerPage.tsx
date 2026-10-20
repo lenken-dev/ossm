@@ -181,7 +181,7 @@ export default function PlayerPage() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [silentUrl, setSilentUrl] = useState<string | null>(null);
   const [theater, setTheater] = useState(false);
-  const [showGraph, setShowGraph] = useState(true);
+  const [showGraph, setShowGraph] = usePersistedState("ossm:playerGraph", true, localStorage);
   const [showControls, setShowControls] = useState(true);
   const isMobile = useIsMobile();
   const [appearance] = useAppearance();
@@ -797,21 +797,19 @@ export default function PlayerPage() {
             <Separator size="4" />
             <SectionHeader title="Graph" open={graphOpen} setOpen={setGraphOpen} />
             {graphOpen && <>
-              {inTheater && (
-                <Text as="label" size="2" weight="medium">
-                  <Flex align="center" justify="between" gap="2">
-                    Show graph
-                    <Switch checked={showGraph} onCheckedChange={setShowGraph} />
-                  </Flex>
-                </Text>
-              )}
+              <Text as="label" size="2" weight="medium">
+                <Flex align="center" justify="between" gap="2">
+                  Show graph
+                  <Switch checked={showGraph} onCheckedChange={setShowGraph} />
+                </Flex>
+              </Text>
               <Text as="label" size="2" weight="medium">
                 <Flex align="center" justify="between" gap="2">
                   Show minimap
                   <Switch checked={inTheater ? theaterMinimap : minimap} onCheckedChange={inTheater ? setTheaterMinimap : setMinimap} />
                 </Flex>
               </Text>
-              {(!inTheater || showGraph) && (
+              {showGraph && (
                 <>
                   <LabeledSlider
                     label="Line width"
@@ -1088,7 +1086,7 @@ export default function PlayerPage() {
                 </Button>
               </Flex>
             </Flex>
-            <Box position="relative" flexShrink="0">
+            {showGraph && <Box position="relative" flexShrink="0">
               <ScriptPreview script={played} chapters={markers.chapters} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
               <Box
                 title="Drag to resize"
@@ -1104,7 +1102,7 @@ export default function PlayerPage() {
                 }}
                 onPointerDown={dragGraphHeight}
               />
-            </Box>
+            </Box>}
             {minimap && <ScriptMinimap script={played} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />}
           </>
         ) : (
