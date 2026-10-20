@@ -3804,14 +3804,14 @@ export default function EditorPage() {
         <Text size="2" color="gray">{points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
         <Flex gap="2">
           <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title={isInstance(region) ? "Edit its points and regions in the advanced editor (E, or double-click it)" : isRepeat(region) ? "Edit its pattern and setup with Repeat (E, or double-click it)" : "Edit its setup and box with Generate (E, or double-click it)"} onClick={() => editRegion(region)}>
-            <Pencil1Icon /> Edit
+            <MixerHorizontalIcon /> Edit
           </Button>
           <Button variant="soft" color="gray" style={{ flex: 1 }} title="Make its points ordinary points" onClick={() => unlockRegion(region)}>
             <LockOpen1Icon /> Unlock
           </Button>
-          <Button variant="soft" color="red" style={{ flex: 1 }} title="Delete it with its points (Delete)" onClick={() => removeSelected()}>
-            <TrashIcon /> Delete
-          </Button>
+          <IconButton variant="soft" color="red" aria-label="Delete" title="Delete it with its points (Delete)" onClick={() => removeSelected()}>
+            <TrashIcon />
+          </IconButton>
         </Flex>
         {/* Its points and generator regions, at the top level of the library. */}
         <NamePopover initial={isInstance(region) ? region.snippet.name : region.name} taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions: actions.slice(byTime(actions, region.from), afterTime(actions, region.to)), regions: generators([region]) })}>
