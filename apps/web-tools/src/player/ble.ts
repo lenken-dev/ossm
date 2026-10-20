@@ -8,6 +8,7 @@ const STATE = uuid("2000");
 const POSITION = uuid("2010");
 const PATTERN_LIST = uuid("3000");
 const PATTERN_DESCRIPTION = uuid("3010");
+const USABLE_TRAVEL = uuid("4000");
 const STREAM_LOOKAHEAD = uuid("5000");
 
 /** Pending writes above which the queue warns. */
@@ -83,6 +84,8 @@ export class Ossm extends EventTarget {
     readonly device: BluetoothDevice,
     /** Points the player may send beyond the one the machine is heading to; `0` cannot stream. */
     readonly lookahead: number,
+    /** Travel between the position limits in mm; `null` on firmware without it. */
+    readonly travelMm: number | null,
     private commandChar: BluetoothRemoteGATTCharacteristic,
     private stateChar: BluetoothRemoteGATTCharacteristic,
     private patternListChar: BluetoothRemoteGATTCharacteristic,
@@ -123,9 +126,15 @@ export class Ossm extends EventTarget {
         throw e;
       }
       const lookahead = Number(decode(await lookaheadChar.readValue())) || 0;
+      // Older firmware does not publish the travel.
+      const travelMm = await service
+        .getCharacteristic(USABLE_TRAVEL)
+        .then(async (char) => Number(decode(await char.readValue())))
+        .catch(() => NaN);
       const ossm = new Ossm(
         device,
         lookahead,
+        travelMm > 0 ? travelMm : null,
         await service.getCharacteristic(COMMAND),
         await service.getCharacteristic(STATE),
         await service.getCharacteristic(PATTERN_LIST),
@@ -135,6 +144,7 @@ export class Ossm extends EventTarget {
       );
       log(`connected to ${device.name ?? device.id}`);
       log(`look-ahead ${lookahead}`);
+      log(`travel ${ossm.travelMm ?? "unknown"} mm`);
       ossm.handleState(decode(await ossm.stateChar.readValue()));
       await subscribe(ossm.stateChar);
       if (ossm.positionChar) {

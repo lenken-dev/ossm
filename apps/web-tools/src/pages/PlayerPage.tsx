@@ -1318,6 +1318,8 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSliders, set
 
   const still = state.speed <= 0;
   const container = useContext(PortalContainer);
+  // The stroke is a share of the depth (`StrokeRange` in ossm/crates/stream-engine/src/range.rs).
+  const strokeMm = ossm.travelMm === null ? null : (state.depth / 100) * (state.stroke / 100) * ossm.travelMm;
   return (
     <Dialog.Root open onOpenChange={(open) => !open && close()}>
       <Dialog.Content maxWidth="420px" container={container}>
@@ -1330,6 +1332,7 @@ function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSliders, set
           <SpeedSlider ossm={ossm} value={state.speed} limit={speedLimit} setLimit={setSpeedLimit} />
           <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} ends={DEPTH_ENDS} disabled={still} onChange={() => track(0)} />
           <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} ends={STROKE_ENDS} disabled={still} onChange={() => track(100)} />
+          {strokeMm !== null && <Text size="2" color="gray">Stroke length: {strokeMm.toFixed(0)} mm</Text>}
           <Flex gap="2">
             <Button variant="soft" disabled={still} style={{ flex: 1 }} onClick={() => track(0)}>
               Move to depth
