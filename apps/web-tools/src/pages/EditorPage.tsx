@@ -965,9 +965,16 @@ function readEntries(list: unknown): Entry[] {
   });
 }
 
-/** Download `json` as the file `name`. */
-function download(json: string, name: string) {
-  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([json], { type: "application/json" })), download: name });
+/**
+ * `data` as JSON, indented, but an object or array that holds none on one
+ * line, as a point, so no line grows long with the script. Strings hold no
+ * line breaks there, so a bracket ending a line opens one.
+ */
+const pretty = (data: unknown) => JSON.stringify(data, null, 2).replace(/[{[]\n(?:[^"{}[\]]|"(?:[^"\\]|\\.)*")*\n *[}\]]/g, (m) => JSON.stringify(JSON.parse(m)));
+
+/** Download `data` as the JSON file `name`. */
+function download(data: unknown, name: string) {
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([pretty(data)], { type: "application/json" })), download: name });
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -2848,7 +2855,7 @@ export default function EditorPage() {
   };
 
   /** The library as a file: every snippet and folder. */
-  const exportLibrary = () => download(JSON.stringify(libraryFile), "snippets.json");
+  const exportLibrary = () => download(libraryFile, "snippets.json");
 
   /** Merge a library file into the library: folders of the same name merge, a taken name gets " (2)"; malformed entries go. */
   const importLibrary = async (file: File) => {
@@ -3133,7 +3140,7 @@ export default function EditorPage() {
     // Into the opened file's "ossmRsWebTools", our own key; the regions only when there are some or the file had them.
     const ossmRsWebTools = { ...(file.ossmRsWebTools as Record<string, unknown> | undefined) };
     if (regions.length || "regions" in ossmRsWebTools) Object.assign(ossmRsWebTools, { version: 1, regions: [...regions].sort((a, b) => a.from - b.from) });
-    const json = JSON.stringify({
+    download({
       version: "1.0",
       inverted: false,
       range: 100,
@@ -3141,8 +3148,7 @@ export default function EditorPage() {
       actions,
       ...(Object.keys(metadata).length || "metadata" in file ? { metadata } : {}),
       ...(Object.keys(ossmRsWebTools).length || "ossmRsWebTools" in file ? { ossmRsWebTools } : {}),
-    });
-    download(json, `${script.name || "untitled"}.funscript`);
+    }, `${script.name || "untitled"}.funscript`);
     setSaved(script);
   };
 
