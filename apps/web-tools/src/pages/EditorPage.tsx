@@ -8,6 +8,7 @@ import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../S
 import { LabeledSlider } from "../TrajectoryPanel";
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { GraphLayout } from "./GraphPage";
+import presetsFile from "./presets.json";
 
 export interface Action {
   /** Time in ms. */
@@ -185,10 +186,10 @@ const entryAt = (lib: Entry[], path: string[]) => itemsAt(lib, path.slice(0, -1)
 const updatedAt = (lib: Entry[], path: string[], f: (items: Entry[]) => Entry[]): Entry[] =>
   path.length ? lib.map((e) => (isFolder(e) && e.folder === path[0] ? { ...e, items: updatedAt(e.items, path.slice(1), f) } : e)) : f(lib);
 
-/** `items` with `incoming` merged in: a folder into the one of the same name, the rest under a free name, " (2)" on. */
+/** `items` with `incoming` merged in: a folder into the one of the same name, but a preset, the rest under a free name, " (2)" on. */
 function merged(items: Entry[], incoming: Entry[]): Entry[] {
   return incoming.reduce((list, e) => {
-    const same = isFolder(e) && list.find((o): o is Folder => isFolder(o) && o.folder === e.folder);
+    const same = isFolder(e) && list.find((o): o is Folder => isFolder(o) && o.folder === e.folder && !PRESETS.includes(o));
     if (same && isFolder(e)) return list.map((o) => (o === same ? { ...same, items: merged(same.items, e.items) } : o));
     let name = entryName(e);
     for (let k = 2; list.some((o) => entryName(o) === name); k++) name = `${entryName(e)} (${k})`;
@@ -965,6 +966,10 @@ function readEntries(list: unknown): Entry[] {
   });
 }
 
+/** The library's built-in entries, at its top level before the user's; they and all in them can't be changed, moved, or added to. */
+const PRESETS = readEntries(presetsFile.ossmRsWebTools.snippets);
+const isPreset = (path: string[]) => PRESETS.some((e) => entryName(e) === path[0]);
+
 /**
  * `data` as JSON, indented, but an object or array that holds none on one
  * line, as a point, so no line grows long with the script. Strings hold no
@@ -1019,6 +1024,8 @@ export default function EditorPage() {
   /** The snippet library, shared by all scripts, as its file holds it. */
   const [libraryFile, setLibraryFile] = usePersistedState<LibraryFile>("ossm:editorSnippets", { ossmRsWebTools: { version: 1, snippets: [] } }, localStorage);
   const library = libraryFile.ossmRsWebTools.snippets;
+  /** The library as it shows: the presets, then the user's entries. */
+  const shelf = [...PRESETS, ...library];
   /** Change the snippet library as an edit called `label`. */
   const setLibrary = (label: string, f: (lib: Entry[]) => Entry[]) => {
     editLabel.current = label;
@@ -2726,7 +2733,7 @@ export default function EditorPage() {
   };
 
   /** Whether the folder at `folder` has an entry named `name`. */
-  const nameTaken = (folder: string[], name: string) => itemsAt(library, folder).some((e) => entryName(e) === name);
+  const nameTaken = (folder: string[], name: string) => itemsAt(shelf, folder).some((e) => entryName(e) === name);
 
   /** Save `clip` to the library as the snippet at `path`, timed from its first point, in place of one there. */
   const saveSnippet = (path: string[], clip: Clip) => {
@@ -2770,10 +2777,10 @@ export default function EditorPage() {
   /** Of the entries at `from`, those not in the folder at `to` already. */
   const outside = (from: string[][], to: string[]) => from.filter((p) => JSON.stringify(p.slice(0, -1)) !== JSON.stringify(to));
 
-  /** Whether the entries at `from` may go into the folder at `to`: not all there already, none into itself, and none onto a name taken there or by another of them. */
+  /** Whether the entries at `from` may go into the folder at `to`: not all there already, none into itself, none onto a name taken there or by another of them, and no preset nor into one. */
   const movable = (from: string[][], to: string[]) => {
     const names = outside(from, to).map((p) => p[p.length - 1]);
-    return !!names.length && new Set(names).size === names.length && from.every((p) => !under(to, p)) && !names.some((n) => nameTaken(to, n));
+    return !!names.length && !isPreset(to) && !from.some(isPreset) && new Set(names).size === names.length && from.every((p) => !under(to, p)) && !names.some((n) => nameTaken(to, n));
   };
 
   /** Move the entries at `from` into the folder at `to`, the ones there already staying; selected there after. */
@@ -2823,7 +2830,7 @@ export default function EditorPage() {
     const key = JSON.stringify(at);
     if (!advanced && (e.ctrlKey || e.metaKey || e.shiftKey)) return rowPicked(e, key, shown);
     // The selected entries still there, but those in a selected folder, which go with it.
-    const picked = [...rowsPicked].map((k) => JSON.parse(k) as string[]).filter((p) => entryAt(library, p));
+    const picked = [...rowsPicked].map((k) => JSON.parse(k) as string[]).filter((p) => entryAt(shelf, p));
     const paths = !advanced && rowsPicked.has(key) ? picked.filter((p) => !picked.some((o) => o !== p && under(p, o))) : [at];
     if (!advanced && !rowsPicked.has(key)) setRowsPicked(new Set([key]));
     const [x, y] = [e.clientX, e.clientY];
@@ -2863,7 +2870,8 @@ export default function EditorPage() {
       const parsed = JSON.parse(await file.text()) as { ossmRsWebTools?: { snippets?: unknown } } | null;
       if (!Array.isArray(parsed?.ossmRsWebTools?.snippets)) throw new Error();
       const read = readEntries(parsed.ossmRsWebTools.snippets);
-      setLibrary(`Import ${file.name}`, (lib) => merged(lib, read));
+      // A top-level name of a preset goes on as " (2)".
+      setLibrary(`Import ${file.name}`, (lib) => merged([...PRESETS, ...lib], read).slice(PRESETS.length));
       setError(null);
     } catch {
       setError(`${file.name} is not a snippet library.`);
@@ -3367,7 +3375,7 @@ export default function EditorPage() {
    * The library's rows in the folder at `path`, `depth` deep, an open
    * folder's rows after it, each added to `shownRows`. In the main script
    * rows are selected, and dragged onto a folder row to move them there, and
-   * a row has Rename and Delete, a snippet's also Edit.
+   * a row but a preset's has Rename and Delete, a snippet's also Edit.
    * Everywhere a snippet's row is dragged onto the graph to insert it.
    */
   const shownRows: string[] = [];
@@ -3412,10 +3420,10 @@ export default function EditorPage() {
             </HoverCard.Content>
           )}
         </HoverCard.Root>
-        {!advanced && !isFolder(e) && (
+        {!advanced && !isPreset(at) && !isFolder(e) && (
           <IconButton size="1" variant="ghost" color="gray" disabled={!!placing} aria-label="Edit" title="Edit it in the advanced editor" onClick={() => openAdvanced({ path: at })}><MixerHorizontalIcon /></IconButton>
         )}
-        {!advanced && <>
+        {!advanced && !isPreset(at) && <>
           <NamePopover initial={name} taken={(n) => n !== name && nameTaken(path, n)} onName={(n) => n !== name && renameEntry(at, n)}>
             <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
           </NamePopover>
@@ -3426,7 +3434,7 @@ export default function EditorPage() {
     return [row, ...(open ? libraryRows((e as Folder).items, at, depth + 1) : [])];
   });
 
-  const shownLibrary = snippetQuery ? matching(library, snippetQuery) : library;
+  const shownLibrary = snippetQuery ? matching(shelf, snippetQuery) : shelf;
   /** The Snippets panel, beside the graph: the library as a tree; in the main script, its top area takes rows dropped to the top level. */
   const snippetsPanel = <Flex direction="column" gap="3" p="3">
     <Flex direction="column" gap="2" {...dropInto([])} style={{ borderRadius: 4, background: dropOn === "[]" ? "var(--accent-a4)" : undefined }}>
@@ -3445,20 +3453,20 @@ export default function EditorPage() {
           <UploadIcon /> Import
         </Button>
       </Flex>}
-      {!!library.length && (
+      {!!shelf.length && (
         <TextField.Root size="1" placeholder="Search" aria-label="Search snippets" value={snippetQuery} onChange={(e) => setSnippetQuery(e.target.value)}>
           <TextField.Slot><MagnifyingGlassIcon /></TextField.Slot>
         </TextField.Root>
       )}
     </Flex>
     <Flex direction="column">
-      {shownLibrary.length ? libraryRows(shownLibrary, [], 0) : <Text size="1" color="gray">{library.length ? "No matches." : "No snippets yet."}</Text>}
+      {shownLibrary.length ? libraryRows(shownLibrary, [], 0) : <Text size="1" color="gray">{shelf.length ? "No matches." : "No snippets yet."}</Text>}
     </Flex>
     {/* The dragged row's icon and name follow the pointer; for several, the first's icon and their count. Outside the panel, where nothing takes them, the cursor says so. */}
     {rowDrag && !rowDrag.inPanel && !placing && <style>{"* { cursor: not-allowed !important; }"}</style>}
     {rowDrag && (
       <Flex align="center" gap="2" style={{ position: "fixed", left: rowDrag.x + 12, top: rowDrag.y + 12, pointerEvents: "none", zIndex: 1 }}>
-        {entryAt(library, rowDrag.paths[0]) && isFolder(entryAt(library, rowDrag.paths[0])!) ? <ChevronRightIcon /> : <SnippetIcon />}
+        {entryAt(shelf, rowDrag.paths[0]) && isFolder(entryAt(shelf, rowDrag.paths[0])!) ? <ChevronRightIcon /> : <SnippetIcon />}
         <Text size="2">{rowDrag.paths.length > 1 ? `${rowDrag.paths.length} entries` : rowDrag.paths[0][rowDrag.paths[0].length - 1]}</Text>
       </Flex>
     )}
