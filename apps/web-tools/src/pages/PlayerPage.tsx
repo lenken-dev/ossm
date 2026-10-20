@@ -576,7 +576,7 @@ export default function PlayerPage() {
               </Flex>
               <Button variant="soft" onClick={disconnect}>Disconnect</Button>
             </Flex>
-            {!isHomed(state) && !(mode === "pattern" && patternActive) && (
+            {ossm.canHome && !isHomed(state) && !(mode === "pattern" && patternActive) && (
               <Button
                 loading={state?.state === "homing"}
                 onClick={() => {
@@ -601,7 +601,7 @@ export default function PlayerPage() {
             <Callout.Text>{error}</Callout.Text>
           </Callout.Root>
         )}
-        {mode === "pattern" && ossm && state && (isHomed(state) || patternActive) && (
+        {mode === "pattern" && ossm && state && (isHomed(state) || patternActive || (!ossm.canHome && state.state !== "homing")) && (
           <>
             <Separator size="4" />
             <PatternControls ossm={ossm} state={state} />
@@ -610,7 +610,12 @@ export default function PlayerPage() {
         {mode === "funscript" && (
           <>
             {ossm && ossm.lookahead === 0 ? (
-              <Text size="2" color="gray">This firmware cannot stream.</Text>
+              <Callout.Root color="red" size="1">
+                <Callout.Icon>
+                  <ExclamationTriangleIcon />
+                </Callout.Icon>
+                <Callout.Text>This firmware cannot stream.</Callout.Text>
+              </Callout.Root>
             ) : ossm && state && isHomed(state) && (
               !configured ? (
                 <Button onClick={openSetup}>Set depth and stroke</Button>

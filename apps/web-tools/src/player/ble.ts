@@ -14,8 +14,6 @@ const STREAM_LOOKAHEAD = uuid("5000");
 /** Pending writes above which the queue warns. */
 const QUEUE_WARN = 10;
 
-export const UNSUPPORTED_FIRMWARE = "Unsupported firmware: this player needs the ossm-rs firmware";
-
 export type DeviceState = "idle" | "homing" | "ready" | "playing" | "paused" | "streaming";
 
 /** The state characteristic's JSON. Settings are 0–100. */
@@ -82,6 +80,10 @@ export class Ossm extends EventTarget {
 
   private constructor(
     readonly device: BluetoothDevice,
+    /** Whether `go:home` works; without it the machine homes when a pattern starts. */
+    readonly canHome: boolean,
+    /** Whether `set:` takes one decimal; without it settings are whole numbers. */
+    readonly decimalSettings: boolean,
     /** Points the player may send beyond the one the machine is heading to; `0` cannot stream. */
     readonly lookahead: number,
     /** Travel between the position limits in mm; `null` on firmware without it. */
@@ -104,8 +106,7 @@ export class Ossm extends EventTarget {
 
   /**
    * Ask the user for a device and connect to it. Resolves to `null` when the
-   * user cancels the chooser. Rejects with {@link UNSUPPORTED_FIRMWARE} when
-   * the device has no stream look-ahead characteristic.
+   * user cancels the chooser.
    */
   static async connect(): Promise<Ossm | null> {
     let device: BluetoothDevice;
@@ -118,14 +119,9 @@ export class Ossm extends EventTarget {
     const server = await device.gatt!.connect();
     try {
       const service = await server.getPrimaryService(SERVICE);
-      let lookaheadChar: BluetoothRemoteGATTCharacteristic;
-      try {
-        lookaheadChar = await service.getCharacteristic(STREAM_LOOKAHEAD);
-      } catch (e) {
-        if (e instanceof DOMException && e.name === "NotFoundError") throw new Error(UNSUPPORTED_FIRMWARE);
-        throw e;
-      }
-      const lookahead = Number(decode(await lookaheadChar.readValue())) || 0;
+      // Optional; firmware publishing it also takes `go:home` and decimal settings.
+      const lookaheadChar = await service.getCharacteristic(STREAM_LOOKAHEAD).catch(() => null);
+      const lookahead = lookaheadChar ? Number(decode(await lookaheadChar.readValue())) || 0 : 0;
       // Older firmware does not publish the travel.
       const travelMm = await service
         .getCharacteristic(USABLE_TRAVEL)
@@ -133,6 +129,8 @@ export class Ossm extends EventTarget {
         .catch(() => NaN);
       const ossm = new Ossm(
         device,
+        !!lookaheadChar,
+        !!lookaheadChar,
         lookahead,
         travelMm > 0 ? travelMm : null,
         await service.getCharacteristic(COMMAND),
@@ -181,9 +179,11 @@ export class Ossm extends EventTarget {
    * the reply (`ok:<cmd>` / `fail:<cmd>`), or `undefined` when the write
    * failed. Pending writes of the same setting (`set:<name>:`) are coalesced:
    * the latest value wins and its callers share the result. `note` is
-   * appended to the write's log line.
+   * appended to the write's log line. Settings are rounded to whole numbers
+   * without {@link decimalSettings}.
    */
   command(text: string, note?: string): Promise<string | undefined> {
+    if (!this.decimalSettings) text = text.replace(/^(set:[^:]+:)([\d.]+)$/, (_, key, value) => key + Math.round(Number(value)));
     const key = text.match(/^set:[^:]+:/)?.[0];
     const pending = key && this.queue.find((job) => job.key === key);
     if (pending) {
