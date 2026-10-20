@@ -514,7 +514,14 @@ export default function PlayerPage() {
   const playedAverage = useMemo(() => playedActions.length && stats(playedActions, [...playedActions.keys()]).average, [playedActions]);
   const [calcOpen, setCalcOpen] = useState(false);
   /** The calculator's machine range, in mm, shared with the editor's. */
-  const [rangeMm, setRangeMm] = usePersistedState(RANGE_KEY, FIRMWARE_RANGE_MM, localStorage);
+  const [savedRangeMm, setRangeMm] = usePersistedState(RANGE_KEY, FIRMWARE_RANGE_MM, localStorage);
+  /** The connected machine's travel, or until known the range typed in. */
+  const machineRangeMm = ossm?.travelMm ?? null;
+  const rangeMm = machineRangeMm ?? savedRangeMm;
+  // Saved for the editor's calculator too.
+  useEffect(() => {
+    if (machineRangeMm !== null) setRangeMm(machineRangeMm);
+  }, [machineRangeMm, setRangeMm]);
   /** The machine's settings, 0–100, or until connected full depth and stroke at the middle sensation. */
   const calcSettings = { depth: state?.depth ?? 100, stroke: state?.stroke ?? 100, sensation: state?.sensation ?? 50, speed: state?.speed ?? 0 };
   /** The speed the script needs, and the share of its points reached at the machine's speed. */
@@ -759,8 +766,8 @@ export default function PlayerPage() {
             </>}
             <SectionHeader title="Speed Calculator" open={calcOpen} setOpen={setCalcOpen} />
             {calcOpen && <>
-              {/* Typing keeps the last range from 10 mm on. */}
-              <TextField.Root type="number" min={10} step="any" aria-label="Machine range" defaultValue={rangeMm} onChange={(e) => Number(e.target.value) >= 10 && setRangeMm(Number(e.target.value))}>
+              {/* Typing keeps the last range from 10 mm on. The connected machine's travel replaces it. */}
+              <TextField.Root key={machineRangeMm} type="number" min={10} step="any" aria-label="Machine range" defaultValue={rangeMm} disabled={machineRangeMm !== null} onChange={(e) => Number(e.target.value) >= 10 && setRangeMm(Number(e.target.value))}>
                 <TextField.Slot side="left">Machine range</TextField.Slot>
                 <TextField.Slot side="right">mm</TextField.Slot>
               </TextField.Root>
