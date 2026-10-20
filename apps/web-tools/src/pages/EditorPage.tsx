@@ -1368,11 +1368,6 @@ export default function EditorPage() {
   });
   /** Whether the script may be replaced, as Open and New do, starting its undo history anew but for the snippet library's changes: without unsaved changes, or once confirmed. */
   const discardable = () => !changed || confirm("Discard the unsaved changes?");
-  const canUndo = !dragging && timeline.index > 0;
-  const canRedo = !dragging && timeline.index < timeline.states.length - 1;
-  // What is pending goes first, as with Escape: an open tool, a drag in place, or what is being placed.
-  const undo = () => discard() || (canUndo && jump(timeline.index - 1));
-  const redo = () => discard() || (canRedo && jump(timeline.index + 1));
   const plotHeight = height - AXIS;
   const x = (at: number) => ((at - view.from) / view.span) * width;
   const y = (pos: number) => PAD + (1 - pos / 100) * (plotHeight - 2 * PAD);
@@ -2043,6 +2038,39 @@ export default function EditorPage() {
   const [repSetup, setRepSetup] = tool?.region ? [regionRepeat, setRegionRepeat] : [rememberedRepeat, setRememberedRepeat];
   /** Repeat's pattern: its box's start, in ms, its points, edited while it is open, in the script's times, and the box's fields as typed: Length in s, Out and In in depth. */
   const [repBox, setRepBox] = useState({ from: 0, pattern: [] as Action[], length: "1", out: "0", in: "100" });
+  /** The tools' fields and setups, as the open tool's undo history keeps them. */
+  const toolFields = { scale, shift, maxSpeed, speedAnchor, genSetup, genRange, repSetup, repBox };
+  /** The open tool's own undo history: its fields after each change, a drag's once it ends; it starts anew with each tool opened. */
+  const [toolSteps, setToolSteps] = useState<{ tool: typeof tool; states: (typeof toolFields)[]; index: number }>({ tool: null, states: [], index: 0 });
+  useEffect(() => {
+    if (dragging || !tool) return;
+    setToolSteps((h) => {
+      if (h.tool !== tool) return { tool, states: [toolFields], index: 0 };
+      const now = h.states[h.index];
+      if ((Object.keys(now) as (keyof typeof now)[]).every((k) => now[k] === toolFields[k])) return h;
+      const states = [...h.states.slice(0, h.index + 1), toolFields].slice(-UNDO_SIZE - 1);
+      return { tool, states, index: states.length - 1 };
+    });
+  }, [tool, dragging, scale, shift, maxSpeed, speedAnchor, genSetup, genRange, repSetup, repBox]);
+  /** Go to the open tool's fields after change `index` of its undo history. */
+  const toolJump = (index: number) => {
+    const f = toolSteps.states[index];
+    setToolSteps((h) => ({ ...h, index }));
+    setScale(f.scale);
+    setShift(f.shift);
+    setMaxSpeed(f.maxSpeed);
+    setSpeedAnchor(f.speedAnchor);
+    setGenSetup(f.genSetup);
+    setGenRange(f.genRange);
+    setRepSetup(f.repSetup);
+    setRepBox(f.repBox);
+  };
+  // With a tool open, undo and redo go through its own history; undo past its start discards it.
+  const canUndo = !dragging && (!!tool || timeline.index > 0);
+  const canRedo = !dragging && (tool ? toolSteps.index < toolSteps.states.length - 1 : timeline.index < timeline.states.length - 1);
+  // Else what is pending goes first, as with Escape: a drag in place, or what is being placed.
+  const undo = () => (tool ? (toolSteps.index > 0 ? toolJump(toolSteps.index - 1) : setTool(null)) : discard() || (canUndo && jump(timeline.index - 1)));
+  const redo = () => (tool ? canRedo && toolJump(toolSteps.index + 1) : discard() || (canRedo && jump(timeline.index + 1)));
   /** A part's header in Generate's list, pressed to expand it: its name, then `right`, the part's controls while it is expanded, else a summary. */
   const partHeader = (part: GenPart, label: string, right?: ReactNode) => (
     <Flex gap="2" align="center" justify="between" minHeight="24px">
@@ -2241,7 +2269,9 @@ export default function EditorPage() {
     e.preventDefault();
     e.stopPropagation();
     const [origin, y0] = [pointerAt(e).at, e.clientY];
-    track(e.currentTarget.ownerSVGElement!, e, (m) => move(pointerAt(m).at - origin, Math.round(((y0 - m.clientY) / height) * 100)));
+    // One change in the tool's undo history.
+    setDragging(true);
+    track(e.currentTarget.ownerSVGElement!, e, (m) => move(pointerAt(m).at - origin, Math.round(((y0 - m.clientY) / height) * 100)), () => setDragging(false));
   };
 
   /** Drag Scale's box by `sides`: its right edge sets Time %, its top and bottom Out and In, which may pass each other; its body both, within 0–100. */
@@ -2534,7 +2564,7 @@ export default function EditorPage() {
   // selected or over the marker lane; Escape none, Delete (or Backspace, the Mac's delete key) removes the selected ones; F2 renames the selected
   // markers, B adds a bookmark, P hides or shows the player, also with a tool open. The arrow keys move the selected points and regions, with Shift
   // further. Not while typing in a field.
-  // With a tool open, Escape (also in its fields) discards it, and only undo and redo do the same; other keys do nothing.
+  // With a tool open, Escape (also in its fields) discards it, and undo and redo go through its changes; other keys do nothing.
   useWindowEvent("keydown", (e) => {
     if (tool && e.key === "Escape") return setTool(null);
     if (e.target instanceof HTMLInputElement) return;
