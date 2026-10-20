@@ -3473,7 +3473,8 @@ export default function EditorPage() {
   </Flex>;
 
   /** The advanced editor's Done, as `label`. In snippet mode, it saves to the library, a new snippet under a name, so it needs a length. */
-  const doneButton = (label: string) => advanced && (advanced.snippet && !advanced.snippet.path ? (
+  const newSnippet = !!advanced?.snippet && !advanced.snippet.path;
+  const doneButton = (label: ReactNode) => advanced && (newSnippet ? (
     <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => closeAdvanced(true, n)}>
       <Button style={{ flex: 1 }} disabled={actions.length < 2}>{label}</Button>
     </NamePopover>
@@ -4179,14 +4180,14 @@ export default function EditorPage() {
             <PlayIcon /> Send to player
           </Button>
           {advanced && <>
-            {/* At the top level of the library; the editor stays open. */}
-            <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions, regions })}>
+            {/* At the top level of the library; the editor stays open. A snippet's Save does it. */}
+            {!advanced.snippet && <NamePopover taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions, regions })}>
               <Button variant="soft" disabled={actions.length < 2} title="Save the whole document to the snippet library">
                 <SnippetIcon /> Save as snippet
               </Button>
-            </NamePopover>
+            </NamePopover>}
             <Flex gap="2">
-              {doneButton("Done")}
+              {doneButton(advanced.snippet ? <><SnippetIcon /> Save</> : "Done")}
               <Button variant="soft" color="gray" style={{ flex: 1 }} onClick={() => (!advancedChanged() || confirm("Discard the advanced editor's changes?")) && closeAdvanced(false)}>Cancel</Button>
             </Flex>
           </>}
