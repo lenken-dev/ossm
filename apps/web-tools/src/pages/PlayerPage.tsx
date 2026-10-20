@@ -255,7 +255,7 @@ export default function PlayerPage() {
   /** The script as streamed and previewed. */
   const played = useMemo(() => script && simplified ? simplify(script) : script, [script, simplified]);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
-  const [offset, setOffset] = usePersistedState("ossm:playerOffset", -50);
+  const [offset, setOffset] = usePersistedState("ossm:playerOffset", 50);
   /** The offset slider's value while dragged; the offset applies on release. */
   const [offsetDraft, setOffsetDraft] = useState<number | null>(null);
   /** How fast the script plays against the video, which keeps its own speed. */
