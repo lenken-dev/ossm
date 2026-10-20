@@ -28,6 +28,8 @@ const MAX_AT_MS = 0xffff_ffff;
 
 /** localStorage key of the script the editor sends to the player, as a .funscript's JSON with its `name`. */
 export const SENT_SCRIPT_KEY = "ossm:playerSent";
+/** `window.name` of a tab showing the player, so the editor can switch to it. */
+export const PLAYER_WINDOW = "ossm:player";
 
 /** Parse a .funscript file. Throws an `Error` with a readable message. */
 export function parseFunscript(name: string, text: string): Funscript {

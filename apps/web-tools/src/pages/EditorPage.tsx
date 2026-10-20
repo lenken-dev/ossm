@@ -3,7 +3,7 @@ import { AlertDialog, Box, Button, Callout, Checkbox, DataList, Flex, Heading, H
 import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight, bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
-import { SENT_SCRIPT_KEY } from "../StreamPanel";
+import { PLAYER_WINDOW, SENT_SCRIPT_KEY } from "../StreamPanel";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
@@ -3468,11 +3468,18 @@ export default function EditorPage() {
   /** What the advanced editor is editing, in place of the script's name. */
   const advancedTitle = advanced && (advanced.instance !== undefined ? `Snippet · ${(main.regions[advanced.instance] as Instance).snippet.name}` : !advanced.snippet ? "Advanced editor" : advanced.snippet.path ? `Snippet · ${advanced.snippet.path[advanced.snippet.path.length - 1]}` : "New snippet");
 
-  /** Send the points to the player, which loads them at once in other tabs and here on switching to it; the advanced editor's from 0, without the markers. */
+  /**
+   * Send the points to the player, which loads them at once in other tabs and on opening; the advanced
+   * editor's from 0, without the markers. Switches to the player's tab, or opens it in a new one. Only
+   * a tab opened from this one can be found by its name, so one the user opened stays in the background.
+   */
   const sendToPlayer = () => {
     const sent = advanced ? actions.map((a) => ({ ...a, at: a.at - actions[0].at })) : actions;
     const metadata = advanced ? undefined : writeMarkers(chapters, bookmarks);
     localStorage.setItem(SENT_SCRIPT_KEY, JSON.stringify({ name: advancedTitle || script.name || "untitled", actions: sent, metadata, sent: Date.now() }));
+    const tab = window.open("", PLAYER_WINDOW);
+    if (tab?.location.href === "about:blank") tab.location.href = new URL("player", location.href).href;
+    tab?.focus();
   };
 
   /** Show the time `t` ms: the view centred on it when it is out of view, and the playhead there. */

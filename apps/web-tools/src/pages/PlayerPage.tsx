@@ -23,7 +23,7 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm, type Ossm, type OssmState, type PatternInfo } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
-import { formatScriptTime, parseFunscript, readFunscript, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
+import { formatScriptTime, parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
@@ -320,6 +320,16 @@ export default function PlayerPage() {
   /** Set up to play; only speed and sensation may change on the fly. */
   const ready = !!ossm && ossm.lookahead > 0 && isHomed(state) && configured;
 
+  /** Switch to mode `v`; callers check `switchLock`. */
+  const switchMode = (v: PlayerMode) => {
+    log(`mode ${v}`);
+    dropSilence("mode");
+    // Leaving funscript mode leaves streaming (any remote's), so patterns can play;
+    // the switch is locked while the stream runs, so none of ours is open.
+    if (v === "pattern" && state?.state === "streaming") void ossm?.command("go:menu");
+    setMode(v);
+  };
+
   /** Send `stream:end` if a stream is open. */
   const endStream = (reason: string) => {
     if (!stream.current.end()) return;
@@ -426,7 +436,7 @@ export default function PlayerPage() {
     }
   };
 
-  /** Load a script the editor sent, `raw` from `SENT_SCRIPT_KEY`. */
+  /** Load a script the editor sent, `raw` from `SENT_SCRIPT_KEY`, in funscript mode unless a pattern plays. */
   const loadSent = (raw: string | null) => {
     if (!raw) return;
     try {
@@ -435,6 +445,7 @@ export default function PlayerPage() {
       setScript(parsed);
       setMarkers(markersOf(raw, parsed));
       setScriptError(null);
+      if (mode === "pattern" && !switchLock) switchMode("funscript");
     } catch (e) {
       setScriptError((e as Error).message);
     }
@@ -444,6 +455,10 @@ export default function PlayerPage() {
     const raw = localStorage.getItem(SENT_SCRIPT_KEY);
     localStorage.removeItem(SENT_SCRIPT_KEY);
     loadSent(raw);
+  }, []);
+  useEffect(() => {
+    window.name = PLAYER_WINDOW;
+    return () => void (window.name = "");
   }, []);
   useEffect(() => {
     const onStorage = (e: StorageEvent) => e.key === SENT_SCRIPT_KEY && loadSent(e.newValue);
@@ -519,14 +534,7 @@ export default function PlayerPage() {
             <SegmentedControl.Root
               value={mode}
               disabled={!!switchLock}
-              onValueChange={(v) => {
-                log(`mode ${v}`);
-                dropSilence("mode");
-                // Leaving funscript mode leaves streaming (any remote's), so patterns can play;
-                // the switch is locked while the stream runs, so none of ours is open.
-                if (v === "pattern" && state?.state === "streaming") void ossm?.command("go:menu");
-                setMode(v as PlayerMode);
-              }}
+              onValueChange={(v) => switchMode(v as PlayerMode)}
               // Disabled buttons swallow hover, so the tooltip listens on the box.
               style={{ width: "100%", pointerEvents: switchLock ? "none" : undefined }}
             >
