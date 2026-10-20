@@ -56,6 +56,15 @@ const encoder = new TextEncoder();
 const decode = (value: DataView) => decoder.decode(value);
 
 /**
+ * Start notifications. After a reconnect Chrome keeps notifying the previous
+ * connection's characteristic object instead until they are stopped.
+ */
+async function subscribe(char: BluetoothRemoteGATTCharacteristic) {
+  await char.stopNotifications().catch(() => {});
+  await char.startNotifications();
+}
+
+/**
  * A connection to an OSSM running the ossm-rs firmware. All GATT operations
  * run one at a time through a queue, since Web Bluetooth rejects concurrent
  * ones.
@@ -127,10 +136,10 @@ export class Ossm extends EventTarget {
       log(`connected to ${device.name ?? device.id}`);
       log(`look-ahead ${lookahead}`);
       ossm.handleState(decode(await ossm.stateChar.readValue()));
-      await ossm.stateChar.startNotifications();
+      await subscribe(ossm.stateChar);
       if (ossm.positionChar) {
         ossm.handlePosition(decode(await ossm.positionChar.readValue()));
-        await ossm.positionChar.startNotifications();
+        await subscribe(ossm.positionChar);
       }
       return ossm;
     } catch (e) {
