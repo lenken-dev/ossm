@@ -30,12 +30,11 @@ import { GraphLayout } from "./GraphPage";
 import { stats, type Action } from "../funscript/model";
 import { lightChapters, markerColor, readMarkers } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
+import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, silence, TICK_MS, type Markers, type Playhead } from "../player/playback";
 import { DEFAULT_OVERLAY, dragAxis, handleStyle, OVERLAY_MIN_HEIGHT, OVERLAY_MIN_WIDTH, RESIZE_HANDLES, type OverlayStyle } from "../player/overlay";
 
 type PlayerMode = "pattern" | "funscript";
 
-/** A script's chapters and bookmarks, in script ms. */
-type Markers = ReturnType<typeof readMarkers>;
 const NO_MARKERS: Markers = { chapters: [], bookmarks: [] };
 /** The markers in the .funscript `text` that parsed to `script`. */
 const markersOf = (text: string, script: Funscript): Markers => readMarkers(JSON.parse(text) as Record<string, unknown>, script.at[script.at.length - 1]);
@@ -57,69 +56,9 @@ const DEFAULT_WINDOW = { before: 2000, after: 8000 };
 /** Choices for the time after the video time, in s: by the second up to 30 s, then by 10 s. */
 const AFTER_STOPS = [...Array.from({ length: 30 }, (_, i) => i + 1), 40, 50, 60, 70, 80, 90, 100, 110, 120];
 
-/** Send loop period in ms. */
-const TICK_MS = 10;
-
-/** Speed limit of the funscript speed sliders until the user changes it, in percent. */
-const DEFAULT_SPEED_LIMIT = 5;
-
 /** Where the machine moves along the depth and stroke sliders; out is towards home. */
 const DEPTH_ENDS: [string, string] = ["Out", "In"];
 const STROKE_ENDS: [string, string] = ["In", "Out"];
-
-/** The media's time moves on: it plays and is not seeking or waiting for data. */
-const advancing = (media: HTMLMediaElement) =>
-  !media.paused && !media.seeking && media.readyState >= media.HAVE_FUTURE_DATA && media.playbackRate > 0;
-
-/** The script playhead, in script ms. */
-interface Playhead {
-  get(): number;
-  set(ms: number): void;
-}
-
-const isHomed = (state: OssmState | null) => state?.state === "ready" || state?.state === "streaming";
-
-/** Why the machine does not follow the funscript, or `null` when it does. */
-function blockReason(
-  ossm: Ossm | null,
-  state: OssmState | null,
-  configured: boolean,
-  setupOpen: boolean,
-): string | null {
-  if (!ossm || !state) return "Connect the OSSM";
-  if (ossm.lookahead === 0) return "This firmware cannot stream";
-  if (state.state === "homing") return "Homing…";
-  if (!isHomed(state)) return "Home the machine";
-  if (setupOpen) return "Setting up";
-  if (!configured) return "Set depth and stroke";
-  if (state.speed <= 0) return "Raise the speed";
-  return null;
-}
-
-/**
- * A silent WAV covering `ms` of script, the playback clock when there is no
- * video, so playback, seeking and the stream work exactly as with one.
- */
-// 3 kB per second (~11 MB per hour of script); write a clock if that ever hurts.
-function silence(ms: number): Blob {
-  const rate = 3000; // Chrome's lowest sample rate
-  const samples = Math.ceil((ms / 1000 + 1) * rate);
-  const header = new DataView(new ArrayBuffer(44));
-  const text = (offset: number, s: string) => [...s].forEach((c, i) => header.setUint8(offset + i, c.charCodeAt(0)));
-  text(0, "RIFF");
-  header.setUint32(4, 36 + samples, true);
-  text(8, "WAVEfmt ");
-  header.setUint32(16, 16, true); // fmt chunk size
-  header.setUint16(20, 1, true); // PCM
-  header.setUint16(22, 1, true); // mono
-  header.setUint32(24, rate, true);
-  header.setUint32(28, rate, true); // bytes per second
-  header.setUint16(32, 1, true); // bytes per frame
-  header.setUint16(34, 8, true); // bits per sample
-  text(36, "data");
-  header.setUint32(40, samples, true);
-  return new Blob([header, new Uint8Array(samples).fill(128)], { type: "audio/wav" });
-}
 
 export default function PlayerPage() {
   const [mode, setMode] = usePersistedState<PlayerMode>("ossm:playerMode", "pattern");
