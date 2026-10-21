@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
-import { AlertDialog, Box, Button, Callout, Flex, Heading, HoverCard, IconButton, SegmentedControl, Separator, Slider, Switch, Text, TextField } from "@radix-ui/themes";
-import { ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, HeightIcon, PlayIcon, ScissorsIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { AlertDialog, Box, Button, Callout, Flex, Heading, IconButton, SegmentedControl, Separator, Slider, Switch, Text, TextField } from "@radix-ui/themes";
+import { ClipboardIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, HeightIcon, PlayIcon, ScissorsIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { useWindowEvent } from "../hooks/useWindowEvent";
@@ -14,9 +14,7 @@ import { NamePopover, SnippetIcon } from "../editor/NamePopover";
 import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, items, markersRegions, movedBy, regionAt, regionName, regionNoun, sameContent, spanned, toggled, type Advanced, type Area, type Clip, type Content, type Instance, type Placing, type Region, type Script } from "../editor/model";
 import { rangeFields, refilled, withBookmarks } from "../editor/generate";
 import { download, readClip, readRegions } from "../editor/file";
-import { entryAt, entryName, isFolder, isPreset, matching, sortedEntries, type Entry, type Folder } from "../editor/library";
 import { changedSpan, HISTORY_SIZE, startedAt, UNDO_SIZE, withLibraryChanges, type Timeline } from "../editor/history";
-import { PreviewGraph } from "../editor/previews";
 import { AXIS, FOLLOW_AT, useViewport } from "../editor/viewport";
 import { MediaPlayer, useMediaPlayer } from "../editor/MediaPlayer";
 import { useMarkers } from "../editor/useMarkers";
@@ -26,6 +24,7 @@ import { GRIP, GRIPS, TimingView, TOOL_BOX, ToolHandles } from "../editor/ToolHa
 import { ToolPanel } from "../editor/ToolPanel";
 import { LANE_HEIGHT, MarkerLane } from "../editor/MarkerLane";
 import { MarkersPanel } from "../editor/MarkersPanel";
+import { SnippetsPanel } from "../editor/SnippetsPanel";
 import { Minimap } from "../editor/Minimap";
 import { GraphCanvas } from "../editor/GraphCanvas";
 import { SpeedCalculator } from "../editor/SpeedCalculator";
@@ -237,7 +236,7 @@ export default function EditorPage() {
   const tools = useTool({ actions, regions, bookmarks, zero, selected, view, viewport, advanced: !!advanced, placing: !!placing, edit, select, setSelected, setBox, dragging, setDragging, onEditInstance: (instance) => openAdvanced(undefined, instance) });
   const { tool, setTool, gridOpen, setGridOpen, grid, gridAt, gridPos, setGenRange, timingHeight, repBox, editRegion, repParams, preview, genBox, fnBox, timingShown } = tools;
   const snippetLibrary = useLibrary({ advanced: !!advanced, tool: !!tool, editLabel, cancelPlacing: () => cancelPlacing(), setPlacing, setError });
-  const { library, setLibraryFile, shelf, openFolders, setOpenFolders, snippetQuery, setSnippetQuery, rowDrag, dropOn, rowsPicked, libraryInput, snippetFrom, nameTaken, saveSnippet, insertSnippet, addFolder, renameEntry, deleteEntry, dropInto, dragRow, exportLibrary, importLibrary } = snippetLibrary;
+  const { library, setLibraryFile, rowDrag, snippetFrom, nameTaken, saveSnippet } = snippetLibrary;
   /** Undo history: the points, markers, regions and snippet library after each edit, the first as loaded; `index` is the current one. */
   const [timeline, setTimeline] = useState(() => startedAt(script, library, advanced ? "Open" : "Start"));
 
@@ -1240,107 +1239,6 @@ export default function EditorPage() {
     return { extenders, middle: { left: midX, top: midY } };
   })();
 
-  /**
-   * The library's rows in the folder at `path`, `depth` deep, an open
-   * folder's rows after it, each added to `shownRows`. In the main script
-   * rows are selected, and dragged onto a folder row to move them there, and
-   * a row but a preset's has Rename and Delete, a snippet's also Edit.
-   * Everywhere a snippet's row is dragged onto the graph to insert it.
-   */
-  const shownRows: string[] = [];
-  const libraryRows = (items: Entry[], path: string[], depth: number): ReactElement[] => sortedEntries(items).flatMap((e) => {
-    const [name, at] = [entryName(e), [...path, entryName(e)]];
-    const key = JSON.stringify(at);
-    shownRows.push(key);
-    const open = isFolder(e) && (!!snippetQuery || openFolders.includes(key));
-    const toggle = () => setOpenFolders((keys) => (open ? keys.filter((k) => k !== key) : [...keys, key]));
-    const row = (
-      <Flex
-        key={key}
-        align="center"
-        gap="1"
-        data-library-row
-        onPointerDown={!advanced || !isFolder(e) ? (p) => dragRow(p, at, e, shownRows) : undefined}
-        {...(isFolder(e) ? dropInto(at) : {})}
-        style={{ paddingLeft: depth * 16, minHeight: 28, borderRadius: 4, userSelect: "none", background: dropOn === key ? "var(--accent-a4)" : !advanced && rowsPicked.has(key) ? "var(--accent-a3)" : undefined }}
-      >
-        {/* A snippet's name shows a preview beside the panel: its points, its regions' boxes behind, and their stats. */}
-        <HoverCard.Root openDelay={300} closeDelay={0} open={isFolder(e) ? false : undefined}>
-          <HoverCard.Trigger>
-            <Flex
-              align="center"
-              gap="2"
-              flexGrow="1"
-              minWidth="0"
-              onClick={isFolder(e) ? toggle : undefined}
-              onDoubleClick={() => !isFolder(e) && !tool && insertSnippet(e)}
-              style={{ cursor: isFolder(e) ? "pointer" : undefined, userSelect: "none" }}
-            >
-              {isFolder(e) ? <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} /> : <SnippetIcon style={{ flexShrink: 0 }} />}
-              <Text size="2" truncate>{name}</Text>
-            </Flex>
-          </HoverCard.Trigger>
-          {!isFolder(e) && (
-            <HoverCard.Content side="left" size="1">
-              <Flex direction="column" gap="3">
-                <PreviewGraph pieces={[{ kind: "plain", points: e.actions }]} bands={generators(e.regions)} />
-                <Stats actions={e.actions} picked={[...e.actions.keys()]} size="1" />
-              </Flex>
-            </HoverCard.Content>
-          )}
-        </HoverCard.Root>
-        {!advanced && !isPreset(at) && !isFolder(e) && (
-          <IconButton size="1" variant="ghost" color="gray" disabled={!!placing} aria-label="Edit" title="Edit it in the advanced editor" onClick={() => openAdvanced({ path: at })}><MixerHorizontalIcon /></IconButton>
-        )}
-        {!advanced && !isPreset(at) && <>
-          <NamePopover initial={name} taken={(n) => n !== name && nameTaken(path, n)} onName={(n) => n !== name && renameEntry(at, n)}>
-            <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
-          </NamePopover>
-          <IconButton size="1" variant="ghost" color="red" aria-label="Delete" title={isFolder(e) ? "Delete it with its contents" : "Delete"} onClick={() => deleteEntry(at)}><TrashIcon /></IconButton>
-        </>}
-      </Flex>
-    );
-    return [row, ...(open ? libraryRows((e as Folder).items, at, depth + 1) : [])];
-  });
-
-  const shownLibrary = snippetQuery ? matching(shelf, snippetQuery) : shelf;
-  /** The Snippets panel, beside the graph: the library as a tree; in the main script, its top area takes rows dropped to the top level. */
-  const snippetsPanel = <Flex direction="column" gap="3" p="3">
-    <Flex direction="column" gap="2" {...dropInto([])} style={{ borderRadius: 4, background: dropOn === "[]" ? "var(--accent-a4)" : undefined }}>
-      <Text size="2" weight="medium">Snippets</Text>
-      {!advanced && <Flex gap="2" wrap="wrap">
-        <Button size="1" variant="soft" color="gray" disabled={!!placing} title="Make a snippet in the advanced editor" onClick={() => openAdvanced({ path: null })}>
-          <PlusIcon /> New snippet
-        </Button>
-        <NamePopover taken={(n) => nameTaken([], n)} onName={addFolder}>
-          <Button size="1" variant="soft" color="gray"><PlusIcon /> New folder</Button>
-        </NamePopover>
-        <Button size="1" variant="soft" color="gray" disabled={!library.length} title="Save the library to a file" onClick={exportLibrary}>
-          <DownloadIcon /> Export
-        </Button>
-        <Button size="1" variant="soft" color="gray" title="Merge a library file into the library" onClick={() => libraryInput.current?.click()}>
-          <UploadIcon /> Import
-        </Button>
-      </Flex>}
-      {!!shelf.length && (
-        <TextField.Root size="1" placeholder="Search" aria-label="Search snippets" value={snippetQuery} onChange={(e) => setSnippetQuery(e.target.value)}>
-          <TextField.Slot><MagnifyingGlassIcon /></TextField.Slot>
-        </TextField.Root>
-      )}
-    </Flex>
-    <Flex direction="column">
-      {shownLibrary.length ? libraryRows(shownLibrary, [], 0) : <Text size="1" color="gray">{shelf.length ? "No matches." : "No snippets yet."}</Text>}
-    </Flex>
-    {/* The dragged row's icon and name follow the pointer; for several, the first's icon and their count. Outside the panel, where nothing takes them, the cursor says so. */}
-    {rowDrag && !rowDrag.inPanel && !placing && <style>{"* { cursor: not-allowed !important; }"}</style>}
-    {rowDrag && (
-      <Flex align="center" gap="2" style={{ position: "fixed", left: rowDrag.x + 12, top: rowDrag.y + 12, pointerEvents: "none", zIndex: 1 }}>
-        {entryAt(shelf, rowDrag.paths[0]) && isFolder(entryAt(shelf, rowDrag.paths[0])!) ? <ChevronRightIcon /> : <SnippetIcon />}
-        <Text size="2">{rowDrag.paths.length > 1 ? `${rowDrag.paths.length} entries` : rowDrag.paths[0][rowDrag.paths[0].length - 1]}</Text>
-      </Flex>
-    )}
-  </Flex>;
-
   /** The advanced editor's Done, as `label`. In snippet mode, it saves to the library, a new snippet under a name, so it needs a length. */
   const newSnippet = !!advanced?.snippet && !advanced.snippet.path;
   const doneButton = (label: ReactNode) => advanced && (newSnippet ? (
@@ -1411,17 +1309,6 @@ export default function EditorPage() {
           <UploadIcon /> Open
         </Button>
       </Flex>}
-      <input
-        ref={libraryInput}
-        type="file"
-        accept=".json,application/json"
-        hidden
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) void importLibrary(file);
-          e.target.value = "";
-        }}
-      />
       {!tool && <Flex gap="2">
         <Button variant="soft" style={{ flex: 1 }} onClick={media.chooseFile}>
           <VideoIcon /> {media.videoFile ? "Change media" : "Open video or audio"}
@@ -1946,7 +1833,7 @@ export default function EditorPage() {
         <SegmentedControl.Item value="snippets">Snippets</SegmentedControl.Item>
       </SegmentedControl.Root>
     </Box>
-    {asideTab === "markers" ? <MarkersPanel markers={markers} chapters={chapters} bookmarks={bookmarks} locked={markersLocked} onGoTo={goTo} /> : snippetsPanel}
+    {asideTab === "markers" ? <MarkersPanel markers={markers} chapters={chapters} bookmarks={bookmarks} locked={markersLocked} onGoTo={goTo} /> : <SnippetsPanel library={snippetLibrary} advanced={!!advanced} placing={!!placing} tool={!!tool} onOpenSnippet={(path) => openAdvanced({ path })} />}
   </Flex>;
 
   return <GraphLayout sidebar={sidebar} content={content} aside={asideShown && asidePanel} />;
