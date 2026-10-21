@@ -32,7 +32,8 @@ import { SectionHeader, Stats } from "../funscript/widgets";
 import { DEPTH_ENDS, PatternControls, PortalContainer, SettingSlider, SetupDialog, STROKE_ENDS } from "../player/controls";
 import { ScriptMinimap } from "../player/ScriptMinimap";
 import { ScriptPreview } from "../player/ScriptPreview";
-import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, silence, TICK_MS, type Markers, type Playhead } from "../player/playback";
+import { usePlayhead } from "../player/usePlayhead";
+import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, silence, TICK_MS, type Markers } from "../player/playback";
 import { DEFAULT_OVERLAY, dragAxis, handleStyle, OVERLAY_MIN_HEIGHT, OVERLAY_MIN_WIDTH, RESIZE_HANDLES } from "../player/overlay";
 
 type PlayerMode = "pattern" | "funscript";
@@ -129,39 +130,7 @@ export default function PlayerPage() {
   const [scriptSpeed, setScriptSpeed] = usePersistedState("ossm:playerScriptSpeed", 1);
   /** The script follows the media's playhead; otherwise it keeps its own and only plays and pauses with the media. */
   const [synced, setSynced] = usePersistedState("ossm:playerSynced", true);
-  /**
-   * The script's own clock while not synced: script time `at` in ms, moving
-   * on at `rate` script ms per ms from `since` (`performance.now()`) while
-   * the media advances, else `since` is `null`.
-   */
-  const clock = useRef<{ at: number; since: number | null; rate: number }>({ at: 0, since: null, rate: 1 });
-  const clockTime = () => {
-    const { at, since, rate } = clock.current;
-    return since === null ? at : at + (performance.now() - since) * rate;
-  };
-  /** Restart the clock from now, running whenever the media advances. */
-  const retimeClock = () => {
-    const media = videoRef.current;
-    clock.current = {
-      at: clockTime(),
-      since: media && advancing(media) ? performance.now() : null,
-      rate: (media?.playbackRate ?? 1) * scriptSpeed,
-    };
-  };
-  const playhead = useRef<Playhead>(null!);
-  playhead.current = synced ? {
-    get: () => (videoRef.current?.currentTime ?? 0) * 1000 * scriptSpeed,
-    set: (ms) => {
-      const media = videoRef.current;
-      if (media) media.currentTime = Math.min(Math.max(ms / scriptSpeed / 1000, 0), media.duration || 0);
-    },
-  } : {
-    get: clockTime,
-    set: (ms) => {
-      clock.current.at = Math.min(Math.max(ms, 0), played ? played.at[played.at.length - 1] : 0);
-      if (clock.current.since !== null) clock.current.since = performance.now();
-    },
-  };
+  const { playhead, retimeClock, restartClock } = usePlayhead({ videoRef, synced, scriptSpeed, scriptEnd: played ? played.at[played.at.length - 1] : 0 });
   /** Script time in ms the machine plays at, `offset` ahead of the playhead. */
   const streamTime = () => playhead.current.get() + offset * scriptSpeed;
   /** Script time in ms to put the silent clock back at once it reloads at a new length. */
@@ -587,7 +556,7 @@ export default function PlayerPage() {
                     disabled={!paused}
                     onCheckedChange={(on) => {
                       // The script's own playhead starts where the media's left it.
-                      if (!on) clock.current = { at: playhead.current.get(), since: null, rate: 1 };
+                      if (!on) restartClock(playhead.current.get());
                       setSynced(on);
                     }}
                   />
