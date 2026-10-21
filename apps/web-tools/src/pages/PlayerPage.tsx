@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
-import { Box, Button, Callout, Flex, Heading, IconButton, SegmentedControl, Separator, Switch, Text, Theme, Tooltip } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, Heading, IconButton, SegmentedControl, Separator, Text, Theme, Tooltip } from "@radix-ui/themes";
 import {
   CheckIcon,
   Cross2Icon,
@@ -9,7 +9,6 @@ import {
   ExitFullScreenIcon,
   HamburgerMenuIcon,
   HomeIcon,
-  MoveIcon,
   OpenInNewWindowIcon,
   PauseIcon,
   PlayIcon,
@@ -30,6 +29,7 @@ import { stats, type Action } from "../funscript/model";
 import { readMarkers } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { DEPTH_ENDS, PatternControls, PortalContainer, SettingSlider, SetupDialog, STROKE_ENDS } from "../player/controls";
+import { GraphSettings } from "../player/GraphSettings";
 import { MarkersList } from "../player/MarkersList";
 import { PlayerCalculator } from "../player/PlayerCalculator";
 import { ScriptMinimap } from "../player/ScriptMinimap";
@@ -53,9 +53,6 @@ const PREVIEW_HEIGHT = 140;
 const PREVIEW_MIN_HEIGHT = 60;
 /** Default time the preview graphs show before and after the video time, in ms. */
 const DEFAULT_WINDOW = { before: 2000, after: 8000 };
-/** Choices for the time after the video time, in s: by the second up to 30 s, then by 10 s. */
-const AFTER_STOPS = [...Array.from({ length: 30 }, (_, i) => i + 1), 40, 50, 60, 70, 80, 90, 100, 110, 120];
-
 export default function PlayerPage() {
   const [mode, setMode] = usePersistedState<PlayerMode>("ossm:playerMode", "pattern");
   const { ossm, state, connecting, error, connect, disconnect } = useOssm();
@@ -539,86 +536,28 @@ export default function PlayerPage() {
             <PlayerCalculator open={calcOpen} setOpen={setCalcOpen} played={played} scriptSpeed={scriptSpeed} state={state} rangeMm={rangeMm} machineRangeMm={machineRangeMm} setRangeMm={setRangeMm} />
             <Separator size="4" />
             <SectionHeader title="Graph" open={graphOpen} setOpen={setGraphOpen} />
-            {graphOpen && <>
-              <Text as="label" size="2" weight="medium">
-                <Flex align="center" justify="between" gap="2">
-                  Show graph
-                  <Switch checked={showGraph} onCheckedChange={setShowGraph} />
-                </Flex>
-              </Text>
-              <Text as="label" size="2" weight="medium">
-                <Flex align="center" justify="between" gap="2">
-                  Show minimap
-                  <Switch checked={inTheater ? theaterMinimap : minimap} onCheckedChange={inTheater ? setTheaterMinimap : setMinimap} />
-                </Flex>
-              </Text>
-              {showGraph && (
-                <>
-                  <LabeledSlider
-                    label="Line width"
-                    value={overlay.lineWidth}
-                    display={`${overlay.lineWidth} px`}
-                    min={1}
-                    max={8}
-                    step={0.5}
-                    onChange={(lineWidth) => setOverlay({ ...overlay, lineWidth })}
-                  />
-                  <Text as="label" size="2" weight="medium">
-                    <Flex align="center" justify="between" gap="2">
-                      Show machine line
-                      <Switch checked={machineLine} onCheckedChange={setMachineLine} />
-                    </Flex>
-                  </Text>
-                  <LabeledSlider
-                    label="Before playhead"
-                    value={graphWindow.before}
-                    display={`${graphWindow.before / 1000} s`}
-                    min={0}
-                    max={10000}
-                    step={1000}
-                    onChange={(before) => setGraphWindow({ ...graphWindow, before })}
-                  />
-                  <LabeledSlider
-                    label="After playhead"
-                    value={Math.max(AFTER_STOPS.findIndex((s) => s * 1000 >= graphWindow.after), 0)}
-                    display={`${graphWindow.after / 1000} s`}
-                    min={0}
-                    max={AFTER_STOPS.length - 1}
-                    step={1}
-                    onChange={(i) => setGraphWindow({ ...graphWindow, after: AFTER_STOPS[i] * 1000 })}
-                  />
-                  {inTheater ? (
-                    <>
-                      <LabeledSlider
-                        label="Background"
-                        value={overlay.background}
-                        display={`${overlay.background}%`}
-                        min={0}
-                        max={100}
-                        step={5}
-                        onChange={(background) => setOverlay({ ...overlay, background })}
-                      />
-                      <Button variant="soft" disabled={!played} onClick={() => setArranging(true)}>
-                        <MoveIcon /> Move and resize
-                      </Button>
-                    </>
-                  ) : (
-                    <Text size="1" color="gray">Drag the top edge of the graph to change its height.</Text>
-                  )}
-                  <Button
-                    variant="soft"
-                    color="gray"
-                    onClick={() => {
-                      setOverlay(DEFAULT_OVERLAY);
-                      setGraphHeight(PREVIEW_HEIGHT);
-                      setGraphWindow(DEFAULT_WINDOW);
-                    }}
-                  >
-                    Reset
-                  </Button>
-                </>
-              )}
-            </>}
+            {graphOpen && (
+              <GraphSettings
+                showGraph={showGraph}
+                setShowGraph={setShowGraph}
+                minimap={inTheater ? theaterMinimap : minimap}
+                setMinimap={inTheater ? setTheaterMinimap : setMinimap}
+                overlay={overlay}
+                setOverlay={setOverlay}
+                machineLine={machineLine}
+                setMachineLine={setMachineLine}
+                span={graphWindow}
+                setSpan={setGraphWindow}
+                theater={inTheater}
+                canArrange={!!played}
+                onArrange={() => setArranging(true)}
+                onReset={() => {
+                  setOverlay(DEFAULT_OVERLAY);
+                  setGraphHeight(PREVIEW_HEIGHT);
+                  setGraphWindow(DEFAULT_WINDOW);
+                }}
+              />
+            )}
           </>
         )}
       </Flex>
