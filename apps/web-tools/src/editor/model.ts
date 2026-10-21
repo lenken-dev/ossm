@@ -22,6 +22,13 @@ export const sameContent = (a: Content, b: Content) => a.actions === b.actions &
 /** `list` with the markers in `to` swapped for what they map to. */
 export const swapped = <T extends Marker>(list: T[], to: Map<Marker, Marker>) => list.map((m) => (to.get(m) as T | undefined) ?? m);
 
+/** `set` with `item` in it if it wasn't, else without it. */
+export const toggled = <T,>(item: T) => (set: Set<T>) => {
+  const next = new Set(set);
+  if (!next.delete(item)) next.add(item);
+  return next;
+};
+
 /** A time range, in ms, and depth range. */
 export interface Area {
   from: number;
