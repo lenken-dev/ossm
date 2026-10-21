@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Dispatch, type PointerEvent, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
 import { Box, Button, Flex, IconButton, Popover, Text, TextField } from "@radix-ui/themes";
 import { Crosshair2Icon, GearIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, TrackNextIcon, TrackPreviousIcon } from "@radix-ui/react-icons";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -13,17 +13,54 @@ const VIDEO_MIN_HEIGHT = 80;
 /** Time steps of the seek buttons, in s, as typed; the first is always shown, empty ones are hidden. */
 const DEFAULT_STEPS = ["1", "", ""];
 
+/** The reference video or audio: its file and element, its playback, the player's height and seek steps, and the playhead's time. */
+export interface Media {
+  videoInput: RefObject<HTMLInputElement | null>;
+  videoRef: RefObject<HTMLMediaElement | null>;
+  videoFile: File | null;
+  videoUrl: string | null;
+  /** An audio file plays in a bar instead of the video area. */
+  isAudio: boolean;
+  paused: boolean;
+  pip: boolean;
+  /** Hidden, the video or audio and its controls leave their room to the graph. */
+  playerShown: boolean;
+  /** Hide the player, pausing it, or show it. */
+  togglePlayer(): void;
+  videoHeight: number;
+  steps: string[];
+  setSteps: Dispatch<SetStateAction<string[]>>;
+  /** The steps in use; a first step that is not a positive number falls back to the default. */
+  shownSteps: number[];
+  /** Video time, in ms. */
+  time: number;
+  setTime: Dispatch<SetStateAction<number>>;
+  /** Video length, in ms; 0 without one. */
+  videoDuration: number;
+  /** Move the playhead to `t` ms, within the media. */
+  seek(t: number): void;
+  /** Drag the bottom edge of the video to set its height; at most most of the window. */
+  dragVideoHeight(e: PointerEvent<HTMLElement>): void;
+  /** Props for the `<video>` or `<audio>` element. */
+  mediaProps: { ref: (el: HTMLMediaElement | null) => void; src: string | undefined; controls: boolean; onPlay: () => void; onPause: () => void; onEmptied: () => void; onDurationChange: () => void; onSeeked: () => void };
+  /** Open the media `file`, paused at its start, and show the player. */
+  open(file: File): void;
+  /** Close the media, pausing it. */
+  close(): void;
+  /** Ask for a media file to open. */
+  chooseFile(): void;
+}
+
 /**
  * The reference video or audio: its file, element and playback, its heights
  * and seek steps, kept across reloads, and the playhead's time; seeking while
  * paused brings the playhead into the view `setView` sets.
  */
-export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; span: number }>>) {
+export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; span: number }>>): Media {
   const videoInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLMediaElement>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  /** An audio file plays in a bar instead of the video area. */
   const isAudio = !!videoFile?.type.startsWith("audio/");
   /** Separate from the player's sizes. */
   const [normalHeight, setNormalHeight] = usePersistedState("ossm:editorVideoHeight", VIDEO_HEIGHT, localStorage);
@@ -31,20 +68,15 @@ export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; 
   const [pipHeight, setPipHeight] = usePersistedState("ossm:editorVideoPipHeight", VIDEO_MIN_HEIGHT, localStorage);
   const [paused, setPaused] = useState(true);
   const [pip, setPip] = useState(false);
-  /** Hidden, the video or audio and its controls leave their room to the graph. */
   const [playerShown, setPlayerShown] = useState(true);
-  /** Hide the player, pausing it, or show it. */
   const togglePlayer = () => {
     if (playerShown) videoRef.current?.pause();
     setPlayerShown(!playerShown);
   };
   const [videoHeight, setVideoHeight] = pip ? [pipHeight, setPipHeight] : [normalHeight, setNormalHeight];
   const [steps, setSteps] = usePersistedState("ossm:editorSteps", DEFAULT_STEPS, localStorage);
-  /** The steps in use; a first step that is not a positive number falls back to the default. */
   const shownSteps = steps.map(Number).map((v, i) => (v > 0 ? v : i === 0 ? Number(DEFAULT_STEPS[0]) : null)).filter((v) => v !== null);
-  /** Video time, in ms. */
   const [time, setTime] = useState(0);
-  /** Video length, in ms; 0 without one. */
   const [videoDuration, setVideoDuration] = useState(0);
 
   useEffect(() => {
@@ -73,10 +105,8 @@ export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; 
     setView((v) => (t < v.from || t > v.from + v.span ? { ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) } : v));
   };
 
-  /** Drag the bottom edge of the video to set its height; at most most of the window. */
   const dragVideoHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, videoHeight, setVideoHeight, VIDEO_MIN_HEIGHT);
 
-  /** Move the playhead to `t` ms, within the media. */
   const seek = (t: number) => {
     const media = videoRef.current;
     if (!media) return;
@@ -96,25 +126,20 @@ export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; 
     onSeeked: seeked,
   };
 
-  /** Open the media `file`, paused at its start, and show the player. */
   const open = (file: File) => {
     setPaused(true);
     setTime(0);
     setVideoFile(file);
     setPlayerShown(true);
   };
-  /** Close the media, pausing it. */
   const close = () => {
     setPaused(true);
     setVideoFile(null);
   };
-  /** Ask for a media file to open. */
   const chooseFile = () => videoInput.current?.click();
 
   return { videoInput, videoRef, videoFile, videoUrl, isAudio, paused, pip, playerShown, togglePlayer, videoHeight, steps, setSteps, shownSteps, time, setTime, videoDuration, seek, dragVideoHeight, mediaProps, open, close, chooseFile };
 }
-
-export type Media = ReturnType<typeof useMediaPlayer>;
 
 /**
  * The reference video or audio, with its resize grip, and its seek-step
