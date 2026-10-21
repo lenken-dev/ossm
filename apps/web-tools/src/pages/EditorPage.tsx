@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
-import { AlertDialog, Box, Button, Callout, Flex, Heading, HoverCard, IconButton, SegmentedControl, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
+import { AlertDialog, Box, Button, Callout, Flex, Heading, HoverCard, IconButton, SegmentedControl, Separator, Slider, Switch, Text, TextField } from "@radix-ui/themes";
 import { ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, HeightIcon, PlayIcon, ScissorsIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -26,6 +26,7 @@ import { ToolPanel } from "../editor/ToolPanel";
 import { LANE_HEIGHT, MarkerLane } from "../editor/MarkerLane";
 import { MarkersPanel } from "../editor/MarkersPanel";
 import { Minimap } from "../editor/Minimap";
+import { GraphCanvas } from "../editor/GraphCanvas";
 import { SpeedCalculator } from "../editor/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
 import { ClipboardHistory, UndoHistory } from "../editor/HistoryPopovers";
@@ -40,11 +41,6 @@ const MAX_SPAN_FLOOR = 120_000;
 /** Steps of the visible time slider, in s; the first that keeps it to about this many steps is used. */
 const SPAN_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60];
 const SPAN_STEP_COUNT = 240;
-
-/** Below this average spacing between the points in view, in px, the points are not drawn, only the line. */
-const DOT_SPACING = 6;
-/** A run of up to this many neighbouring selected points in view also shows rings on the points. */
-const RING_LIMIT = 50;
 
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
@@ -184,9 +180,6 @@ export default function EditorPage() {
   const boxRef = useRef<HTMLDivElement>(null);
   /** The graph and the marker lane, which scroll and zoom alike. */
   const timeRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Re-rendered on a theme change, so the canvas picks up its colours. Radix's own context, as the theme's colours change a render after the app's appearance does.
-  useThemeContext();
   const viewport = useViewport(boxRef, viewRef, setView);
   const { width, height, plotHeight, x, y, pointerAt, track } = viewport;
   const media = useMediaPlayer(setView);
@@ -1413,141 +1406,14 @@ export default function EditorPage() {
     return hit;
   };
 
-  // The line and points are drawn on a canvas: as SVG, thousands of them in view make scrolling and zooming lag.
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current!;
-    const dpr = window.devicePixelRatio;
-    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
-      [canvas.width, canvas.height] = [Math.round(width * dpr), Math.round(height * dpr)];
-    }
-    const ctx = canvas.getContext("2d")!;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    const css = getComputedStyle(canvas);
-    Object.assign(ctx, { lineWidth: 2, lineJoin: "round", strokeStyle: css.getPropertyValue("--gray-a7") });
-    for (const run of context) {
-      ctx.beginPath();
-      for (const a of run.slice(Math.max(byTime(run, view.from) - 1, 0), byTime(run, view.from + view.span) + 1)) ctx.lineTo(x(a.at), y(a.pos));
-      ctx.stroke();
-    }
-    // With a tool open, the points it was opened on, faint and dashed behind its result; Repeat's only in its pattern box. Moving, the lifted points where they were, alike.
-    if (tool || lifted) {
-      ctx.save();
-      Object.assign(ctx, { lineWidth: 1.5, strokeStyle: css.getPropertyValue("--gray-a9") });
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      const all = tool?.actions ?? actions;
-      const a = !tool ? all.slice(byTime(all, lifted!.from), afterTime(all, lifted!.to))
-        : tool.kind !== "repeat" ? all : repParams ? all.slice(byTime(all, repBox.from), afterTime(all, repBox.from + repParams.length)) : [];
-      // A moved region shows only its dashed outline, not its points' line.
-      const moved = tool ? [] : regions.filter((r) => r.from >= lifted!.from && r.to <= lifted!.to);
-      let prev: Action | undefined;
-      for (const p of a.slice(Math.max(byTime(a, view.from) - 1, 0), byTime(a, view.from + view.span) + 1)) {
-        const r = regionAt(moved, p.at);
-        if (r && prev && regionAt(moved, prev.at) === r) ctx.moveTo(x(p.at), y(p.pos));
-        else ctx.lineTo(x(p.at), y(p.pos));
-        prev = p;
-      }
-      // A lone point, which makes no line, as a ring; but a region's, whose band shows.
-      if (!tool && a.length === 1 && !regionAt(regions, a[0].at)) ctx.arc(x(a[0].at), y(a[0].pos), 5, 0, 2 * Math.PI);
-      ctx.stroke();
-      ctx.restore();
-    }
-    // Moved in place, the line as it was where it went through them, from the points either side, dashed alike.
-    if (apart) {
-      const { actions: was, moving, regions: moved } = apart;
-      ctx.save();
-      Object.assign(ctx, { lineWidth: 1.5, strokeStyle: css.getPropertyValue("--gray-a9") });
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      for (let j = Math.max(byTime(was, view.from), 1); j < Math.min(byTime(was, view.from + view.span) + 1, was.length); j++) {
-        if (!moving.has(j - 1) && !moving.has(j)) continue;
-        const r = regionAt(moved, was[j].at);
-        if (r && regionAt(moved, was[j - 1].at) === r) continue;
-        ctx.moveTo(x(was[j - 1].at), y(was[j - 1].pos));
-        ctx.lineTo(x(was[j].at), y(was[j].pos));
-      }
-      ctx.stroke();
-      ctx.restore();
-    }
-    if (removed) {
-      ctx.save();
-      Object.assign(ctx, { globalAlpha: 0.35, lineWidth: 2, strokeStyle: css.getPropertyValue("--red-9") });
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      for (const a of removed.slice(Math.max(byTime(removed, view.from) - 1, 0), byTime(removed, view.from + view.span) + 1)) ctx.lineTo(x(a.at), y(a.pos));
-      ctx.stroke();
-      ctx.restore();
-    }
-    Object.assign(ctx, { strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
-    // Repeat's copies show thin and faded, so its pattern's line stands out; the line breaks between them, to be drawn over.
-    const muted = tool?.kind === "repeat" && !ghost;
-    // A selected region's line shows as the selected points', as does the line joining it to a selected point or region next to it.
-    const lit = tool ? [] : shownRegions.filter(outlined);
-    const on = (j: number) => j >= 0 && (marks.has(first + j) || !!regionAt(lit, visible[j].at));
-    const between = (j: number) => on(j - 1) && on(j);
-    ctx.beginPath();
-    visible.forEach((a, j) => (muted && between(j) ? ctx.moveTo(x(a.at), y(a.pos)) : ctx.lineTo(x(a.at), y(a.pos))));
-    ctx.stroke();
-    // The line through selected points is drawn over; a short run of them in view also shows rings, so zoomed in, a long run's part in view does too.
-    const long = new Array<boolean>(visible.length).fill(false);
-    for (let j = 0; j < visible.length; ) {
-      let end = j;
-      while (end < visible.length && marks.has(first + end)) end++;
-      if (end - j > RING_LIMIT) long.fill(true, j, end);
-      j = Math.max(end, j + 1);
-    }
-    const line = new Path2D();
-    for (let j = 1; j < visible.length; j++) {
-      const [a, b] = [visible[j - 1], visible[j]];
-      if (!between(j)) continue;
-      line.moveTo(x(a.at), y(a.pos));
-      line.lineTo(x(b.at), y(b.pos));
-    }
-    ctx.strokeStyle = css.getPropertyValue("--gray-12");
-    ctx.save();
-    if (muted) Object.assign(ctx, { lineWidth: 1.5, globalAlpha: 0.45 });
-    ctx.stroke(line);
-    ctx.restore();
-    // Packed this close, the points would only blur the line; a tool's result only shows its line, as its points can't be dragged.
-    const showDots = !tool && visible.length * DOT_SPACING < width;
-    // One path per look, so drawing stays fast however many points there are.
-    const [dots, ringed] = [new Path2D(), new Path2D()];
-    visible.forEach((a, j) => {
-      const [cx, cy] = [x(a.at), y(a.pos)];
-      const ring = !tool && marks.has(first + j) && !long[j];
-      // The regions' points only show their line.
-      if ((!ring && !showDots) || regionAt(shownRegions, a.at)) return;
-      const path = ring ? ringed : dots;
-      const r = ring ? 7 : 5;
-      path.moveTo(cx + r, cy);
-      path.arc(cx, cy, r, 0, 2 * Math.PI);
-    });
-    ctx.fill(dots);
-    ctx.fill(ringed);
-    ctx.strokeStyle = css.getPropertyValue("--gray-12");
-    ctx.stroke(ringed);
-    // Where the points being placed can't go in, they show red over the rest; only those in view, as a selection to move can be the whole script.
-    if (astray) {
-      const { points } = astray;
-      const red = css.getPropertyValue("--red-9");
-      ctx.save();
-      Object.assign(ctx, { globalAlpha: 0.6, lineWidth: 2, strokeStyle: red, fillStyle: red });
-      ctx.beginPath();
-      const [l0, l1] = [Math.max(byTime(points, view.from) - 1, 0), Math.min(byTime(points, view.from + view.span) + 1, points.length)];
-      for (let j = l0; j < l1; j++) ctx.lineTo(x(points[j].at), y(points[j].pos));
-      ctx.stroke();
-      const redDots = new Path2D();
-      const carried = carriedBy(ghost!);
-      for (const a of points.slice(l0, l1)) {
-        if (regionAt(carried, a.at)) continue;
-        redDots.moveTo(x(a.at) + 5, y(a.pos));
-        redDots.arc(x(a.at), y(a.pos), 5, 0, 2 * Math.PI);
-      }
-      ctx.fill(redDots);
-      ctx.restore();
-    }
-  });
+  /** What GraphCanvas draws dashed behind the line: with a tool open, the points it was opened on; moving, the lifted points, but the moved regions', and a lone point's ring. */
+  const dashed = tool || lifted ? (() => {
+    const all = tool?.actions ?? actions;
+    const a = !tool ? all.slice(byTime(all, lifted!.from), afterTime(all, lifted!.to))
+      : tool.kind !== "repeat" ? all : repParams ? all.slice(byTime(all, repBox.from), afterTime(all, repBox.from + repParams.length)) : [];
+    const moved = tool ? [] : regions.filter((r) => r.from >= lifted!.from && r.to <= lifted!.to);
+    return { points: a, movedRegions: moved, ring: !tool && a.length === 1 && !regionAt(regions, a[0].at) };
+  })() : null;
   /** The selection box's sides, in px. */
   const edges = box && { from: x(box.from), to: x(box.to), low: y(box.low), high: y(box.high) };
   /**
@@ -2113,10 +1979,23 @@ export default function EditorPage() {
                 style={{ fill: "var(--red-a3)", stroke: "var(--red-9)", pointerEvents: "none" }}
               />
             )}
-            {/* Kept in the SVG, so the line and points stay between what is drawn under and over them. */}
-            <foreignObject width={width} height={height} style={{ pointerEvents: "none" }}>
-              <canvas ref={canvasRef} style={{ display: "block", width, height }} />
-            </foreignObject>
+            <GraphCanvas
+              viewport={viewport}
+              view={view}
+              context={context}
+              visible={visible}
+              first={first}
+              marks={marks}
+              shownRegions={shownRegions}
+              lit={tool ? [] : shownRegions.filter(outlined)}
+              dashed={dashed}
+              apart={apart}
+              removed={removed}
+              // Repeat's copies show thin and faded, so its pattern's line stands out; the line breaks between them, to be drawn over.
+              muted={tool?.kind === "repeat" && !ghost}
+              dotsAllowed={!tool}
+              astray={astray && { points: astray.points, carried: carriedBy(ghost!) }}
+            />
             {/* Holding Ctrl, the axes through where the point dragged by came from, along which it keeps them. */}
             {dragged && held.ctrl && (
               <g strokeDasharray="6 4" style={{ stroke: LINE_COLOR, opacity: 0.6, pointerEvents: "none" }}>
