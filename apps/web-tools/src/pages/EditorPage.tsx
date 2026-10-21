@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
 import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { useWindowEvent } from "../hooks/useWindowEvent";
@@ -17,12 +17,13 @@ import { extent, funcAt, GENERATE_DEFAULTS, generated, KNOT_GAP, newSeed, ownSca
 import { download, readClip, readRegions } from "../editor/file";
 import { entryAt, entryName, isFolder, isPreset, itemsAt, matching, merged, PRESETS, readEntries, sortedEntries, under, updatedAt, type Entry, type Folder, type LibraryFile, type Snippet } from "../editor/library";
 import { changedSpan, HISTORY_SIZE, startedAt, UNDO_SIZE, withLibraryChanges, type Timeline } from "../editor/history";
-import { bookmarkItem, chapterItem, diffPieces, LanePreview, PreviewGraph, regionItem } from "../editor/previews";
+import { PreviewGraph } from "../editor/previews";
 import { dragHeight } from "../drag";
 import { AXIS, PAD, useViewport } from "../editor/viewport";
 import { Minimap } from "../editor/Minimap";
 import { SpeedCalculator } from "../editor/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
+import { ClipboardHistory, UndoHistory } from "../editor/HistoryPopovers";
 import { GraphLayout } from "./GraphPage";
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
@@ -3292,59 +3293,7 @@ export default function EditorPage() {
           >
             <ResetIcon />
           </IconButton>
-          <Popover.Root modal>
-            <Popover.Trigger>
-              <IconButton
-                variant="soft"
-                color="gray"
-                disabled={timeline.states.length < 2}
-                aria-label="Undo history"
-                title="Undo history"
-                style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeft: "1px solid var(--gray-a5)" }}
-              >
-                <CounterClockwiseClockIcon />
-              </IconButton>
-            </Popover.Trigger>
-            <Popover.Content width="240px" style={{ maxHeight: 400, overflowY: "auto" }}>
-              <Flex direction="column" gap="1">
-                {/* Newest first; undone edits are dimmed until redone or replaced. */}
-                {timeline.states.map((state, k) => (
-                  <HoverCard.Root key={k} openDelay={100} closeDelay={0}>
-                    <HoverCard.Trigger>
-                      <Popover.Close>
-                        <Button
-                          variant={k === timeline.index ? "soft" : "ghost"}
-                          color="gray"
-                          style={{ justifyContent: "flex-start", opacity: k > timeline.index ? 0.5 : 1 }}
-                          onClick={() => jump(k)}
-                        >
-                          <Text truncate>{state.label}</Text>
-                        </Button>
-                      </Popover.Close>
-                    </HoverCard.Trigger>
-                    <HoverCard.Content side="right" size="1" maxWidth="232px">
-                      <Flex direction="column" gap="1">
-                        <Text size="1">{state.label}</Text>
-                        {k > 0 && (() => {
-                          const before = timeline.states[k - 1];
-                          const markersChanged = before.chapters !== state.chapters || before.bookmarks !== state.bookmarks;
-                          const regionsChanged = before.regions !== state.regions;
-                          // A change only to the snippet library has nothing to show but its label.
-                          const others = markersChanged || regionsChanged || before.library !== state.library;
-                          return <>
-                            {(before.actions !== state.actions || !others) && <PreviewGraph pieces={diffPieces(before.actions, state.actions)} />}
-                            {markersChanged && <LanePreview lists={[[before.chapters.map(chapterItem), state.chapters.map(chapterItem)], [before.bookmarks.map(bookmarkItem), state.bookmarks.map(bookmarkItem)]]} />}
-                            {regionsChanged && <LanePreview lists={[[before.regions.map(regionItem), state.regions.map(regionItem)]]} />}
-                          </>;
-                        })()}
-                      </Flex>
-                    </HoverCard.Content>
-                  </HoverCard.Root>
-                )).reverse()}
-                <Text size="1" color="gray" mt="1">Click an entry to go back or forward to it.</Text>
-              </Flex>
-            </Popover.Content>
-          </Popover.Root>
+          <UndoHistory timeline={timeline} onJump={jump} />
         </Flex>
         <IconButton variant="soft" color="gray" disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)" onClick={redo}>
           <ResetIcon style={{ transform: "scaleX(-1)" }} />
@@ -3369,39 +3318,7 @@ export default function EditorPage() {
           >
             <ClipboardIcon />
           </IconButton>
-          {history.length > 0 && <Popover.Root modal>
-            <Popover.Trigger>
-              <IconButton
-                variant="soft"
-                color="gray"
-                disabled={!!tool}
-                aria-label="Clipboard history"
-                title="Clipboard history"
-                style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeft: "1px solid var(--gray-a5)" }}
-              >
-                <CounterClockwiseClockIcon />
-              </IconButton>
-            </Popover.Trigger>
-            <Popover.Content width="220px">
-              <Flex direction="column" gap="1">
-                {history.map((copied, i) => (
-                  <HoverCard.Root key={i} openDelay={100} closeDelay={0}>
-                    <HoverCard.Trigger>
-                      <Popover.Close>
-                        <Button variant="ghost" color="gray" style={{ justifyContent: "flex-start" }} onClick={() => pasteFromHistory(copied)}>
-                          {points(copied.actions.length)}{copied.regions.length > 0 && ` · ${copied.regions.length === 1 ? "region" : `${copied.regions.length} regions`}`} · {formatScriptTime(copied.actions[copied.actions.length - 1].at / 1000)}
-                        </Button>
-                      </Popover.Close>
-                    </HoverCard.Trigger>
-                    <HoverCard.Content side="right" size="1">
-                      <PreviewGraph pieces={[{ kind: "plain", points: copied.actions }]} />
-                    </HoverCard.Content>
-                  </HoverCard.Root>
-                ))}
-                <Text size="1" color="gray" mt="1">Click an entry to paste it and make it the clipboard again.</Text>
-              </Flex>
-            </Popover.Content>
-          </Popover.Root>}
+          {history.length > 0 && <ClipboardHistory history={history} onPaste={pasteFromHistory} disabled={!!tool} />}
         </Flex>
         <Separator orientation="vertical" size="2" />
         <Button
