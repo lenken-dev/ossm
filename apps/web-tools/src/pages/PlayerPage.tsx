@@ -21,15 +21,16 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
-import { formatScriptTime, parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
+import { parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 import { capturePointer, dragHeight } from "../drag";
 import { stats, type Action } from "../funscript/model";
-import { markerColor, readMarkers } from "../funscript/markers";
+import { readMarkers } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { DEPTH_ENDS, PatternControls, PortalContainer, SettingSlider, SetupDialog, STROKE_ENDS } from "../player/controls";
+import { MarkersList } from "../player/MarkersList";
 import { ScriptMinimap } from "../player/ScriptMinimap";
 import { ScriptPreview } from "../player/ScriptPreview";
 import { ScriptSettings } from "../player/ScriptSettings";
@@ -336,16 +337,6 @@ export default function PlayerPage() {
   const [graphOpen, setGraphOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [markersOpen, setMarkersOpen] = useState(false);
-  /** The index of the chapter the playhead is in, or -1; followed only while the Markers list shows. */
-  const [chapterAt, setChapterAt] = useState(-1);
-  useEffect(() => {
-    if (!markersOpen || !markers.chapters.length) return;
-    const id = setInterval(() => {
-      const t = playhead.current.get();
-      setChapterAt(markers.chapters.findIndex((c) => c.start <= t && t < c.end));
-    }, 250);
-    return () => clearInterval(id);
-  }, [markersOpen, markers]);
   /** The played script's points, for its stats. */
   const playedActions = useMemo<Action[]>(() => played ? Array.from(played.at, (at, i) => ({ at, pos: played.pos[i] })) : [], [played]);
   const playedAverage = useMemo(() => playedActions.length && stats(playedActions, [...playedActions.keys()]).average, [playedActions]);
@@ -547,34 +538,7 @@ export default function PlayerPage() {
             )}
             <Separator size="4" />
             {/* The script's chapters and bookmarks in time; a click plays from there. */}
-            {played && (markers.chapters.length > 0 || markers.bookmarks.length > 0) && <>
-              <SectionHeader title="Markers" open={markersOpen} setOpen={setMarkersOpen} summary={`${markers.chapters.length + markers.bookmarks.length}`} />
-              {markersOpen && (
-                <Flex direction="column">
-                  {[...markers.chapters.map((c, k) => ({ name: c.name, at: c.start, end: c.end, k })), ...markers.bookmarks.map((b) => ({ name: b.name, at: b.time, end: null, k: -1 }))]
-                    .sort((a, b) => a.at - b.at)
-                    .map(({ name, at, end, k }, i) => (
-                      <Flex
-                        key={i}
-                        align="center"
-                        gap="2"
-                        px="1"
-                        role="button"
-                        onClick={() => playhead.current.set(at)}
-                        style={{ minHeight: 28, borderRadius: 4, cursor: "pointer", userSelect: "none", background: k >= 0 && k === chapterAt ? "var(--accent-a4)" : undefined }}
-                      >
-                        {/* A bookmark's colour, as in the editor. */}
-                        {end === null && <Box flexShrink="0" width="8px" height="8px" style={{ borderRadius: "50%", background: `var(--${markerColor(name)}-9)` }} />}
-                        <Text size="2" truncate style={{ flexGrow: 1 }}>{name}</Text>
-                        <Text size="1" color="gray" style={{ flexShrink: 0 }}>
-                          {formatScriptTime(at / 1000)}{end !== null && `–${formatScriptTime(end / 1000)}`}
-                        </Text>
-                      </Flex>
-                    ))}
-                </Flex>
-              )}
-              <Separator size="4" />
-            </>}
+            {played && (markers.chapters.length > 0 || markers.bookmarks.length > 0) && <MarkersList markers={markers} playhead={playhead} open={markersOpen} setOpen={setMarkersOpen} />}
             {/* The played script's stats; collapsed, its average speed. */}
             {played && <>
               <SectionHeader title="Stats" open={statsOpen} setOpen={setStatsOpen} summary={!!playedAverage && `${Math.round(playedAverage)}/s avg`} />
