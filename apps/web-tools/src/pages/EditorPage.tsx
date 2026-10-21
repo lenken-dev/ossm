@@ -20,6 +20,7 @@ import { entryAt, entryName, isFolder, isPreset, itemsAt, matching, merged, PRES
 import { changedSpan, HISTORY_SIZE, startedAt, UNDO_SIZE, withLibraryChanges, type Timeline } from "../editor/history";
 import { bookmarkItem, chapterItem, diffPieces, LanePreview, PreviewGraph, regionItem } from "../editor/previews";
 import { capturePointer, dragHeight } from "../drag";
+import { AXIS, PAD, useViewport } from "../editor/viewport";
 import { GraphLayout } from "./GraphPage";
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
@@ -43,18 +44,10 @@ const MAX_SPAN_FLOOR = 120_000;
 const SPAN_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60];
 const SPAN_STEP_COUNT = 240;
 
-/** Height of the time axis below the graph and space above and below the points, in px. */
-const AXIS = 20;
-const PAD = 10;
-
 /** Below this average spacing between the points in view, in px, the points are not drawn, only the line. */
 const DOT_SPACING = 6;
 /** A run of up to this many neighbouring selected points in view also shows rings on the points. */
 const RING_LIMIT = 50;
-
-/** Width of the graph's left and right edges where a drag scrolls it, in px, and its fastest scroll, in visible times per second. */
-const EDGE = 30;
-const EDGE_SPEED = 1.5;
 
 /** Height of the minimap that shows the whole script below the graph, in px. */
 const MINIMAP_HEIGHT = 40;
@@ -246,7 +239,8 @@ export default function EditorPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Re-rendered on a theme change, so the canvas picks up its colours. Radix's own context, as the theme's colours change a render after the app's appearance does.
   useThemeContext();
-  const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
+  const viewport = useViewport(boxRef, viewRef, setView);
+  const { width, height, plotHeight, x, y, pointerAt, track } = viewport;
   const videoInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLMediaElement>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -350,12 +344,6 @@ export default function EditorPage() {
   /** Drag the bottom edge of the video to set its height; at most most of the window. */
   const dragVideoHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, videoHeight, setVideoHeight, VIDEO_MIN_HEIGHT);
 
-  useEffect(() => {
-    const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
-    observer.observe(boxRef.current!);
-    return () => observer.disconnect();
-  }, []);
-
   const { actions, chapters, bookmarks, regions } = script;
   /** The selected regions while in the script; they go with an edit that replaces them. */
   const chosen = regions.filter((r) => regionsOn.has(r));
@@ -450,63 +438,6 @@ export default function EditorPage() {
   });
   /** Whether the script may be replaced, as Open and New do, starting its undo history anew but for the snippet library's changes: without unsaved changes, or once confirmed. */
   const discardable = () => !changed || confirm("Discard the unsaved changes?");
-  const plotHeight = height - AXIS;
-  const x = (at: number) => ((at - view.from) / view.span) * width;
-  const y = (pos: number) => PAD + (1 - pos / 100) * (plotHeight - 2 * PAD);
-  /** The script time and position under the pointer. */
-  const pointerAt = (e: { clientX: number; clientY: number }) => {
-    const rect = boxRef.current!.getBoundingClientRect();
-    const { from, span } = viewRef.current;
-    return {
-      at: Math.round(from + ((e.clientX - rect.left) / width) * span),
-      pos: Math.round(clamp(100 - ((e.clientY - rect.top - PAD) / (plotHeight - 2 * PAD)) * 100, 0, 100)),
-    };
-  };
-
-  /**
-   * Follow a drag from `e` on `target` with `move`, then `end`. Held at the
-   * graph's left or right edge, or past it, the graph scrolls that way, faster
-   * the further out, and `move` follows; only once the drag has been away from
-   * the edges, so a press near one does not scroll, and while `scrolls` allows
-   * it in that direction (1 right, -1 left) with the pointer at `m`.
-   */
-  const track = (
-    target: Element,
-    e: PointerEvent<Element>,
-    move: (m: globalThis.PointerEvent) => void,
-    end?: () => void,
-    scrolls?: (dir: number, m: globalThis.PointerEvent) => boolean,
-  ) => {
-    let last: globalThis.PointerEvent | null = null;
-    let armed = false;
-    let before = performance.now();
-    const pushed = (m: { clientX: number }) => {
-      const rect = boxRef.current!.getBoundingClientRect();
-      const px = m.clientX - rect.left;
-      return clamp(px < EDGE ? (px - EDGE) / EDGE : px > rect.width - EDGE ? (px - rect.width + EDGE) / EDGE : 0, -1, 1);
-    };
-    let frame = requestAnimationFrame(function scroll(now) {
-      const v = viewRef.current;
-      const push = last && armed ? pushed(last) : 0;
-      const from = Math.max(v.from + (push && (scrolls?.(Math.sign(push), last!) ?? true) ? push : 0) * EDGE_SPEED * v.span * ((now - before) / 1000), 0);
-      before = now;
-      if (from !== v.from) {
-        setView((viewRef.current = { ...v, from }));
-        move(last!);
-      }
-      frame = requestAnimationFrame(scroll);
-    });
-    const moved = (m: globalThis.PointerEvent) => {
-      last = m;
-      armed ||= !pushed(m);
-      move(m);
-    };
-    capturePointer(target, e.pointerId, moved, () => {
-      cancelAnimationFrame(frame);
-      end?.();
-    });
-  };
-
   /** The indices of the points in `area`, but the regions' points, which are never selected. */
   const within = (area: Area) => {
     const found = [];
