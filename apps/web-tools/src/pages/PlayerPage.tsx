@@ -20,7 +20,7 @@ import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
 import { parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
-import { FIRMWARE_RANGE_MM, RANGE_KEY } from "../hooks/useFollow";
+import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 import { dragHeight } from "../drag";
@@ -316,6 +316,16 @@ export default function PlayerPage() {
   const [graphOpen, setGraphOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [markersOpen, setMarkersOpen] = useState(false);
+  /** The index of the chapter the playhead is in, or -1; followed only while the Markers list shows. */
+  const [chapterAt, setChapterAt] = useState(-1);
+  useEffect(() => {
+    if (!markersOpen || !markers.chapters.length) return;
+    const id = setInterval(() => {
+      const t = playhead.current.get();
+      setChapterAt(markers.chapters.findIndex((c) => c.start <= t && t < c.end));
+    }, 250);
+    return () => clearInterval(id);
+  }, [markersOpen, markers]);
   /** The played script's points, for its stats. */
   const playedActions = useMemo<Action[]>(() => played ? Array.from(played.at, (at, i) => ({ at, pos: played.pos[i] })) : [], [played]);
   const playedAverage = useMemo(() => playedActions.length && stats(playedActions, [...playedActions.keys()]).average, [playedActions]);
@@ -329,6 +339,15 @@ export default function PlayerPage() {
   useEffect(() => {
     if (machineRangeMm !== null) setRangeMm(machineRangeMm);
   }, [machineRangeMm, setRangeMm]);
+  /** The machine's settings, 0–100, or until connected full depth and stroke at the middle sensation. */
+  const calcSettings = { depth: state?.depth ?? 100, stroke: state?.stroke ?? 100, sensation: state?.sensation ?? 50, speed: state?.speed ?? 0 };
+  /** The speed the script needs, and the share of its points reached at the machine's speed. */
+  const calc = useFollow(useMemo(() => {
+    if (!calcOpen || !played) return null;
+    const { depth, stroke, sensation, speed } = calcSettings;
+    return { kind: "script" as const, script: played, rate: scriptSpeed, settings: { rangeMm, depth: depth / 100, stroke: stroke / 100, jerk: sensation / 100 }, speed: speed / 100 };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- its values, not the object made each render
+  }, [calcOpen, played, scriptSpeed, rangeMm, calcSettings.depth, calcSettings.stroke, calcSettings.sensation, calcSettings.speed]));
   const media = videoUrl || silentUrl;
   const controls = (inPopout: boolean) => (
     <>
@@ -507,14 +526,14 @@ export default function PlayerPage() {
             )}
             <Separator size="4" />
             {/* The script's chapters and bookmarks in time; a click plays from there. */}
-            {played && (markers.chapters.length > 0 || markers.bookmarks.length > 0) && <MarkersList markers={markers} playhead={playhead} open={markersOpen} setOpen={setMarkersOpen} />}
+            {played && (markers.chapters.length > 0 || markers.bookmarks.length > 0) && <MarkersList markers={markers} playhead={playhead} chapterAt={chapterAt} open={markersOpen} setOpen={setMarkersOpen} />}
             {/* The played script's stats; collapsed, its average speed. */}
             {played && <>
               <SectionHeader title="Stats" open={statsOpen} setOpen={setStatsOpen} summary={!!playedAverage && `${Math.round(playedAverage)}/s avg`} />
               {statsOpen && <Stats actions={playedActions} picked={[...playedActions.keys()]} size="2" />}
               <Separator size="4" />
             </>}
-            <PlayerCalculator open={calcOpen} setOpen={setCalcOpen} played={played} scriptSpeed={scriptSpeed} state={state} rangeMm={rangeMm} machineRangeMm={machineRangeMm} setRangeMm={setRangeMm} />
+            <PlayerCalculator open={calcOpen} setOpen={setCalcOpen} played={played} scriptSpeed={scriptSpeed} settings={calcSettings} calc={calc} connected={!!state} rangeMm={rangeMm} machineRangeMm={machineRangeMm} setRangeMm={setRangeMm} />
             <Separator size="4" />
             <SectionHeader title="Graph" open={graphOpen} setOpen={setGraphOpen} />
             {graphOpen && (

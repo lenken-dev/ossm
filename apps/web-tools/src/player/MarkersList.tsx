@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from "react";
+import type { RefObject } from "react";
 import { Box, Flex, Separator, Text } from "@radix-ui/themes";
 import { markerColor } from "../funscript/markers";
 import { SectionHeader } from "../funscript/widgets";
@@ -10,22 +10,14 @@ import type { Markers, Playhead } from "./playback";
  * in time, each bookmark in its colour and the chapter the playhead is in
  * highlighted while the list shows; a click plays from there.
  */
-export function MarkersList({ markers, playhead, open, setOpen }: {
+export function MarkersList({ markers, playhead, chapterAt, open, setOpen }: {
   markers: Markers;
   playhead: RefObject<Playhead>;
+  /** The index of the chapter the playhead is in, or -1. */
+  chapterAt: number;
   open: boolean;
   setOpen: (open: boolean) => void;
 }) {
-  /** The index of the chapter the playhead is in, or -1; followed only while the Markers list shows. */
-  const [chapterAt, setChapterAt] = useState(-1);
-  useEffect(() => {
-    if (!open || !markers.chapters.length) return;
-    const id = setInterval(() => {
-      const t = playhead.current.get();
-      setChapterAt(markers.chapters.findIndex((c) => c.start <= t && t < c.end));
-    }, 250);
-    return () => clearInterval(id);
-  }, [open, markers, playhead]);
   return (
     <>
       <SectionHeader title="Markers" open={open} setOpen={setOpen} summary={`${markers.chapters.length + markers.bookmarks.length}`} />

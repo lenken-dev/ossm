@@ -1,38 +1,32 @@
-import { useContext, useMemo } from "react";
+import { useContext } from "react";
 import { DataList, Text, TextField, Tooltip } from "@radix-ui/themes";
 import { SectionHeader } from "../funscript/widgets";
-import { useFollow } from "../hooks/useFollow";
 import type { Funscript } from "../StreamPanel";
-import type { OssmState } from "./ble";
+import type { FollowResult, FollowRequest } from "../follow";
 import { PortalContainer } from "./controls";
 
 /**
  * The Speed Calculator section of the controls: the machine range, and for
  * the played script the speed it needs at the machine's depth, stroke and
  * sensation, with the share of its points reached at the connected machine's
- * speed. It works the numbers out only while expanded.
+ * speed.
  */
-export function PlayerCalculator({ open, setOpen, played, scriptSpeed, state, rangeMm, machineRangeMm, setRangeMm }: {
+export function PlayerCalculator({ open, setOpen, played, scriptSpeed, settings: calcSettings, calc, connected, rangeMm, machineRangeMm, setRangeMm }: {
   open: boolean;
   setOpen: (open: boolean) => void;
   played: Funscript | null;
   scriptSpeed: number;
-  /** The connected machine's state, null until connected. */
-  state: OssmState | null;
+  /** The machine's settings, 0–100. */
+  settings: { depth: number; stroke: number; sensation: number; speed: number };
+  /** The speed the script needs and the share of its points reached, undefined while worked out. */
+  calc: FollowResult<Extract<FollowRequest, { kind: "script" }>> | undefined;
+  /** A machine is connected, so it has a speed. */
+  connected: boolean;
   rangeMm: number;
   /** The connected machine's travel, which replaces the range typed in. */
   machineRangeMm: number | null;
   setRangeMm: (mm: number) => void;
 }) {
-  /** The machine's settings, 0–100, or until connected full depth and stroke at the middle sensation. */
-  const calcSettings = { depth: state?.depth ?? 100, stroke: state?.stroke ?? 100, sensation: state?.sensation ?? 50, speed: state?.speed ?? 0 };
-  /** The speed the script needs, and the share of its points reached at the machine's speed. */
-  const calc = useFollow(useMemo(() => {
-    if (!open || !played) return null;
-    const { depth, stroke, sensation, speed } = calcSettings;
-    return { kind: "script" as const, script: played, rate: scriptSpeed, settings: { rangeMm, depth: depth / 100, stroke: stroke / 100, jerk: sensation / 100 }, speed: speed / 100 };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- its values, not the object made each render
-  }, [open, played, scriptSpeed, rangeMm, calcSettings.depth, calcSettings.stroke, calcSettings.sensation, calcSettings.speed]));
   const needed = calc?.needed;
   const container = useContext(PortalContainer);
   return (
@@ -58,7 +52,7 @@ export function PlayerCalculator({ open, setOpen, played, scriptSpeed, state, ra
               </DataList.Item>
             </Tooltip>
             {/* Only the connected machine has a speed. */}
-            {state && calc && (
+            {connected && calc && (
               <DataList.Item>
                 <DataList.Label color="gray">Points reached</DataList.Label>
                 <DataList.Value>{(calc.reached * 100).toFixed(1)}%</DataList.Value>
