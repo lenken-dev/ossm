@@ -5,6 +5,8 @@ import { capturePointer } from "../drag";
 /** Height of the time axis below the graph and space above and below the points, in px. */
 export const AXIS = 20;
 export const PAD = 10;
+/** Where the playhead stays in view while the video plays, as a fraction of the visible time. */
+export const FOLLOW_AT = 0.2;
 
 /** Width of the graph's left and right edges where a drag scrolls it, in px, and its fastest scroll, in visible times per second. */
 const EDGE = 30;

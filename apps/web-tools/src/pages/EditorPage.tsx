@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
 import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, HeightIcon, PlayIcon, ScissorsIcon, ShuffleIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { useWindowEvent } from "../hooks/useWindowEvent";
@@ -19,7 +19,8 @@ import { entryAt, entryName, isFolder, isPreset, itemsAt, matching, merged, PRES
 import { changedSpan, HISTORY_SIZE, startedAt, UNDO_SIZE, withLibraryChanges, type Timeline } from "../editor/history";
 import { PreviewGraph } from "../editor/previews";
 import { dragHeight } from "../drag";
-import { AXIS, PAD, useViewport } from "../editor/viewport";
+import { AXIS, FOLLOW_AT, PAD, useViewport } from "../editor/viewport";
+import { MediaPlayer, useMediaPlayer } from "../editor/MediaPlayer";
 import { Minimap } from "../editor/Minimap";
 import { SpeedCalculator } from "../editor/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
@@ -56,14 +57,6 @@ const LANE_HEIGHT = 24;
 const SELECTED_MARKER = { outline: "2px solid var(--accent-9)", outlineOffset: -2 };
 /** Width of the grips on a chapter's edges in the lane, in px. */
 const MARKER_GRIP = 6;
-
-/** Default and smallest height of the reference video, in px. */
-const VIDEO_HEIGHT = 300;
-const VIDEO_MIN_HEIGHT = 80;
-/** Where the playhead stays in view while the video plays, as a fraction of the visible time. */
-const FOLLOW_AT = 0.2;
-/** Time steps of the seek buttons, in s, as typed; the first is always shown, empty ones are hidden. */
-const DEFAULT_STEPS = ["1", "", ""];
 
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
@@ -236,26 +229,7 @@ export default function EditorPage() {
   useThemeContext();
   const viewport = useViewport(boxRef, viewRef, setView);
   const { width, height, plotHeight, x, y, pointerAt, track } = viewport;
-  const videoInput = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLMediaElement>(null);
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  /** An audio file plays in a bar instead of the video area. */
-  const isAudio = !!videoFile?.type.startsWith("audio/");
-  /** Separate from the player's sizes. */
-  const [normalHeight, setNormalHeight] = usePersistedState("ossm:editorVideoHeight", VIDEO_HEIGHT, localStorage);
-  /** The video left in the page while it plays picture-in-picture has a height of its own. */
-  const [pipHeight, setPipHeight] = usePersistedState("ossm:editorVideoPipHeight", VIDEO_MIN_HEIGHT, localStorage);
-  const [paused, setPaused] = useState(true);
-  const [pip, setPip] = useState(false);
-  /** Hidden, the video or audio and its controls leave their room to the graph. */
-  const [playerShown, setPlayerShown] = useState(true);
-  /** Hide the player, pausing it, or show it. */
-  const togglePlayer = () => {
-    if (playerShown) videoRef.current?.pause();
-    setPlayerShown(!playerShown);
-  };
-  const [videoHeight, setVideoHeight] = pip ? [pipHeight, setPipHeight] : [normalHeight, setNormalHeight];
+  const media = useMediaPlayer(setView);
   /** A minimap of the whole script to scroll with, instead of the slider. */
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
   /** The sidebar's stats are expanded, else just their header. */
@@ -281,55 +255,19 @@ export default function EditorPage() {
   const gridAt = (at: number) => (grid?.step ? zero + Math.round((at - zero) / grid.step) * grid.step : at);
   /** `pos` on the nearest of the grid's depths; as it is without any. */
   const gridPos = (pos: number) => (grid?.positions.length ? grid.positions.reduce((a, b) => (Math.abs(b - pos) < Math.abs(a - pos) ? b : a)) : pos);
-  const [steps, setSteps] = usePersistedState("ossm:editorSteps", DEFAULT_STEPS, localStorage);
-  /** The steps in use; a first step that is not a positive number falls back to the default. */
-  const shownSteps = steps.map(Number).map((v, i) => (v > 0 ? v : i === 0 ? Number(DEFAULT_STEPS[0]) : null)).filter((v) => v !== null);
-  /** Video time, in ms. */
-  const [time, setTime] = useState(0);
-  /** Video length, in ms; 0 without one. */
-  const [videoDuration, setVideoDuration] = useState(0);
   const end = script.actions.length ? script.actions[script.actions.length - 1].at : 0;
-
-  useEffect(() => {
-    setVideoUrl(null);
-    if (!videoFile) return;
-    const url = URL.createObjectURL(videoFile);
-    setVideoUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [videoFile]);
-
-  // Picture-in-picture events bubble, so the document sees them for whichever video is shown.
-  useEffect(() => {
-    const update = () => setPip(!!document.pictureInPictureElement);
-    document.addEventListener("enterpictureinpicture", update);
-    document.addEventListener("leavepictureinpicture", update);
-    return () => {
-      document.removeEventListener("enterpictureinpicture", update);
-      document.removeEventListener("leavepictureinpicture", update);
-    };
-  }, []);
 
   // While the video plays, the playhead moves every frame and the graph follows it.
   useEffect(() => {
-    if (paused) return;
+    if (media.paused) return;
     let frame = requestAnimationFrame(function tick() {
-      const t = (videoRef.current?.currentTime ?? 0) * 1000;
-      setTime(t);
+      const t = (media.videoRef.current?.currentTime ?? 0) * 1000;
+      media.setTime(t);
       setView((v) => ({ ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) }));
       frame = requestAnimationFrame(tick);
     });
     return () => cancelAnimationFrame(frame);
-  }, [paused, setView]);
-
-  /** Seeking while paused brings the playhead into view. */
-  const seeked = () => {
-    const t = (videoRef.current?.currentTime ?? 0) * 1000;
-    setTime(t);
-    setView((v) => (t < v.from || t > v.from + v.span ? { ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) } : v));
-  };
-
-  /** Drag the bottom edge of the video to set its height; at most most of the window. */
-  const dragVideoHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, videoHeight, setVideoHeight, VIDEO_MIN_HEIGHT);
+  }, [media.paused, setView]);
 
   const { actions, chapters, bookmarks, regions } = script;
   /** The selected regions while in the script; they go with an edit that replaces them. */
@@ -751,37 +689,27 @@ export default function EditorPage() {
     });
   };
 
-  /** Move the playhead to `t` ms, within the media. */
-  const seek = (t: number) => {
-    const media = videoRef.current;
-    if (!media) return;
-    t = clamp(t, 0, (media.duration || 0) * 1000);
-    media.currentTime = t / 1000;
-    setTime(t);
-  };
-  /** The point after (`dir` 1) or before (-1) the playhead; half a ms of slack for the media's rounding. */
-  const neighbour = (dir: 1 | -1) => actions[dir > 0 ? byTime(actions, time + 0.5) : byTime(actions, time - 0.5) - 1];
 
   /** Drag the playhead to seek; playback pauses while dragging, as in the player. */
   const dragPlayhead = (e: PointerEvent<SVGGElement>) => {
     // The points are drawn over the playhead.
     const hit = pointUnder(e);
     if (hit !== null) return pointDown(e, hit);
-    const media = videoRef.current;
-    if (!media || e.button !== 0) return;
+    const element = media.videoRef.current;
+    if (!element || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     const target = e.currentTarget;
-    const wasPlaying = !media.paused;
-    media.pause();
-    const move = (m: globalThis.PointerEvent) => seek(pointerAt(m).at);
+    const wasPlaying = !element.paused;
+    element.pause();
+    const move = (m: globalThis.PointerEvent) => media.seek(pointerAt(m).at);
     track(target, e, move, () => {
-      if (wasPlaying) void media.play();
+      if (wasPlaying) void element.play();
     });
   };
 
   /** The time the minimap shows: the script (the main one too, in the advanced editor), the video and the visible time, whichever is longest. */
-  const total = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, videoDuration, view.span);
+  const total = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, media.videoDuration, view.span);
 
   /** Select the markers `ms`, clearing the point selection. */
   const selectMarkers = (ms: Iterable<Marker>) => {
@@ -1191,7 +1119,7 @@ export default function EditorPage() {
   const genMarked = !!genBox && bookmarks.some((b) => b.time >= genBox.from && b.time <= genBox.to);
   /** The timing function shows in its own view below the graph. */
   const timingShown = !!fnBox && timingView && !!timingKey;
-  const maxSpan = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, videoDuration, fnBox?.to ?? 0, MAX_SPAN_FLOOR);
+  const maxSpan = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, media.videoDuration, fnBox?.to ?? 0, MAX_SPAN_FLOOR);
   const spanStep = SPAN_STEPS.find((s) => s * SPAN_STEP_COUNT >= maxSpan / 1000) ?? SPAN_STEPS[SPAN_STEPS.length - 1];
 
   // The wheel scrolls through time, with Ctrl it zooms around the pointer. Not passive, to keep the page from scrolling.
@@ -1543,7 +1471,7 @@ export default function EditorPage() {
     if (tool && e.key === "Escape") return setTool(null);
     if (e.target instanceof HTMLInputElement) return;
     const key = e.key.toLowerCase();
-    if (key === "p" && !e.ctrlKey && !e.metaKey && videoUrl) return togglePlayer();
+    if (key === "p" && !e.ctrlKey && !e.metaKey && media.videoUrl) return media.togglePlayer();
     if (tool && !((e.ctrlKey || e.metaKey) && (key === "z" || key === "y"))) return;
     if ((e.ctrlKey || e.metaKey) && (key === "z" || key === "y")) {
       e.preventDefault();
@@ -1582,7 +1510,7 @@ export default function EditorPage() {
       else openAdvanced();
     } else if (key === "b" && !e.ctrlKey && !e.metaKey && !markersLocked) {
       // At the playhead, or without media under the pointer.
-      const at = videoUrl ? Math.round(time) : hoverAt.current;
+      const at = media.videoUrl ? Math.round(media.time) : hoverAt.current;
       if (at !== null) addBookmark(at);
     }
   });
@@ -2128,7 +2056,7 @@ export default function EditorPage() {
       setSelected(new Set());
       setMarked(new Set());
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
-      const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, videoDuration));
+      const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, media.videoDuration));
       // Taken as they are, never generated again.
       const regions = readRegions((rest.ossmRsWebTools as { regions?: unknown } | null | undefined)?.regions);
       const next = { name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers, regions };
@@ -2506,7 +2434,7 @@ export default function EditorPage() {
   /** Show the time `t` ms: the view centred on it when it is out of view, and the playhead there. */
   const goTo = (t: number) => {
     if (t < view.from || t > view.from + view.span) setView({ ...view, from: clamp(t - view.span / 2, 0, Math.max(total - view.span, 0)) });
-    seek(t);
+    media.seek(t);
   };
 
   /**
@@ -2692,34 +2620,15 @@ export default function EditorPage() {
           e.target.value = "";
         }}
       />
-      <input
-        ref={videoInput}
-        type="file"
-        accept="video/*,audio/*"
-        hidden
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) {
-            setPaused(true);
-            setTime(0);
-            setVideoFile(file);
-            setPlayerShown(true);
-          }
-          e.target.value = "";
-        }}
-      />
       {!tool && <Flex gap="2">
-        <Button variant="soft" style={{ flex: 1 }} onClick={() => videoInput.current?.click()}>
-          <VideoIcon /> {videoFile ? "Change media" : "Open video or audio"}
+        <Button variant="soft" style={{ flex: 1 }} onClick={media.chooseFile}>
+          <VideoIcon /> {media.videoFile ? "Change media" : "Open video or audio"}
         </Button>
-        {videoFile && (
+        {media.videoFile && (
           <Button
             variant="soft"
             color="gray"
-            onClick={() => {
-              setPaused(true);
-              setVideoFile(null);
-            }}
+            onClick={media.close}
           >
             <Cross2Icon /> Close
           </Button>
@@ -2729,14 +2638,14 @@ export default function EditorPage() {
       <Box>
         <Text as="label" size="2" weight="medium" mb="1" style={{ display: "block" }} htmlFor="editor-name">Name</Text>
         <TextField.Root id="editor-name" value={script.name} onChange={(e) => setScript({ ...script, name: e.target.value })}>
-          {videoFile && (
+          {media.videoFile && (
             <TextField.Slot side="right">
               <IconButton
                 size="1"
                 variant="ghost"
                 aria-label="Name after the media"
                 title="Name after the media"
-                onClick={() => setScript({ ...script, name: videoFile.name.replace(/\.[^.]+$/, "") })}
+                onClick={() => setScript({ ...script, name: media.videoFile!.name.replace(/\.[^.]+$/, "") })}
               >
                 <VideoIcon />
               </IconButton>
@@ -3159,17 +3068,6 @@ export default function EditorPage() {
     </Flex>
   );
 
-  const mediaProps = {
-    ref: (el: HTMLMediaElement | null) => void (videoRef.current = el),
-    src: videoUrl ?? undefined,
-    controls: true,
-    onPlay: () => setPaused(false),
-    onPause: () => setPaused(true),
-    onEmptied: () => (setPaused(true), setVideoDuration(0)),
-    onDurationChange: () => setVideoDuration((videoRef.current?.duration || 0) * 1000),
-    onSeeked: seeked,
-  };
-
   /** Whether the time from `from` to `to` is in view, to draw only the markers there. */
   const inView = (from: number, to: number) => to >= view.from && from <= view.from + view.span;
 
@@ -3180,105 +3078,7 @@ export default function EditorPage() {
 
   const content = (
     <Flex direction="column" gap="3" p="3" height="100%">
-      {/* Hidden, not unmounted, so the media stays loaded; without media, so it leaves no gap. */}
-      <Flex direction="column" gap="3" flexShrink="0" display={videoUrl && playerShown ? undefined : "none"}>
-      {videoUrl && isAudio && <audio {...mediaProps} style={{ width: "100%", flexShrink: 0 }} />}
-      {videoUrl && !isAudio && (
-        <Box position="relative" flexShrink="0">
-          <video {...mediaProps} style={{ display: "block", width: "100%", height: videoHeight, background: "black", borderRadius: 6 }} />
-          <Box
-            title="Drag to resize"
-            style={{
-              position: "absolute",
-              bottom: -10,
-              left: "calc(50% - 20px)",
-              width: 40,
-              height: 12,
-              borderBottom: "4px solid var(--gray-a8)",
-              cursor: "ns-resize",
-              touchAction: "none",
-            }}
-            onPointerDown={dragVideoHeight}
-          />
-        </Box>
-      )}
-      {videoUrl && (
-        <Flex align="center" justify="center" gap="2" flexShrink="0">
-          {/* The first step nearest the middle. */}
-          {[...shownSteps].reverse().map((step, i) => (
-            <Button key={`back${i}`} variant="soft" onClick={() => seek(time - step * 1000)}>
-              −{step}s
-            </Button>
-          ))}
-          <IconButton variant="soft" aria-label="Previous point" title="Previous point" disabled={!neighbour(-1)} onClick={() => seek(neighbour(-1).at)}>
-            <TrackPreviousIcon />
-          </IconButton>
-          <IconButton
-            aria-label={paused ? "Play" : "Pause"}
-            onClick={() => (paused ? void videoRef.current?.play() : videoRef.current?.pause())}
-          >
-            {paused ? <PlayIcon /> : <PauseIcon />}
-          </IconButton>
-          <IconButton variant="soft" aria-label="Next point" title="Next point" disabled={!neighbour(1)} onClick={() => seek(neighbour(1).at)}>
-            <TrackNextIcon />
-          </IconButton>
-          {shownSteps.map((step, i) => (
-            <Button key={`fwd${i}`} variant="soft" onClick={() => seek(time + step * 1000)}>
-              +{step}s
-            </Button>
-          ))}
-          <IconButton
-            variant="soft"
-            color="gray"
-            aria-label="Playhead to view"
-            title="Move the playhead into view"
-            disabled={time >= view.from && time <= view.from + view.span}
-            onClick={() => seek(view.from + view.span * FOLLOW_AT)}
-          >
-            <Crosshair2Icon />
-          </IconButton>
-          {!isAudio && document.pictureInPictureEnabled && (
-            <IconButton
-              variant={pip ? "solid" : "soft"}
-              color="gray"
-              aria-label="Picture in picture"
-              aria-pressed={pip}
-              title="Picture in picture"
-              onClick={() => void (pip ? document.exitPictureInPicture() : (videoRef.current as HTMLVideoElement).requestPictureInPicture())}
-            >
-              <OpenInNewWindowIcon />
-            </IconButton>
-          )}
-          <Popover.Root>
-            <Popover.Trigger>
-              <IconButton variant="soft" color="gray" aria-label="Step settings">
-                <GearIcon />
-              </IconButton>
-            </Popover.Trigger>
-            <Popover.Content width="220px">
-              <Flex direction="column" gap="2">
-                <Text size="2" weight="medium">Seek steps</Text>
-                {steps.map((step, i) => (
-                  <TextField.Root
-                    key={i}
-                    type="number"
-                    min={0}
-                    step="any"
-                    placeholder={i === 0 ? DEFAULT_STEPS[0] : "Off"}
-                    aria-label={`Step ${i + 1}`}
-                    value={step}
-                    onChange={(e) => setSteps(steps.map((s, j) => (j === i ? e.target.value : s)))}
-                  >
-                    <TextField.Slot side="right">s</TextField.Slot>
-                  </TextField.Root>
-                ))}
-                <Text size="1" color="gray">The first step is always shown; leave the others empty to hide them.</Text>
-              </Flex>
-            </Popover.Content>
-          </Popover.Root>
-        </Flex>
-      )}
-      </Flex>
+      <MediaPlayer media={media} actions={actions} view={view} />
       {/* Toolbox: convenience buttons for what the keyboard also does. */}
       <Flex gap="2" align="center" flexShrink="0">
         <Flex>
@@ -3359,14 +3159,14 @@ export default function EditorPage() {
             </Flex>
           </AlertDialog.Content>
         </AlertDialog.Root>
-        {videoUrl && <>
+        {media.videoUrl && <>
           <Separator orientation="vertical" size="2" />
           <Button
-            variant={playerShown ? "solid" : "soft"}
-            color={playerShown ? undefined : "gray"}
-            aria-pressed={playerShown}
-            title={`${playerShown ? "Hide" : "Show"} the ${isAudio ? "audio" : "video"} player (P)`}
-            onClick={togglePlayer}
+            variant={media.playerShown ? "solid" : "soft"}
+            color={media.playerShown ? undefined : "gray"}
+            aria-pressed={media.playerShown}
+            title={`${media.playerShown ? "Hide" : "Show"} the ${media.isAudio ? "audio" : "video"} player (P)`}
+            onClick={media.togglePlayer}
           >
             <VideoIcon /> Player
           </Button>
@@ -3474,12 +3274,12 @@ export default function EditorPage() {
             {bookmarks.filter((b) => inView(b.time, b.time)).map((b, i) => (
               <line key={`b${i}`} x1={x(b.time)} x2={x(b.time)} y1={0} y2={height} style={{ stroke: `var(--${markerColor(b.name)}-a6)` }} />
             ))}
-            {videoUrl && (
+            {media.videoUrl && (
               <g onPointerDown={dragPlayhead} style={{ cursor: "ew-resize" }}>
                 {/* A wider, invisible line to grab. */}
-                <line x1={x(time)} x2={x(time)} y1={0} y2={plotHeight} strokeWidth={12} stroke="transparent" />
-                <line x1={x(time)} x2={x(time)} y1={0} y2={plotHeight} strokeWidth={2} style={{ stroke: "var(--gray-12)" }} />
-                <path d={`M${x(time) - 6},0 h12 l-6,8 z`} style={{ fill: "var(--gray-12)" }} />
+                <line x1={x(media.time)} x2={x(media.time)} y1={0} y2={plotHeight} strokeWidth={12} stroke="transparent" />
+                <line x1={x(media.time)} x2={x(media.time)} y1={0} y2={plotHeight} strokeWidth={2} style={{ stroke: "var(--gray-12)" }} />
+                <path d={`M${x(media.time) - 6},0 h12 l-6,8 z`} style={{ fill: "var(--gray-12)" }} />
               </g>
             )}
             {/* Where the points being placed can't go in, the time they would cover, red. */}
@@ -3834,7 +3634,7 @@ export default function EditorPage() {
           bookmarks={bookmarks}
           regions={[...(advanced ? main.regions : []), ...regions]}
           context={advanced ? context : null}
-          playheadAt={videoUrl ? time : null}
+          playheadAt={media.videoUrl ? media.time : null}
         />
       ) : (
         <Slider
