@@ -23,6 +23,7 @@ import { AXIS, FOLLOW_AT, PAD, useViewport } from "../editor/viewport";
 import { MediaPlayer, useMediaPlayer } from "../editor/MediaPlayer";
 import { useMarkers } from "../editor/useMarkers";
 import { LANE_HEIGHT, MarkerLane } from "../editor/MarkerLane";
+import { MarkersPanel } from "../editor/MarkersPanel";
 import { Minimap } from "../editor/Minimap";
 import { SpeedCalculator } from "../editor/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
@@ -2244,49 +2245,6 @@ export default function EditorPage() {
   };
 
   /**
-   * The Markers panel, beside the graph: the chapters and bookmarks in time,
-   * the selected ones marked. A click on one shows it, and selects it;
-   * bookmarks are selected together as on the lane. A double-click renames
-   * it. The advanced editor's document has no markers of its own, so there
-   * they only show their times, unless its lane is unlocked.
-   */
-  const markerRow = (m: Marker, key: string) => (
-    <Flex
-      key={key}
-      align="center"
-      gap="2"
-      px="1"
-      onClick={(e) => {
-        if (!markersLocked && markers.markerPicked(e, m)) return;
-        if (!markersLocked) {
-          markers.markerAnchor.current = m;
-          markers.selectMarkers([m]);
-        }
-        goTo(markers.timeOf(m));
-      }}
-      onDoubleClick={() => !markersLocked && markers.rename([m])}
-      style={{ minHeight: 28, borderRadius: 4, cursor: "pointer", userSelect: "none", background: markers.marked.has(m) ? "var(--accent-a4)" : undefined }}
-    >
-      {/* A bookmark's colour, as its flag in the lane. */}
-      {!markers.isChapter(m) && <Box flexShrink="0" width="8px" height="8px" style={{ borderRadius: "50%", background: `var(--${markerColor(m.name)}-9)` }} />}
-      <Text size="2" truncate style={{ flexGrow: 1 }}>{m.name}</Text>
-      <Text size="1" color="gray" style={{ flexShrink: 0 }}>
-        {markers.isChapter(m) ? `${formatScriptTime(m.start / 1000)}–${formatScriptTime(m.end / 1000)}` : formatScriptTime(m.time / 1000)}
-      </Text>
-    </Flex>
-  );
-  const markersPanel = <Flex direction="column" gap="3" p="3">
-    <Text size="2" weight="medium">Chapters</Text>
-    <Flex direction="column">
-      {chapters.length ? chapters.map((c, i) => markerRow(c, `c${i}`)) : <Text size="1" color="gray">No chapters. Drag along the lane under the graph to draw one.</Text>}
-    </Flex>
-    <Text size="2" weight="medium">Bookmarks</Text>
-    <Flex direction="column">
-      {bookmarks.length ? bookmarks.map((b, i) => markerRow(b, `b${i}`)) : <Text size="1" color="gray">No bookmarks. Click the lane under the graph, or press B, to add one.</Text>}
-    </Flex>
-  </Flex>;
-
-  /**
    * The open tool's functions as parts of its panel: those of its `timing`,
    * shown with the Timing part, then Out and In, each its own part,
    * collapsed to a header with its shape; expanded, its shape, then its
@@ -3371,7 +3329,7 @@ export default function EditorPage() {
         <SegmentedControl.Item value="snippets">Snippets</SegmentedControl.Item>
       </SegmentedControl.Root>
     </Box>
-    {asideTab === "markers" ? markersPanel : snippetsPanel}
+    {asideTab === "markers" ? <MarkersPanel markers={markers} chapters={chapters} bookmarks={bookmarks} locked={markersLocked} onGoTo={goTo} /> : snippetsPanel}
   </Flex>;
 
   return <GraphLayout sidebar={sidebar} content={content} aside={asideShown && asidePanel} />;
