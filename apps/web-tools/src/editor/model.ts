@@ -126,6 +126,12 @@ export const regionKind = (r: Region) => (isInstance(r) ? "Snippet" : isRepeat(r
 /** A region's label: an instance's by its name, another's its name or else what made it. */
 export const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}` : r.name ?? regionKind(r));
 
+/** How a region's band behind the graph fills and outlines, and its label's colour: cyan, an instance's violet, a Repeat one's orange; selected, it fills stronger and outlines as the selected markers. */
+export const bandOf = (r: Region) => {
+  const c = isInstance(r) ? "violet" : isRepeat(r) ? "orange" : "cyan";
+  return { fill: `var(--${c}-a3)`, selectedFill: `var(--${c}-a5)`, stroke: `var(--${c}-a8)`, label: `var(--${c}-11)` };
+};
+
 /**
  * The advanced editor's document, which the page edits instead of the main
  * script while it is open: its points, in the main script's times, its 0, and

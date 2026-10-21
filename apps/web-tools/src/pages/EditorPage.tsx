@@ -12,26 +12,22 @@ import { clamp, LINE_COLOR, points, speed, stats, type Action } from "../funscri
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Bookmark, type Chapter, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { NamePopover, SnippetIcon } from "../editor/NamePopover";
-import { afterTime, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, isRepeat, items, markersRegions, movedBy, regionAt, regionKind, regionName, regionNoun, sameContent, spanned, swapped, type Advanced, type Area, type Clip, type Content, type Inner, type Instance, type Placing, type Region, type Script } from "../editor/model";
+import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, isRepeat, items, markersRegions, movedBy, regionAt, regionKind, regionName, regionNoun, sameContent, spanned, swapped, type Advanced, type Area, type Clip, type Content, type Inner, type Instance, type Placing, type Region, type Script } from "../editor/model";
 import { fastestOf, gridParams, scaled, scaleParams, shifted, shiftParams, speedLimited, typed, type GridFields } from "../editor/transforms";
 import { extent, funcAt, GENERATE_DEFAULTS, generated, KNOT_GAP, newSeed, ownScale, RANGED, rangeFields, rangeParams, refilled, REPEAT_DEFAULTS, repeated, repeatParams, reshaped, SHAPES, SPANNED, splineAt, TOOLS, withBookmarks, type Func, type FuncKey, type GenerateSetup, type GenPart, type Knots, type RepeatSetup, type Shape, type ShapeField, type ToolKind } from "../editor/generate";
 import { download, readClip, readRegions } from "../editor/file";
 import { entryAt, entryName, isFolder, isPreset, itemsAt, matching, merged, PRESETS, readEntries, sortedEntries, under, updatedAt, type Entry, type Folder, type LibraryFile, type Snippet } from "../editor/library";
 import { changedSpan, HISTORY_SIZE, startedAt, UNDO_SIZE, withLibraryChanges, type Timeline } from "../editor/history";
 import { bookmarkItem, chapterItem, diffPieces, LanePreview, PreviewGraph, regionItem } from "../editor/previews";
-import { capturePointer, dragHeight } from "../drag";
+import { dragHeight } from "../drag";
 import { AXIS, PAD, useViewport } from "../editor/viewport";
+import { Minimap } from "../editor/Minimap";
 import { GraphLayout } from "./GraphPage";
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
 /** How the selection box and the tools' boxes in the graph fill and outline. */
 const TOOL_BOX = { fill: "var(--accent-a3)", stroke: "var(--accent-9)" };
-/** How a region's band behind the graph fills and outlines, and its label's colour: cyan, an instance's violet, a Repeat one's orange; selected, it fills stronger and outlines as the selected markers. */
-const bandOf = (r: Region) => {
-  const c = isInstance(r) ? "violet" : isRepeat(r) ? "orange" : "cyan";
-  return { fill: `var(--${c}-a3)`, selectedFill: `var(--${c}-a5)`, stroke: `var(--${c}-a8)`, label: `var(--${c}-11)` };
-};
 /** Size of the selection box's grips, in px. */
 const GRIP = 8;
 /** Size of the buttons in the selection box that extend it, in px. */
@@ -48,9 +44,6 @@ const SPAN_STEP_COUNT = 240;
 const DOT_SPACING = 6;
 /** A run of up to this many neighbouring selected points in view also shows rings on the points. */
 const RING_LIMIT = 50;
-
-/** Height of the minimap that shows the whole script below the graph, in px. */
-const MINIMAP_HEIGHT = 40;
 
 /** Least and first height of the view of Generate's Interval or Speed below the graph, in px. */
 const TIMING_HEIGHT = 80;
@@ -795,23 +788,6 @@ export default function EditorPage() {
 
   /** The time the minimap shows: the script (the main one too, in the advanced editor), the video and the visible time, whichever is longest. */
   const total = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, videoDuration, view.span);
-  const minimapX = (at: number) => (at / total) * width;
-  /**
-   * Drag the visible time around in the minimap. Pressed outside it, it
-   * centres on the pointer first, as in a code editor's minimap.
-   */
-  const dragMinimap = (e: PointerEvent<SVGSVGElement>) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const target = e.currentTarget;
-    const left = target.getBoundingClientRect().left;
-    const at = (m: { clientX: number }) => ((m.clientX - left) / width) * total;
-    const pressed = at(e);
-    const offset = pressed >= view.from && pressed <= view.from + view.span ? pressed - view.from : view.span / 2;
-    const move = (m: { clientX: number }) => setView((v) => ({ ...v, from: clamp(at(m) - offset, 0, total - v.span) }));
-    move(e);
-    capturePointer(target, e.pointerId, move);
-  };
 
   /** Select the markers `ms`, clearing the point selection. */
   const selectMarkers = (ms: Iterable<Marker>) => {
@@ -3245,15 +3221,6 @@ export default function EditorPage() {
     onSeeked: seeked,
   };
 
-  // Built only when they change, not on every pointer move while placing.
-  const minimapY = (pos: number) => 2 + (1 - pos / 100) * (MINIMAP_HEIGHT - 4);
-  const minimapContext = useMemo(() => context.map((run) => `M${run.map((a) => `${minimapX(a.at)},${minimapY(a.pos)}`).join("L")}`).join(""), [context, width, total]);
-  const minimapLine = useMemo(() => actions.map((a) => `${minimapX(a.at)},${minimapY(a.pos)}`).join(" "), [actions, width, total]);
-  const minimapSelected = useMemo(
-    () => kept.map((a, i) => selected.has(i) ? `${selected.has(i - 1) ? "L" : "M"}${minimapX(a.at)},${minimapY(a.pos)}${selected.has(i - 1) ? "" : "l0,0"}` : "").join(""),
-    [kept, selected, width, total],
-  );
-
   /** Whether the time from `from` to `to` is in view, to draw only the markers there. */
   const inView = (from: number, to: number) => to >= view.from && from <= view.from + view.span;
 
@@ -3990,49 +3957,20 @@ export default function EditorPage() {
         </Flex>
       </Flex>
       {minimap ? (
-        <svg
+        <Minimap
           width={width}
-          height={MINIMAP_HEIGHT}
-          aria-label="Minimap"
-          onPointerDown={dragMinimap}
-          style={{ display: "block", flexShrink: 0, borderRadius: 6, background: "var(--gray-a2)", touchAction: "none", userSelect: "none" }}
-        >
-          {chapters.map((c, i) => (
-            <rect key={i} x={minimapX(c.start)} width={minimapX(c.end) - minimapX(c.start)} height={MINIMAP_HEIGHT} style={{ fill: light[i] ? "var(--gray-a3)" : "var(--gray-a4)" }} />
-          ))}
-          {[...(advanced ? main.regions : []), ...regions].map((r, i) => (
-            <rect key={`r${i}`} x={minimapX(r.from)} width={minimapX(r.to) - minimapX(r.from)} height={MINIMAP_HEIGHT} style={{ fill: bandOf(r).fill }} />
-          ))}
-          {/* The main script's other points behind the advanced editor's. */}
-          {advanced && <path d={minimapContext} fill="none" strokeWidth={1} style={{ stroke: "var(--gray-a7)", pointerEvents: "none" }} />}
-          {/* ponytail: the whole script as one polyline; fine for thousands of points, thin it out if a long script lags. */}
-          <polyline
-            points={minimapLine}
-            fill="none"
-            stroke={LINE_COLOR}
-            strokeWidth={1}
-          />
-          {/* The selected runs over it, a lone selected point as a dot. */}
-          <path
-            d={minimapSelected}
-            fill="none"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ stroke: "var(--gray-12)", pointerEvents: "none" }}
-          />
-          {bookmarks.map((b, i) => (
-            <line key={i} x1={minimapX(b.time)} x2={minimapX(b.time)} y1={0} y2={6} strokeWidth={2} style={{ stroke: `var(--${markerColor(b.name)}-9)` }} />
-          ))}
-          {videoUrl && <line x1={minimapX(time)} x2={minimapX(time)} y1={0} y2={MINIMAP_HEIGHT} style={{ stroke: "var(--gray-12)" }} />}
-          <rect
-            x={minimapX(view.from)}
-            width={Math.max(minimapX(view.span), 4)}
-            height={MINIMAP_HEIGHT}
-            rx={4}
-            style={{ fill: "var(--gray-a5)", stroke: "var(--gray-a8)", cursor: "grab" }}
-          />
-        </svg>
+          total={total}
+          view={view}
+          setView={setView}
+          actions={actions}
+          kept={kept}
+          selected={selected}
+          chapters={chapters}
+          bookmarks={bookmarks}
+          regions={[...(advanced ? main.regions : []), ...regions]}
+          context={advanced ? context : null}
+          playheadAt={videoUrl ? time : null}
+        />
       ) : (
         <Slider
           aria-label="Scroll through time"
