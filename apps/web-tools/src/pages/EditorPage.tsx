@@ -16,62 +16,9 @@ import { afterTime, byTime, clipBy, EMPTY, extended, generators, instanceOf, isI
 import { fastestOf, gridParams, scaled, scaleParams, shifted, shiftParams, speedLimited, typed, type GridFields } from "../editor/transforms";
 import { extent, funcAt, GENERATE_DEFAULTS, generated, KNOT_GAP, newSeed, ownScale, RANGED, rangeFields, rangeParams, refilled, REPEAT_DEFAULTS, repeated, repeatParams, reshaped, SHAPES, SPANNED, splineAt, TOOLS, withBookmarks, type Func, type FuncKey, type GenerateSetup, type GenPart, type Knots, type RepeatSetup, type Shape, type ShapeField, type ToolKind } from "../editor/generate";
 import { download, readClip, readRegions } from "../editor/file";
+import { entryAt, entryName, isFolder, isPreset, itemsAt, matching, merged, PRESETS, readEntries, sortedEntries, under, updatedAt, type Entry, type Folder, type LibraryFile, type Snippet } from "../editor/library";
 import { capturePointer, dragHeight } from "../drag";
 import { GraphLayout } from "./GraphPage";
-import presetsFile from "./presets.json";
-
-/** A saved advanced-editor document: its points, at least two, and generator regions, timed from its first point at 0. */
-interface Snippet extends Clip {
-  name: string;
-}
-
-/** A folder of the snippet library, with its folders and snippets. */
-interface Folder {
-  folder: string;
-  items: Entry[];
-}
-
-/** A row of the snippet library; its name is unique in its folder, among folders and snippets alike. */
-type Entry = Folder | Snippet;
-const isFolder = (e: Entry): e is Folder => "folder" in e;
-const entryName = (e: Entry) => (isFolder(e) ? e.folder : e.name);
-
-/** The snippet library as it is kept and exported. */
-interface LibraryFile {
-  ossmRsWebTools: { version: 1; snippets: Entry[] };
-}
-
-/** Whether the entry at `path`, by its folders' and its own name, is `folder` or in it. */
-const under = (path: string[], folder: string[]) => folder.length <= path.length && folder.every((n, i) => path[i] === n);
-
-/** The entries in the folder at `path` of `lib`; none when it is not there. */
-const itemsAt = (lib: Entry[], path: string[]) => path.reduce<Entry[]>((items, name) => items.find((e): e is Folder => isFolder(e) && e.folder === name)?.items ?? [], lib);
-
-/** The entry at `path` of `lib`. */
-const entryAt = (lib: Entry[], path: string[]) => itemsAt(lib, path.slice(0, -1)).find((e) => entryName(e) === path[path.length - 1]);
-
-/** `lib` with the entries in the folder at `path` changed by `f`. */
-const updatedAt = (lib: Entry[], path: string[], f: (items: Entry[]) => Entry[]): Entry[] =>
-  path.length ? lib.map((e) => (isFolder(e) && e.folder === path[0] ? { ...e, items: updatedAt(e.items, path.slice(1), f) } : e)) : f(lib);
-
-/** `items` with `incoming` merged in: a folder into the one of the same name, but a preset, the rest under a free name, " (2)" on. */
-function merged(items: Entry[], incoming: Entry[]): Entry[] {
-  return incoming.reduce((list, e) => {
-    const same = isFolder(e) && list.find((o): o is Folder => isFolder(o) && o.folder === e.folder && !PRESETS.includes(o));
-    if (same && isFolder(e)) return list.map((o) => (o === same ? { ...same, items: merged(same.items, e.items) } : o));
-    let name = entryName(e);
-    for (let k = 2; list.some((o) => entryName(o) === name); k++) name = `${entryName(e)} (${k})`;
-    return [...list, isFolder(e) ? { folder: name, items: merged([], e.items) } : { ...e, name }];
-  }, items);
-}
-
-/** Folders first, then snippets, each by name. */
-/** The entries of `items` whose names have `q` in them, ignoring case: a folder with all it holds, else with those in it that do. */
-const matching = (items: Entry[], q: string): Entry[] => items.flatMap((e) => {
-  if (entryName(e).toLowerCase().includes(q.toLowerCase())) return [e];
-  const inner = isFolder(e) ? matching(e.items, q) : [];
-  return inner.length ? [{ ...e, items: inner } as Folder] : [];
-});
 
 /** What is selected: points by index, regions and markers. */
 interface Selection {
@@ -140,8 +87,6 @@ function changedSpan(a: Content, b: Content) {
   return times.length ? { from: times.reduce((m, t) => Math.min(m, t)), to: times.reduce((m, t) => Math.max(m, t)) } : null;
 }
 
-const sortedEntries = (items: Entry[]) => [...items].sort((a, b) => Number(isFolder(b)) - Number(isFolder(a)) || entryName(a).localeCompare(entryName(b)));
-
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
 /** How the selection box and the tools' boxes in the graph fill and outline. */
@@ -201,20 +146,6 @@ const VIDEO_MIN_HEIGHT = 80;
 const FOLLOW_AT = 0.2;
 /** Time steps of the seek buttons, in s, as typed; the first is always shown, empty ones are hidden. */
 const DEFAULT_STEPS = ["1", "", ""];
-
-/** The snippet library's entries in `list`, from an imported file; malformed ones go: without a name, or a snippet without two points. */
-function readEntries(list: unknown): Entry[] {
-  return (Array.isArray(list) ? list : []).flatMap((e): Entry[] => {
-    if (typeof e?.folder === "string" && e.folder.trim() && Array.isArray(e.items)) return [{ folder: e.folder, items: readEntries(e.items) }];
-    const clip = typeof e?.name === "string" && e.name.trim() ? readClip(e.actions, e.regions) : null;
-    // Its instances' contents only, as instances do not nest.
-    return clip && clip.actions.length > 1 ? [{ name: e.name, actions: clip.actions, regions: generators(clip.regions) }] : [];
-  });
-}
-
-/** The library's built-in entries, at its top level before the user's; they and all in them can't be changed, moved, or added to. */
-const PRESETS = readEntries(presetsFile.ossmRsWebTools.snippets);
-const isPreset = (path: string[]) => PRESETS.some((e) => entryName(e) === path[0]);
 
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
