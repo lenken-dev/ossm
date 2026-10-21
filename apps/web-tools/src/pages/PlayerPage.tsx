@@ -32,6 +32,7 @@ import { SectionHeader, Stats } from "../funscript/widgets";
 import { DEPTH_ENDS, PatternControls, PortalContainer, SettingSlider, SetupDialog, STROKE_ENDS } from "../player/controls";
 import { ScriptMinimap } from "../player/ScriptMinimap";
 import { ScriptPreview } from "../player/ScriptPreview";
+import { ScriptSettings } from "../player/ScriptSettings";
 import { usePlayhead } from "../player/usePlayhead";
 import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, silence, TICK_MS, type Markers } from "../player/playback";
 import { DEFAULT_OVERLAY, dragAxis, handleStyle, OVERLAY_MIN_HEIGHT, OVERLAY_MIN_WIDTH, RESIZE_HANDLES } from "../player/overlay";
@@ -521,54 +522,29 @@ export default function PlayerPage() {
             )}
             <Separator size="4" />
             <SectionHeader title="Funscript" open={funscriptOpen} setOpen={setFunscriptOpen} />
-            {funscriptOpen && <>
-              <LabeledSlider
-                label="Script speed"
-                value={scriptSpeed}
-                display={`x${scriptSpeed}`}
-                min={0.25}
-                max={2}
-                step={0.05}
-                disabled={!paused}
-                onChange={(v) => {
+            {funscriptOpen && (
+              <ScriptSettings
+                paused={paused}
+                scriptSpeed={scriptSpeed}
+                onScriptSpeed={(v) => {
                   // The silent clock's length follows the speed; keep the playhead at the same script time.
                   if (silentUrl) silentResume.current ??= (videoRef.current?.currentTime ?? 0) * 1000 * scriptSpeed;
                   setScriptSpeed(Math.round(v * 100) / 100);
                 }}
+                reverse={reverse}
+                setReverse={setReverse}
+                simplified={simplified}
+                setSimplified={setSimplified}
+                synced={synced}
+                onSynced={(on) => {
+                  // The script's own playhead starts where the media's left it.
+                  if (!on) restartClock(playhead.current.get());
+                  setSynced(on);
+                }}
+                looped={looped}
+                setLooped={setLooped}
               />
-              <Text as="label" size="2" weight="medium">
-                <Flex align="center" justify="between" gap="2">
-                  Reverse
-                  <Switch checked={reverse} disabled={!paused} onCheckedChange={setReverse} />
-                </Flex>
-              </Text>
-              <Text as="label" size="2" weight="medium">
-                <Flex align="center" justify="between" gap="2">
-                  Simplify
-                  <Switch checked={simplified} disabled={!paused} onCheckedChange={setSimplified} />
-                </Flex>
-              </Text>
-              <Text as="label" size="2" weight="medium">
-                <Flex align="center" justify="between" gap="2">
-                  Sync with media
-                  <Switch
-                    checked={synced}
-                    disabled={!paused}
-                    onCheckedChange={(on) => {
-                      // The script's own playhead starts where the media's left it.
-                      if (!on) restartClock(playhead.current.get());
-                      setSynced(on);
-                    }}
-                  />
-                </Flex>
-              </Text>
-              <Text as="label" size="2" weight="medium">
-                <Flex align="center" justify="between" gap="2">
-                  Loop
-                  <Switch checked={looped} onCheckedChange={setLooped} />
-                </Flex>
-              </Text>
-            </>}
+            )}
             <Separator size="4" />
             {/* The script's chapters and bookmarks in time; a click plays from there. */}
             {played && (markers.chapters.length > 0 || markers.bookmarks.length > 0) && <>
