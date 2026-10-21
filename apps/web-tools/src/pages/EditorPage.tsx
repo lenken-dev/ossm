@@ -11,7 +11,7 @@ import { clamp, LINE_COLOR, stats, type Action } from "../funscript/model";
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { NamePopover, SnippetIcon } from "../editor/NamePopover";
-import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, items, markersRegions, movedBy, regionAt, regionName, regionNoun, sameContent, spanned, toggled, type Advanced, type Area, type Clip, type Content, type Instance, type Placing, type Region, type Script } from "../editor/model";
+import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, items, markersRegions, movedBy, regionAt, regionName, regionNoun, sameContent, spanned, toggled, type Advanced, type Clip, type Content, type Instance, type Placing, type Region, type Script } from "../editor/model";
 import { rangeFields, refilled, withBookmarks } from "../editor/generate";
 import { download, readClip, readRegions } from "../editor/file";
 import { changedSpan, HISTORY_SIZE, startedAt, UNDO_SIZE, withLibraryChanges, type Timeline } from "../editor/history";
@@ -21,6 +21,7 @@ import { useMarkers } from "../editor/useMarkers";
 import { useTool } from "../editor/useTool";
 import { useLibrary } from "../editor/useLibrary";
 import { usePlacing } from "../editor/usePlacing";
+import { useSelection } from "../editor/useSelection";
 import { GRIP, GRIPS, TimingView, TOOL_BOX, ToolHandles } from "../editor/ToolHandles";
 import { ToolPanel } from "../editor/ToolPanel";
 import { LANE_HEIGHT, MarkerLane } from "../editor/MarkerLane";
@@ -82,23 +83,8 @@ export default function EditorPage() {
   const actionsRef = useRef(script.actions);
   actionsRef.current = script.actions;
   const [error, setError] = useState<string | null>(null);
-  /** Indices of the selected points, moved together with the selected regions and deleted with the Delete key. */
-  const [selected, setSelected] = useState<Set<number>>(() => new Set());
-  /** The selected regions, selected, moved and deleted with the points; only while in the script. */
-  const [regionsOn, setRegionsOn] = useState<Set<Region>>(() => new Set());
-  /** Select the points `ps` and the regions `rs`, and nothing else. */
-  const select = (ps: Iterable<number>, rs: Iterable<Region> = []) => {
-    setSelected(new Set(ps));
-    setRegionsOn(new Set(rs));
-  };
   /** The time under the pointer over the graph or the marker lane, where B adds a bookmark without media. */
   const hoverAt = useRef<number | null>(null);
-  /**
-   * Selection mode: dragging on empty space draws a box that selects points
-   * instead of adding one, and the box stays to be resized or moved; only the
-   * points in it are selected. Otherwise Shift draws one that goes when released.
-   */
-  const [boxMode, setBoxMode] = useState(false);
   /** Asking whether to apply or discard the advanced editor's changes, on leaving it by its toolbox button. */
   const [leaving, setLeaving] = useState(false);
   /**
@@ -113,16 +99,8 @@ export default function EditorPage() {
   const [apart, setApart] = useState<{ actions: Action[]; moving: Set<number>; regions: Region[]; grip?: Action; now?: Action } | null>(null);
   /** While one is dragged, puts it back where it was, for Escape. */
   const cancelApart = useRef<(() => void) | null>(null);
-  /** Selection mode's box selects by time: it takes in whole stretches of the script, whatever their depth. */
-  const [selectByTime, setSelectByTime] = usePersistedState("ossm:editorSelectByTime", false, localStorage);
   /** The latest copies, newest first; for this visit to the page. */
   const [history, setHistory] = useState<Clip[]>([]);
-  /** The selection box, with the points it was drawn on; it goes when they change. */
-  const [boxOn, setBoxOn] = useState<{ area: Area; actions: Action[] } | null>(null);
-  const box = boxOn?.actions === script.actions ? boxOn.area : null;
-  const setBox = (area: Area | null, on = script.actions) => setBoxOn(area && { area, actions: on });
-  /** The point or region last clicked without Shift, by its time, where a Shift+click range starts. */
-  const anchor = useRef<{ from: number; to: number } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   /** The graph and the marker lane, which scroll and zoom alike. */
@@ -161,12 +139,7 @@ export default function EditorPage() {
   }, [media.paused, setView]);
 
   const { actions, chapters, bookmarks, regions } = script;
-  /** The selected regions while in the script; they go with an edit that replaces them. */
-  const chosen = regions.filter((r) => regionsOn.has(r));
-  /** The selected region when it is all that is selected, which its panel shows. */
-  const region = !selected.size && chosen.length === 1 ? chosen[0] : null;
-  /** Whether there is something to copy: selected points, or a selected region with points. */
-  const copyable = selected.size > 0 || chosen.some((r) => afterTime(actions, r.to) > byTime(actions, r.from));
+  const { selected, setSelected, regionsOn, setRegionsOn, select, chosen, region, copyable, boxMode, selectByTime, setSelectByTime, box, setBox, edges, selectIn, boxed, boxAround, boxSelect, editBox, picked, toggleBoxMode } = useSelection({ actions, regions, viewport, placing: !!placing });
   /** While the advanced editor is open, the main script's other points, in runs broken where its points were taken out; drawn faintly behind them, never edited. */
   const context = useMemo(() => {
     if (!advanced) return [];
@@ -251,81 +224,6 @@ export default function EditorPage() {
   });
   /** Whether the script may be replaced, as Open and New do, starting its undo history anew but for the snippet library's changes: without unsaved changes, or once confirmed. */
   const discardable = () => !changed || confirm("Discard the unsaved changes?");
-  /** The indices of the points in `area`, but the regions' points, which are never selected. */
-  const within = (area: Area) => {
-    const found = [];
-    for (let i = byTime(actions, area.from); i < actions.length && actions[i].at <= area.to; i++) {
-      if (actions[i].pos >= area.low && actions[i].pos <= area.high && !regionAt(regions, actions[i].at)) found.push(i);
-    }
-    return found;
-  };
-
-  /** The regions whose whole time is in `area`'s, at any depth. */
-  const regionsIn = (area: Area) => regions.filter((r) => r.from >= area.from && r.to <= area.to);
-
-  /** Show `area` as the selection box and select the points and regions in it and in `base`. */
-  const selectIn = (area: Area, base: { points: Iterable<number>; regions: Region[] } = { points: [], regions: [] }) => {
-    setBox(area);
-    select([...base.points, ...within(area)], [...base.regions, ...regionsIn(area)]);
-  };
-
-  /** `area` as selection mode's box, over every depth when selecting by time. */
-  const boxed = (area: Area) => (selectByTime ? { ...area, low: 0, high: 100 } : area);
-
-  /** The box around the points `ps` and the regions `rs`, over every depth for regions alone. */
-  const boxAround = (ps: Action[], rs: Region[]): Area => {
-    const area = ps.length ? ps.reduce(extended, spanned(ps[0], ps[0])) : { from: Infinity, to: -Infinity, low: 0, high: 100 };
-    return { ...area, from: Math.min(area.from, ...rs.map((r) => r.from)), to: Math.max(area.to, ...rs.map((r) => r.to)) };
-  };
-
-  /**
-   * Draw a box from the pointer and select the points and regions in it. In
-   * selection mode the box replaces the selection and stays; otherwise (with
-   * Shift) they add to it and the box goes when released. A click without
-   * dragging is `click`, or clears the selection.
-   */
-  const boxSelect = (e: PointerEvent<SVGSVGElement>, click = () => select([])) => {
-    e.preventDefault();
-    const svg = e.currentTarget;
-    const keep = boxMode;
-    const base = keep ? undefined : { points: selected, regions: chosen };
-    const origin = pointerAt(e);
-    const [x0, y0] = [e.clientX, e.clientY];
-    let moved = false;
-    const move = (m: globalThis.PointerEvent) => {
-      moved ||= Math.hypot(m.clientX - x0, m.clientY - y0) > 3;
-      if (!moved) return;
-      const area = spanned(origin, pointerAt(m));
-      selectIn(keep ? boxed(area) : area, base);
-    };
-    track(svg, e, move, () => {
-      if (!moved || !keep) setBox(null);
-      if (!moved) click();
-    });
-  };
-
-  /**
-   * Drag the `sides` of the selection box: an edge or corner resizes it, all
-   * four move it. Only the points and regions in it are selected.
-   */
-  const editBox = (e: PointerEvent<SVGRectElement>, sides: (keyof Area)[]) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const svg = e.currentTarget.ownerSVGElement!;
-    const start = box!;
-    const origin = pointerAt(e);
-    const move = (m: globalThis.PointerEvent) => {
-      const p = pointerAt(m);
-      // Moved, the box stays within 0–100.
-      const dp = clamp(p.pos - origin.pos, sides.includes("low") ? -start.low : -100, sides.includes("high") ? 100 - start.high : 100);
-      const b = { ...start };
-      for (const side of sides) b[side] += side === "from" || side === "to" ? p.at - origin.at : dp;
-      selectIn(spanned({ at: b.from, pos: b.low }, { at: b.to, pos: b.high }));
-    };
-    track(svg, e, move);
-  };
-
   /**
    * A press on the graph: on a point or a region's band, as `pointDown` and
    * `regionDown`; with Shift or in selection mode, a box selection; with more
@@ -346,23 +244,6 @@ export default function EditorPage() {
     setPlacing({ actions: [{ at: 0, pos: point.pos }], regions: [], label: "Add point", from: point.at });
     setPlaceAt(point);
     carry(e, point);
-  };
-
-  /**
-   * Pick the item from `from` to `to` ms, a point or a region, clicked with
-   * a modifier: Ctrl/Cmd toggles it in the selection with `toggle`, Shift
-   * selects every point and region from the last clicked item to it. Returns
-   * whether it did.
-   */
-  const picked = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, from: number, to: number, toggle: () => void) => {
-    const last = anchor.current ?? { from, to };
-    if (!e.shiftKey) anchor.current = { from, to };
-    if (e.shiftKey) {
-      const area = { from: Math.min(last.from, from), to: Math.max(last.to, to), low: 0, high: 100 };
-      select(within(area), regionsIn(area));
-    } else if (e.ctrlKey || e.metaKey) toggle();
-    else return false;
-    return true;
   };
 
   /**
@@ -776,14 +657,6 @@ export default function EditorPage() {
     return JSON.stringify({ actions: result, regions: made }) !== JSON.stringify(original);
   };
 
-  /** Switch selection mode, not while placing. Entered with a selection, the box fits around it, selecting what is in it. */
-  const toggleBoxMode = () => {
-    if (placing) return;
-    setBoxMode(!boxMode);
-    if (!boxMode && (selected.size || chosen.length)) selectIn(boxed(boxAround([...selected].map((i) => actions[i]), chosen)));
-    else setBox(null);
-  };
-
   /**
    * Start placing the points in funscript JSON, with the regions under our own
    * key: they follow the pointer until a click places them. False when it
@@ -911,8 +784,6 @@ export default function EditorPage() {
     const moved = tool ? [] : regions.filter((r) => r.from >= lifted!.from && r.to <= lifted!.to);
     return { points: a, movedRegions: moved, ring: !tool && a.length === 1 && !regionAt(regions, a[0].at) };
   })() : null;
-  /** The selection box's sides, in px. */
-  const edges = box && { from: x(box.from), to: x(box.to), low: y(box.low), high: y(box.high) };
   /**
    * Buttons in the middle of the selection box's edges, in its part in view,
    * that grow it to the start or end of the script, or the top or bottom; each
