@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
 import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, HeightIcon, PlayIcon, ScissorsIcon, ShuffleIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, HeightIcon, PlayIcon, ScissorsIcon, ShuffleIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { useWindowEvent } from "../hooks/useWindowEvent";
@@ -22,6 +22,7 @@ import { dragHeight } from "../drag";
 import { AXIS, FOLLOW_AT, PAD, useViewport } from "../editor/viewport";
 import { MediaPlayer, useMediaPlayer } from "../editor/MediaPlayer";
 import { useMarkers } from "../editor/useMarkers";
+import { LANE_HEIGHT, MarkerLane } from "../editor/MarkerLane";
 import { Minimap } from "../editor/Minimap";
 import { SpeedCalculator } from "../editor/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
@@ -51,13 +52,6 @@ const RING_LIMIT = 50;
 
 /** Least and first height of the view of Generate's Interval or Speed below the graph, in px. */
 const TIMING_HEIGHT = 80;
-
-/** Height of the marker lane below the graph, in px. */
-const LANE_HEIGHT = 24;
-/** How the selected markers show in the lane. */
-const SELECTED_MARKER = { outline: "2px solid var(--accent-9)", outlineOffset: -2 };
-/** Width of the grips on a chapter's edges in the lane, in px. */
-const MARKER_GRIP = 6;
 
 export default function EditorPage() {
   // Kept across reloads, so switching tabs or closing the page does not lose the work.
@@ -3328,110 +3322,18 @@ export default function EditorPage() {
             </Box>
           );
         })()}
-        {/* The marker lane, in the graph's time: chapters as bands, touching ones in alternating shades, bookmarks as flags over them; names cut off where there is no room. */}
-        {/* A press on a marker selects it; on empty lane, a click adds a bookmark and a drag draws a chapter. */}
-        {/* In the advanced editor, its lock beside it, where the lane stops short of the graph's end. */}
-        {/* The locked lane takes no pointer, so its hover shows this, the lock its own. */}
-        <Flex gap="2" flexShrink="0" title={markersLocked ? "Unlock to edit" : undefined}>
-          <Box
-            position="relative"
-            flexGrow="1"
-            height={`${LANE_HEIGHT}px`}
-            onPointerDown={markers.laneDown}
-            onPointerEnter={() => void (markers.overLane.current = true)}
-            onPointerLeave={() => void (markers.overLane.current = false)}
-            // The advanced editor's document has no markers, so the lane takes no presses there until unlocked.
-            style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair", pointerEvents: markersLocked ? "none" : undefined }}
-          >
-            {chapters.map((c, i) => {
-              if (!inView(c.start, c.end)) return null;
-              // Kept in view, so the name of a chapter that starts before it still shows; it ends at the first flag on it, which goes over it.
-              const left = Math.max(x(c.start), 0);
-              const flag = bookmarks.find((b) => x(b.time) >= left && b.time < c.end);
-              return (
-                <Box
-                  key={i}
-                  position="absolute"
-                  height="100%"
-                  onPointerDown={(e) => markers.markerDown(e, c)}
-                  style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)", cursor: "grab", ...(markers.marked.has(c) && SELECTED_MARKER) }}
-                >
-                  <Text as="div" size="1" truncate style={{ maxWidth: flag && x(flag.time) - left, boxSizing: "border-box", lineHeight: `${LANE_HEIGHT}px`, padding: "0 4px" }}>
-                    {c.name}
-                  </Text>
-                  {/* Grips on its edges in view resize it. */}
-                  {(["start", "end"] as const).filter((side) => x(c[side]) >= 0 && x(c[side]) <= width).map((side) => (
-                    <Box
-                      key={side}
-                      position="absolute"
-                      top="0"
-                      height="100%"
-                      onPointerDown={(e) => markers.markerDown(e, c, [side])}
-                      style={{ [side === "start" ? "left" : "right"]: 0, width: MARKER_GRIP, cursor: "ew-resize" }}
-                    />
-                  ))}
-                </Box>
-              );
-            })}
-            {/* Each flag's name runs up to the next one; they are sorted by time. */}
-            {bookmarks.map((b, i) => inView(b.time, b.time) && (
-              <Text
-                key={i}
-                as="div"
-                size="1"
-                truncate
-                onPointerDown={(e) => markers.markerDown(e, b)}
-                style={{
-                  position: "absolute",
-                  // Its 2px edge centred on its time, like its line through the graph.
-                  left: x(b.time) - 1,
-                  maxWidth: bookmarks[i + 1] && x(bookmarks[i + 1].time) - x(b.time),
-                  boxSizing: "border-box",
-                  height: "100%",
-                  lineHeight: `${LANE_HEIGHT}px`,
-                  padding: "0 4px",
-                  borderLeft: `2px solid var(--${markerColor(b.name)}-9)`,
-                  // Opaque, so it hides what it covers.
-                  background: `linear-gradient(var(--${markerColor(b.name)}-a4), var(--${markerColor(b.name)}-a4)), var(--color-panel-solid)`,
-                  cursor: "grab",
-                  ...(markers.marked.has(b) && SELECTED_MARKER),
-                }}
-              >
-                {b.name}
-              </Text>
-            ))}
-            {/* Suggests the names in the script. */}
-            {markers.naming && (
-              <NamePopover
-                initial={markers.naming.name}
-                anchor={{ position: "absolute", left: Math.max(x(markers.naming.from), 0), width: Math.min(x(markers.naming.to), width) - Math.max(x(markers.naming.from), 0), height: "100%", pointerEvents: "none" }}
-                suggestions={[...new Set([...chapters, ...bookmarks].map((m) => m.name))]}
-                onName={(name) => markers.closeNaming(name)}
-                onCancel={() => markers.closeNaming(null)}
-                onRemove={markers.naming.remove && (() => {
-                  markers.naming!.remove!();
-                  markers.setNaming(null);
-                })}
-              />
-            )}
-          </Box>
-          {advanced && (
-            <IconButton
-              variant="soft"
-              color="gray"
-              aria-pressed={markersUnlocked}
-              aria-label={markersUnlocked ? "Lock markers" : "Unlock markers"}
-              title={markersUnlocked ? "Lock the markers" : "Unlock the markers, to edit the main script's chapters and bookmarks here"}
-              onClick={() => {
-                setMarkersUnlocked(!markersUnlocked);
-                markers.setMarked(new Set());
-              }}
-              style={{ width: LANE_HEIGHT, height: LANE_HEIGHT }}
-            >
-              {markersUnlocked ? <LockOpen1Icon /> : <LockClosedIcon />}
-            </IconButton>
-          )}
-        </Flex>
+        <MarkerLane
+          markers={markers}
+          chapters={chapters}
+          bookmarks={bookmarks}
+          view={view}
+          viewport={viewport}
+          locked={markersLocked}
+          lock={advanced ? { unlocked: markersUnlocked, toggle: () => {
+            setMarkersUnlocked(!markersUnlocked);
+            markers.setMarked(new Set());
+          } } : null}
+        />
       </Flex>
       {minimap ? (
         <Minimap
