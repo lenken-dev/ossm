@@ -25,6 +25,7 @@ import { formatScriptTime, parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SC
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
+import { capturePointer, dragHeight } from "../drag";
 import { stats, type Action } from "../funscript/model";
 import { markerColor, readMarkers } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
@@ -85,7 +86,6 @@ export default function PlayerPage() {
     e.stopPropagation();
     const stage = stageRef.current!.getBoundingClientRect();
     const start = overlay;
-    const target = e.currentTarget;
     const [startX, startY] = [e.clientX, e.clientY];
     const move = (m: globalThis.PointerEvent) => {
       const dx = (m.clientX - startX) / stage.width;
@@ -94,22 +94,10 @@ export default function PlayerPage() {
       const [y, height] = dragAxis(start.y, start.height, dy, edges.includes("n"), edges.includes("s"), OVERLAY_MIN_HEIGHT / stage.height);
       setOverlay({ ...start, x, y, width, height });
     };
-    target.setPointerCapture(e.pointerId);
-    target.addEventListener("pointermove", move);
-    target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
+    capturePointer(e.currentTarget, e.pointerId, move);
   };
   /** Drag the top edge of the graph below the video to set its height; at most most of the window. */
-  const dragGraphHeight = (e: PointerEvent<HTMLElement>) => {
-    e.preventDefault();
-    const start = graphHeight;
-    const target = e.currentTarget;
-    const startY = e.clientY;
-    const move = (m: globalThis.PointerEvent) =>
-      setGraphHeight(Math.round(Math.min(Math.max(start - (m.clientY - startY), PREVIEW_MIN_HEIGHT), window.innerHeight * 0.7)));
-    target.setPointerCapture(e.pointerId);
-    target.addEventListener("pointermove", move);
-    target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
-  };
+  const dragGraphHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, graphHeight, setGraphHeight, PREVIEW_MIN_HEIGHT, true);
   /** An audio file plays in a bar instead of the video area. */
   const isAudio = !!videoFile?.type.startsWith("audio/");
   /** Theater mode needs a video and a wide screen; closing the video leaves theater mode. */
