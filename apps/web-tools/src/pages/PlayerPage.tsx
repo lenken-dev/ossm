@@ -29,7 +29,7 @@ import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 import { stats, type Action } from "../funscript/model";
 import { lightChapters, markerColor, readMarkers } from "../funscript/markers";
-import { SectionHeader, Stats } from "./EditorPage";
+import { SectionHeader, Stats } from "../funscript/widgets";
 
 type PlayerMode = "pattern" | "funscript";
 
