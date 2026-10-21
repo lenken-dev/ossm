@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useId, type CSSProperties, type PointerEvent, type ReactElement, type ReactNode, type SVGProps } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
 import { AlertDialog, Box, Button, Callout, Checkbox, DataList, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
-import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight, bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { PLAYER_WINDOW, SENT_SCRIPT_KEY } from "../StreamPanel";
@@ -10,6 +10,7 @@ import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { clamp, LINE_COLOR, points, speed, stats, type Action } from "../funscript/model";
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Bookmark, type Chapter, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
+import { NamePopover, SnippetIcon } from "../editor/NamePopover";
 import { GraphLayout } from "./GraphPage";
 import presetsFile from "./presets.json";
 
@@ -257,14 +258,6 @@ const sortedEntries = (items: Entry[]) => [...items].sort((a, b) => Number(isFol
 const regionKind = (r: Region) => (isInstance(r) ? "Snippet" : isRepeat(r) ? `Repeat · ×${r.repeat.count}` : `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`);
 /** A region's label: an instance's by its name, another's its name or else what made it. */
 const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}` : r.name ?? regionKind(r));
-
-/** A snippet: a stretch of strokes cut out of a script, sized like the icons. */
-const SnippetIcon = (props: SVGProps<SVGSVGElement>) => (
-  <svg width="15" height="15" viewBox="0 0 15 15" fill="none" {...props}>
-    <rect x="1.5" y="2.5" width="12" height="10" rx="1.5" stroke="currentColor" />
-    <polyline points="3.5,9.5 6,5 9,10 11.5,5.5" stroke="currentColor" strokeLinejoin="round" strokeLinecap="round" />
-  </svg>
-);
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
@@ -5248,80 +5241,6 @@ function LanePreview({ lists }: { lists: [LaneItem[], LaneItem[]][] }) {
       {lines.slice(0, MARKER_DIFF_LINES).map((line, i) => <Text key={i} size="1" color="gray">{line}</Text>)}
       {lines.length > MARKER_DIFF_LINES && <Text size="1" color="gray">and {lines.length - MARKER_DIFF_LINES} more</Text>}
     </Flex>
-  );
-}
-
-/**
- * Every name field: a small modal popup for a name, `initial` at first,
- * opened by `children`, a button, or else open at `anchor` from the start.
- * Enter or its OK button gives the name, trimmed, to `onName`, unless it is
- * empty or `taken`; Escape or a press outside closes it with `onCancel`, the
- * press going no further. It suggests `suggestions`; with `onRemove`, it has
- * a Delete button.
- */
-function NamePopover({ initial = "", taken = () => false, onName, onCancel, onRemove, suggestions, anchor, children }: {
-  initial?: string;
-  taken?: (name: string) => boolean;
-  onName: (name: string) => void;
-  onCancel?: () => void;
-  onRemove?: () => void;
-  suggestions?: string[];
-  anchor?: CSSProperties;
-  children?: ReactElement;
-}) {
-  const [name, setName] = useState<string | null>(anchor ? initial : null);
-  const list = useId();
-  const refused = name === null || !name.trim() || taken(name.trim());
-  const accept = () => {
-    if (refused) return;
-    setName(null);
-    onName(name.trim());
-  };
-  return (
-    <Popover.Root modal open={name !== null} onOpenChange={(open) => {
-      setName(open ? initial : null);
-      if (!open) onCancel?.();
-    }}>
-      {anchor ? <Popover.Anchor style={anchor} /> : <Popover.Trigger>{children}</Popover.Trigger>}
-      <Popover.Content
-        size="1"
-        width={onRemove ? "280px" : "220px"}
-        // In a portal, but React still bubbles its presses and keys up to where it is opened, as to a lane adding a marker or the page's shortcuts.
-        onPointerDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        <Flex direction="column" gap="1">
-          <Flex gap="2">
-            <TextField.Root
-              size="1"
-              aria-label="Name"
-              list={suggestions && list}
-              value={name ?? ""}
-              onFocus={(e) => e.target.select()}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && accept()}
-              style={{ flexGrow: 1 }}
-            />
-            <IconButton size="1" disabled={refused} aria-label="OK" title="OK (Enter)" onClick={accept}><CheckIcon /></IconButton>
-            {onRemove && (
-              <Button
-                size="1"
-                variant="soft"
-                color="red"
-                onClick={() => {
-                  setName(null);
-                  onRemove();
-                }}
-              >
-                Delete
-              </Button>
-            )}
-          </Flex>
-          {name?.trim() && refused && <Text size="1" color="red">That name is taken.</Text>}
-        </Flex>
-        {suggestions && <datalist id={list}>{suggestions.map((s) => <option key={s} value={s} />)}</datalist>}
-      </Popover.Content>
-    </Popover.Root>
   );
 }
 
