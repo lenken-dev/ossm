@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement, type ReactNode } from "react";
-import { AlertDialog, Box, Button, Callout, Checkbox, DataList, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
+import { AlertDialog, Box, Button, Callout, Checkbox, Flex, Heading, HoverCard, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField, useThemeContext } from "@radix-ui/themes";
 import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -7,7 +7,6 @@ import { useWindowEvent } from "../hooks/useWindowEvent";
 import { PLAYER_WINDOW, SENT_SCRIPT_KEY } from "../StreamPanel";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
-import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { clamp, LINE_COLOR, points, speed, stats, type Action } from "../funscript/model";
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Bookmark, type Chapter, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
@@ -22,6 +21,7 @@ import { bookmarkItem, chapterItem, diffPieces, LanePreview, PreviewGraph, regio
 import { dragHeight } from "../drag";
 import { AXIS, PAD, useViewport } from "../editor/viewport";
 import { Minimap } from "../editor/Minimap";
+import { SpeedCalculator } from "../editor/SpeedCalculator";
 import { GraphLayout } from "./GraphPage";
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
@@ -258,14 +258,6 @@ export default function EditorPage() {
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
   /** The sidebar's stats are expanded, else just their header. */
   const [statsShown, setStatsShown] = usePersistedState("ossm:editorStatsShown", true, localStorage);
-  /** The calculator's machine range, in mm, shared with the player's; the share of it the stroke range takes (depth times stroke), its speed and sensation settings, in percent. */
-  const [calcShown, setCalcShown] = usePersistedState("ossm:editorCalcShown", false, localStorage);
-  const [rangeMm, setRangeMm] = usePersistedState(RANGE_KEY, FIRMWARE_RANGE_MM, localStorage);
-  const [calcSpeed, setCalcSpeed] = usePersistedState("ossm:editorCalcSpeed", 100, localStorage);
-  const [calcStroke, setCalcStroke] = usePersistedState("ossm:editorCalcStroke", 100, localStorage);
-  const [calcSensation, setCalcSensation] = usePersistedState("ossm:editorCalcSensation", 50, localStorage);
-  // Only the stroke range's length matters, so it reaches from the out end.
-  const calcMax = useFollow(useMemo(() => ({ kind: "max" as const, settings: { rangeMm, depth: calcStroke / 100, stroke: 1, speed: calcSpeed / 100, jerk: calcSensation / 100 } }), [rangeMm, calcStroke, calcSpeed, calcSensation]));
   /** The advanced editor shows times from its 0, earlier ones negative; only as shown, the points keep the main script's times. */
   const [fromZero, setFromZero] = usePersistedState("ossm:editorFromZero", false, localStorage);
   /** The advanced editor's marker lane and Markers panel take presses, and B adds a bookmark, editing the main script's markers. */
@@ -926,15 +918,11 @@ export default function EditorPage() {
   /** The indices of the points in `r`'s time. */
   const pointsOf = (r: Region) => Array.from({ length: afterTime(actions, r.to) - byTime(actions, r.from) }, (_, k) => byTime(actions, r.from) + k);
   /** The selected points and regions' points, or all points, as the stats take them. */
-  const statsPicked = selected.size || chosen.length ? [...new Set([...selected, ...chosen.flatMap(pointsOf)])].sort((a, b) => a - b) : [...actions.keys()];
-  /** The speed setting the calculator's points need with its other settings. */
-  const calcNeeded = useFollow(useMemo(() => {
-    if (!calcShown || statsPicked.length < 2) return null;
-    const picked = statsPicked.map((i) => actions[i]);
-    const script = { name: "", at: Uint32Array.from(picked, (a) => a.at), pos: Float64Array.from(picked, (a) => a.pos) };
-    return { kind: "script" as const, script, rate: 1, settings: { rangeMm, depth: calcStroke / 100, stroke: 1, jerk: calcSensation / 100 }, speed: 1 };
+  const statsPicked = useMemo(
+    () => (selected.size || chosen.length ? [...new Set([...selected, ...chosen.flatMap(pointsOf)])].sort((a, b) => a - b) : [...actions.keys()]),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the picked points follow from these
-  }, [calcShown, actions, selected, regionsOn, regions, rangeMm, calcStroke, calcSensation]))?.needed;
+    [selected, regionsOn, regions, actions],
+  );
 
   /** Give the region `r` the name `name`. */
   const renameRegion = (r: Region, name: string) => {
@@ -2847,32 +2835,7 @@ export default function EditorPage() {
           {statsShown && <Stats actions={actions} picked={picked} size="2" />}
         </>;
       })()}
-      {/* The fastest full strokes the machine follows at a target speed and sensation, from the firmware's motion. */}
-      <Separator size="4" />
-      <SectionHeader title="Speed Calculator" open={calcShown} setOpen={setCalcShown} summary={`${calcMax ?? "…"}/s max`} />
-      {calcShown && <>
-        {/* Typing keeps the last range from 10 mm on. */}
-        <TextField.Root type="number" min={10} step="any" aria-label="Machine range" defaultValue={rangeMm} onChange={(e) => Number(e.target.value) >= 10 && setRangeMm(Number(e.target.value))}>
-          <TextField.Slot side="left">Machine range</TextField.Slot>
-          <TextField.Slot side="right">mm</TextField.Slot>
-        </TextField.Root>
-        <LabeledSlider label="Stroke range" value={calcStroke} display={`${calcStroke}%`} min={1} max={100} step={1} onChange={setCalcStroke} />
-        <LabeledSlider label="Speed" value={calcSpeed} display={`${calcSpeed}%`} min={0} max={100} step={1} onChange={setCalcSpeed} />
-        <LabeledSlider label="Sensation" value={calcSensation} display={`${calcSensation}%`} min={0} max={100} step={1} ends={["Smooth", "Hard"]} onChange={setCalcSensation} />
-        <DataList.Root size="2">
-          <DataList.Item>
-            <DataList.Label color="gray">Max funscript speed</DataList.Label>
-            <DataList.Value>{calcMax ?? "…"}/s</DataList.Value>
-          </DataList.Item>
-          {/* Of the stats' points, at least two. */}
-          {statsPicked.length > 1 && (
-            <DataList.Item title={`The lowest speed at which the machine reaches 95% of the ${selected.size || chosen.length ? "selected" : "script's"} points on time, with the stroke range and sensation above.${calcNeeded === null ? " Raise the sensation or shorten the stroke range." : ""}`}>
-              <DataList.Label color="gray">Machine speed needed</DataList.Label>
-              <DataList.Value>{calcNeeded === undefined ? "…" : calcNeeded === null ? "Over 100%" : `${calcNeeded}%`}</DataList.Value>
-            </DataList.Item>
-          )}
-        </DataList.Root>
-      </>}
+      <SpeedCalculator actions={actions} picked={statsPicked} selectionOn={selected.size > 0 || chosen.length > 0} />
       </>}
       {/* In the main script, only a region's Generate. */}
       {(advanced || tool) && <>
