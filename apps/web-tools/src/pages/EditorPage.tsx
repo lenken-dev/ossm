@@ -7,15 +7,10 @@ import { PLAYER_WINDOW, SENT_SCRIPT_KEY } from "../StreamPanel";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
+import { clamp, LINE_COLOR, points, speed, stats, type Action } from "../funscript/model";
+import { lightChapters, markerColor, readMarkers, writeMarkers, type Bookmark, type Chapter, type Marker } from "../funscript/markers";
 import { GraphLayout } from "./GraphPage";
 import presetsFile from "./presets.json";
-
-export interface Action {
-  /** Time in ms. */
-  at: number;
-  /** 0 (deep end) to 100 (shallow end). */
-  pos: number;
-}
 
 interface Script {
   name: string;
@@ -32,23 +27,6 @@ interface Script {
 /** What an edit changes, undo restores and saving keeps: the points, markers and regions. */
 type Content = Pick<Script, "actions" | "chapters" | "bookmarks" | "regions">;
 const sameContent = (a: Content, b: Content) => a.actions === b.actions && a.chapters === b.chapters && a.bookmarks === b.bookmarks && a.regions === b.regions;
-
-/** A named time range, in ms, from `metadata.chapters`; other properties of the loaded one are kept. */
-interface Chapter {
-  name: string;
-  start: number;
-  end: number;
-  [other: string]: unknown;
-}
-
-/** A named time, in ms, from `metadata.bookmarks`; other properties of the loaded one are kept. */
-interface Bookmark {
-  name: string;
-  time: number;
-  [other: string]: unknown;
-}
-
-type Marker = Chapter | Bookmark;
 
 /** `list` with the markers in `to` swapped for what they map to. */
 const swapped = <T extends Marker>(list: T[], to: Map<Marker, Marker>) => list.map((m) => (to.get(m) as T | undefined) ?? m);
@@ -339,7 +317,6 @@ const SPAN_STEP_COUNT = 240;
 const AXIS = 20;
 const PAD = 10;
 
-const LINE_COLOR = "#ec4899";
 /** Below this average spacing between the points in view, in px, the points are not drawn, only the line. */
 const DOT_SPACING = 6;
 /** A run of up to this many neighbouring selected points in view also shows rings on the points. */
@@ -361,17 +338,6 @@ const LANE_HEIGHT = 24;
 const SELECTED_MARKER = { outline: "2px solid var(--accent-9)", outlineOffset: -2 };
 /** Width of the grips on a chapter's edges in the lane, in px. */
 const MARKER_GRIP = 6;
-/** Bookmark colours, Radix scales; a bookmark's name picks one, so bookmarks named alike match. */
-const MARKER_COLORS = ["blue", "green", "orange", "purple", "cyan", "crimson", "amber", "teal"];
-export const markerColor = (name: string) => MARKER_COLORS[Math.abs([...name].reduce((h, c) => (h * 31 + c.codePointAt(0)!) | 0, 0)) % MARKER_COLORS.length];
-/**
- * Which chapters are drawn light: those touching a dark one before them, so only
- * a run of touching chapters alternates; less than 100 ms apart counts as touching.
- */
-export const lightChapters = (chapters: { start: number; end: number }[]) => {
-  let lightBefore = false;
-  return chapters.map((c, i) => (lightBefore = i > 0 && c.start - chapters[i - 1].end < 100 && !lightBefore));
-};
 
 /** Default and smallest height of the reference video, in px. */
 const VIDEO_HEIGHT = 300;
@@ -381,28 +347,8 @@ const FOLLOW_AT = 0.2;
 /** Time steps of the seek buttons, in s, as typed; the first is always shown, empty ones are hidden. */
 const DEFAULT_STEPS = ["1", "", ""];
 
-const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 const byTime = bisector((a: Action) => a.at).left;
 const afterTime = bisector((a: Action) => a.at).right;
-/** The speed from `a` to `b`, in depth per second. */
-const speed = (a: Action, b: Action) => (Math.abs(b.pos - a.pos) / (b.at - a.at)) * 1000;
-const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
-
-/** Stats of picked points, sorted; speeds only over moves between picked neighbours, the average their travel over their time. */
-export function stats(actions: Action[], picked: number[]) {
-  let low = Infinity, high = -Infinity, top = 0, travel = 0, time = 0;
-  picked.forEach((i, k) => {
-    const a = actions[i];
-    low = Math.min(low, a.pos);
-    high = Math.max(high, a.pos);
-    if (k && picked[k - 1] === i - 1) {
-      top = Math.max(top, speed(actions[i - 1], a));
-      travel += Math.abs(a.pos - actions[i - 1].pos);
-      time += a.at - actions[i - 1].at;
-    }
-  });
-  return { top, average: time ? (travel / time) * 1000 : 0, low, high, duration: actions[picked[picked.length - 1]].at - actions[picked[0]].at };
-}
 /** A typed number; NaN when empty. */
 const typed = (v: string) => (v.trim() ? Number(v) : NaN);
 
@@ -862,47 +808,6 @@ const TOOLS: { kind: ToolKind; name: string; verb: string; before: string; after
   // The grid in grey, as one line, and strokes on its crossings.
   { kind: "grid", name: "Grid", verb: "", before: "4,4 52,4 52,12 4,12 4,20 52,20 52,4 40,4 40,20 28,20 28,4 16,4 16,20 4,20 4,4", after: "4,20 16,4 28,12 40,4 52,20" },
 ];
-
-/** A marker time from a file, in ms: ms as a number or `"HH:MM:SS.mmm"`; null when unusable. */
-function readTime(t: unknown) {
-  const ms = typeof t === "number" ? t : typeof t === "string" && /^\d+(:\d+){0,2}(\.\d+)?$/.test(t) ? t.split(":").reduce((s, p) => s * 60 + Number(p), 0) * 1000 : NaN;
-  return Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : null;
-}
-
-/** `ms` as `"HH:MM:SS.mmm"`, as markers are saved; the hours go past 24. */
-const writeTime = (ms: number) => `${String(Math.floor(ms / 3_600_000)).padStart(2, "0")}:${new Date(ms).toISOString().slice(14, 23)}`;
-
-/** The chapters and bookmarks as a file's `metadata` has them, sorted. */
-const writeMarkers = (chapters: Chapter[], bookmarks: Bookmark[]) => ({
-  chapters: [...chapters].sort((a, b) => a.start - b.start).map(({ start, end, ...rest }) => ({ ...rest, startTime: writeTime(start), endTime: writeTime(end) })),
-  bookmarks: [...bookmarks].sort((a, b) => a.time - b.time).map(({ time, ...rest }) => ({ ...rest, time: writeTime(time) })),
-});
-
-/**
- * The chapters and bookmarks in `file`'s metadata, sorted. A chapter without an
- * end runs to the next one's start, the last to `end`; overlapping chapters are
- * cut where the later one starts.
- */
-export function readMarkers(file: Record<string, unknown>, end: number) {
-  const meta = (file.metadata ?? {}) as { chapters?: unknown; bookmarks?: unknown };
-  const list = (v: unknown) => (Array.isArray(v) ? v.filter((o): o is Record<string, unknown> => !!o && typeof o === "object") : []);
-  const starts = list(meta.chapters)
-    .map(({ startTime, endTime, ...rest }) => ({ rest, start: readTime(startTime), end: readTime(endTime) }))
-    .filter((c): c is typeof c & { start: number } => c.start !== null)
-    .sort((a, b) => a.start - b.start);
-  const chapters: Chapter[] = starts
-    .map((c, i) => {
-      const next = starts[i + 1]?.start;
-      const stop = c.end !== null && c.end > c.start ? c.end : next ?? Math.max(end, c.start + 1);
-      return { ...c.rest, name: typeof c.rest.name === "string" ? c.rest.name : `Chapter ${i + 1}`, start: c.start, end: Math.min(stop, next ?? Infinity) };
-    })
-    .filter((c) => c.end > c.start);
-  const bookmarks: Bookmark[] = list(meta.bookmarks)
-    .map(({ time, ...rest }) => ({ ...rest, name: (typeof rest.name === "string" && rest.name) || "Bookmark", time: readTime(time) }))
-    .filter((b): b is Bookmark => b.time !== null)
-    .sort((a, b) => a.time - b.time);
-  return { chapters, bookmarks };
-}
 
 /**
  * The regions in `list`, from a file's or the clipboard's `"ossmRsWebTools"`, sorted.

@@ -27,7 +27,9 @@ import { formatScriptTime, parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SC
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
-import { lightChapters, markerColor, readMarkers, SectionHeader, Stats, stats, type Action } from "./EditorPage";
+import { stats, type Action } from "../funscript/model";
+import { lightChapters, markerColor, readMarkers } from "../funscript/markers";
+import { SectionHeader, Stats } from "./EditorPage";
 
 type PlayerMode = "pattern" | "funscript";
 
