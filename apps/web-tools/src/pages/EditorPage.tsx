@@ -8,10 +8,10 @@ import { PLAYER_WINDOW, SENT_SCRIPT_KEY } from "../StreamPanel";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { clamp, LINE_COLOR, points, speed, stats, type Action } from "../funscript/model";
-import { lightChapters, markerColor, readMarkers, writeMarkers, type Bookmark, type Chapter, type Marker } from "../funscript/markers";
+import { lightChapters, markerColor, readMarkers, writeMarkers, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { NamePopover, SnippetIcon } from "../editor/NamePopover";
-import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, isRepeat, items, markersRegions, movedBy, regionAt, regionName, regionNoun, sameContent, spanned, swapped, type Advanced, type Area, type Clip, type Content, type Inner, type Instance, type Placing, type Region, type Script } from "../editor/model";
+import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, isRepeat, items, markersRegions, movedBy, regionAt, regionName, regionNoun, sameContent, spanned, type Advanced, type Area, type Clip, type Content, type Inner, type Instance, type Placing, type Region, type Script } from "../editor/model";
 import { fastestOf, gridParams, scaled, scaleParams, shifted, shiftParams, speedLimited, typed, type GridFields } from "../editor/transforms";
 import { extent, funcAt, GENERATE_DEFAULTS, generated, KNOT_GAP, newSeed, ownScale, RANGED, rangeFields, rangeParams, refilled, REPEAT_DEFAULTS, repeated, repeatParams, reshaped, SHAPES, SPANNED, splineAt, TOOLS, withBookmarks, type Func, type FuncKey, type GenerateSetup, type GenPart, type Knots, type RepeatSetup, type Shape, type ShapeField, type ToolKind } from "../editor/generate";
 import { download, readClip, readRegions } from "../editor/file";
@@ -21,6 +21,7 @@ import { PreviewGraph } from "../editor/previews";
 import { dragHeight } from "../drag";
 import { AXIS, FOLLOW_AT, PAD, useViewport } from "../editor/viewport";
 import { MediaPlayer, useMediaPlayer } from "../editor/MediaPlayer";
+import { useMarkers } from "../editor/useMarkers";
 import { Minimap } from "../editor/Minimap";
 import { SpeedCalculator } from "../editor/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
@@ -141,35 +142,13 @@ export default function EditorPage() {
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   /** The selected regions, selected, moved and deleted with the points; only while in the script. */
   const [regionsOn, setRegionsOn] = useState<Set<Region>>(() => new Set());
-  /** The selected markers, moved, renamed and deleted together: a chapter, or bookmarks; selecting points or regions clears them, and they the regions. */
-  const [marked, setMarked] = useState<Set<Marker>>(() => new Set());
-  useEffect(() => {
-    if (selected.size || regionsOn.size) setMarked(new Set());
-  }, [selected, regionsOn]);
-  useEffect(() => {
-    if (marked.size) setRegionsOn(new Set());
-  }, [marked]);
   /** Select the points `ps` and the regions `rs`, and nothing else. */
   const select = (ps: Iterable<number>, rs: Iterable<Region> = []) => {
     setSelected(new Set(ps));
     setRegionsOn(new Set(rs));
   };
-  /** The marker last clicked without Shift, where a Shift+click range of bookmarks starts. */
-  const markerAnchor = useRef<Marker | null>(null);
-  /** Whether the pointer is over the marker lane, where Ctrl/Cmd+A selects all bookmarks. */
-  const overLane = useRef(false);
-  /** What a new bookmark is called: the name last given to one, for this visit to the page; none until then. */
-  const [lastName, setLastName] = useState<string | null>(null);
-  /**
-   * The name field open over the time from `from` to `to` in the marker lane;
-   * `done` gets the accepted name, or null to keep the old one. With `remove`,
-   * it has a Delete button.
-   */
-  const [naming, setNaming] = useState<{ from: number; to: number; name: string; done: (name: string | null) => void; remove?: () => void } | null>(null);
   /** The time under the pointer over the graph or the marker lane, where B adds a bookmark without media. */
   const hoverAt = useRef<number | null>(null);
-  /** The marker last pressed and when, to tell a double-click: the drag's pointer capture keeps the browser's own from reaching the marker. */
-  const lastPress = useRef<{ m: Marker; at: number } | null>(null);
   /**
    * Selection mode: dragging on empty space draws a box that selects points
    * instead of adding one, and the box stays to be resized or moved; only the
@@ -315,6 +294,16 @@ export default function EditorPage() {
     editLabel.current = label;
     setScript(next);
   };
+  const markers = useMarkers({ chapters, bookmarks, edit, setDragging, viewport, laneRef: timeRef, onSelect: () => {
+    setSelected(new Set());
+    setBox(null);
+  } });
+  useEffect(() => {
+    if (selected.size || regionsOn.size) markers.setMarked(new Set());
+  }, [selected, regionsOn]);
+  useEffect(() => {
+    if (markers.marked.size) setRegionsOn(new Set());
+  }, [markers.marked]);
 
   // Every change of the points, markers, regions or snippet library, except by undo and redo, is an edit.
   useEffect(() => {
@@ -332,14 +321,14 @@ export default function EditorPage() {
   // The selection goes with the current entry, to come back with it; not while dragging or placing, so an entry keeps the one from before them.
   useEffect(() => {
     if (dragging || placing) return;
-    setTimeline((tl) => ({ ...tl, states: tl.states.map((st, k) => (k === tl.index ? { ...st, selection: { points: selected, regions: regionsOn, markers: marked } } : st)) }));
-  }, [selected, regionsOn, marked, timeline.index, dragging, placing]);
+    setTimeline((tl) => ({ ...tl, states: tl.states.map((st, k) => (k === tl.index ? { ...st, selection: { points: selected, regions: regionsOn, markers: markers.marked } } : st)) }));
+  }, [selected, regionsOn, markers.marked, timeline.index, dragging, placing]);
 
   /** Go to the content and snippet library after edit `index` of the undo history, with the selection last made there, in selection mode with the box around it, and bring the change into view. */
   const jump = (index: number) => {
     const step = timeline.states[index];
     const { actions, chapters, bookmarks, regions, library } = step;
-    const { points, regions: rs, markers } = step.selection ?? { points: new Set<number>(), regions: new Set<Region>(), markers: new Set<Marker>() };
+    const { points, regions: rs, markers: ms } = step.selection ?? { points: new Set<number>(), regions: new Set<Region>(), markers: new Set<Marker>() };
     const span = changedSpan(script, step);
     setTimeline((tl) => ({ ...tl, index }));
     setTool(null);
@@ -347,7 +336,7 @@ export default function EditorPage() {
     setLibraryFile({ ossmRsWebTools: { version: 1, snippets: library } });
     setSelected(points);
     setRegionsOn(rs);
-    setMarked(markers);
+    markers.setMarked(ms);
     setBox(boxMode && (points.size || rs.size) ? boxed(boxAround([...points].map((i) => actions[i]), [...rs])) : null, actions);
     setPlacing(null);
     setLifted(null);
@@ -711,133 +700,6 @@ export default function EditorPage() {
   /** The time the minimap shows: the script (the main one too, in the advanced editor), the video and the visible time, whichever is longest. */
   const total = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, media.videoDuration, view.span);
 
-  /** Select the markers `ms`, clearing the point selection. */
-  const selectMarkers = (ms: Iterable<Marker>) => {
-    setMarked(new Set(ms));
-    setSelected(new Set());
-    setBox(null);
-  };
-  const isChapter = (m: Marker): m is Chapter => chapters.includes(m as Chapter);
-  const timeOf = (m: Marker) => (isChapter(m) ? m.start : m.time);
-
-  /**
-   * Add a bookmark at `time` ms, with the last used name, and select it.
-   * Without one yet, it opens its name field; naming it is part of adding it.
-   */
-  const addBookmark = (time: number) => {
-    const added = { name: lastName ?? "Bookmark", time };
-    if (lastName === null) setDragging(true);
-    edit(`Add bookmark "${added.name}"`, (s) => withBookmarks(s, [...s.bookmarks, added].sort((a, b) => a.time - b.time)));
-    selectMarkers([added]);
-    markerAnchor.current = added;
-    if (lastName !== null) return;
-    setNaming({ from: time, to: time, name: added.name, done: (name) => {
-      if (name) setLastName(name);
-      if (name && name !== added.name) {
-        const renamed = { ...added, name };
-        edit(`Add bookmark "${name}"`, (s) => withBookmarks(s, s.bookmarks.map((b) => (b === added ? renamed : b))));
-        setMarked(new Set([renamed]));
-        markerAnchor.current = renamed;
-      }
-      setDragging(false);
-    } });
-  };
-
-  /**
-   * A press on a marker selects it, and dragging it moves it: a chapter's
-   * `sides`, both to move it, between its neighbours and 0 and at least 1 ms
-   * long; a bookmark, with the other selected ones, anywhere from 0, past other
-   * bookmarks. It never draws a chapter. Only bookmarks are selected together,
-   * as by `markerPicked`. Pressed twice in a row, it opens the selection's
-   * name field.
-   */
-  const markerDown = (e: PointerEvent<HTMLElement>, m: Marker, sides: ("start" | "end")[] = ["start", "end"]) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (markerPicked(e, m)) return;
-    markerAnchor.current = m;
-    const group = !isChapter(m) && marked.has(m) ? [...marked] : [m];
-    selectMarkers(group);
-    const twice = lastPress.current?.m === m && e.timeStamp - lastPress.current.at < 500;
-    lastPress.current = twice ? null : { m, at: e.timeStamp };
-    if (twice) return rename(group);
-    const i = chapters.indexOf(m as Chapter);
-    const [lo, hi] = [chapters[i - 1]?.end ?? 0, chapters[i + 1]?.start ?? Infinity];
-    /** How far they can go, from where they started. */
-    const [dtMin, dtMax] = !isChapter(m) ? [-Math.min(...group.map(timeOf)), Infinity] : [
-      sides.includes("start") ? lo - m.start : m.start + 1 - m.end,
-      sides.includes("end") ? hi - m.end : m.end - 1 - m.start,
-    ];
-    const label = group.length > 1 ? `Move ${group.length} bookmarks` : `${isChapter(m) && sides.length === 1 ? "Resize" : "Move"} ${isChapter(m) ? "chapter" : "bookmark"} "${m.name}"`;
-    const [origin, x0] = [pointerAt(e).at, e.clientX];
-    let moved = false;
-    setDragging(true);
-    const move = (p: globalThis.PointerEvent) => {
-      moved ||= Math.abs(p.clientX - x0) > 3;
-      if (!moved) return;
-      const dt = clamp(pointerAt(p).at - origin, dtMin, dtMax);
-      // From where they started, so the lists from the press stay the ones to change.
-      const to = new Map<Marker, Marker>(group.map((g) => [g, isChapter(g)
-        ? { ...g, start: g.start + (sides.includes("start") ? dt : 0), end: g.end + (sides.includes("end") ? dt : 0) }
-        : { ...g, time: g.time + dt }]));
-      // The Markers regions follow each step, from the one before.
-      edit(label, (s) => withBookmarks({ ...s, chapters: swapped(chapters, to) }, swapped(bookmarks, to).sort((a, z) => a.time - z.time)));
-      setMarked(new Set(to.values()));
-      markerAnchor.current = to.get(m)!;
-    };
-    // Scrolling stops where they can go no further that way.
-    const scrolls = (dir: number, p: globalThis.PointerEvent) => {
-      const dt = pointerAt(p).at - origin;
-      return dir > 0 ? dt < dtMax : dt > dtMin;
-    };
-    // Followed on the graph and lane, which stay, not the marker: a flag's element can go out of view, or over to another bookmark, as it passes them.
-    track(timeRef.current!, e, move, () => setDragging(false), scrolls);
-  };
-
-  /**
-   * Select bookmarks together on a click on the bookmark `m` with a modifier:
-   * Ctrl/Cmd toggles it in the selection, Shift selects the ones from the last
-   * clicked. Returns whether it did.
-   */
-  const markerPicked = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, m: Marker) => {
-    if (isChapter(m)) return false;
-    if (e.ctrlKey || e.metaKey) {
-      markerAnchor.current = m;
-      const next = new Set([...marked].filter((o) => !isChapter(o)));
-      if (!next.delete(m)) next.add(m);
-      selectMarkers(next);
-      return true;
-    }
-    if (!e.shiftKey) return false;
-    const [i, j] = [bookmarks.indexOf(markerAnchor.current as Bookmark), bookmarks.indexOf(m)];
-    selectMarkers(i < 0 ? [m] : bookmarks.slice(Math.min(i, j), Math.max(i, j) + 1));
-    return true;
-  };
-
-  /**
-   * Open the name field on the markers `ms`, named as the first in time, to
-   * give them all one name or delete them; a bookmark's accepted name is the
-   * next one's.
-   */
-  const rename = (ms: Marker[]) => {
-    ms = [...ms].sort((a, b) => timeOf(a) - timeOf(b));
-    const times = ms.flatMap((m) => (isChapter(m) ? [m.start, m.end] : [m.time]));
-    setNaming({ from: Math.min(...times), to: Math.max(...times), name: ms[0].name, remove: () => removeMarkers(ms), done: (name) => {
-      if (name && !ms.every(isChapter)) setLastName(name);
-      if (!name || ms.every((m) => m.name === name)) return;
-      const to = new Map<Marker, Marker>(ms.map((m) => [m, { ...m, name }]));
-      const label = ms.length > 1 ? `Rename ${ms.length} bookmarks` : `Rename ${isChapter(ms[0]) ? "chapter" : "bookmark"} "${ms[0].name}"`;
-      edit(`${label} to "${name}"`, (s) => withBookmarks({ ...s, chapters: swapped(s.chapters, to) }, swapped(s.bookmarks, to)));
-      setMarked(new Set(to.values()));
-    } });
-  };
-
-  const removeMarkers = (ms: Marker[]) => {
-    edit(ms.length > 1 ? `Delete ${ms.length} bookmarks` : `Delete ${isChapter(ms[0]) ? "chapter" : "bookmark"} "${ms[0].name}"`, (s) => withBookmarks({ ...s, chapters: s.chapters.filter((c) => !ms.includes(c)) }, s.bookmarks.filter((b) => !ms.includes(b))));
-    setMarked(new Set());
-  };
-
   /** Unlock the region `r`: it goes, and its points become ordinary points, selected; an instance's regions become regions of their own, their points staying theirs. */
   const unlockRegion = (r: Region) => {
     const inner = isInstance(r) ? r.snippet.regions : [];
@@ -860,56 +722,6 @@ export default function EditorPage() {
     edit(`Rename ${regionNoun(r)} to "${name}"`, (s) => ({ ...s, regions: s.regions.map((o) => (o === r ? renamed : o)) }));
     select([], [renamed]);
   };
-  /** Close the name field with the accepted `name`, or null to keep the old one. */
-  const closeNaming = (name: string | null) => {
-    naming!.done(name);
-    setNaming(null);
-  };
-
-  /**
-   * A press on empty lane: a drag draws a chapter, within the gap between the
-   * chapters around it, and opens its name field; a click adds a bookmark.
-   */
-  const laneDown = (e: PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const at = Math.max(pointerAt(e).at, 0);
-    const n = chapters.filter((c) => c.start <= at).length;
-    const [lo, hi] = [chapters[n - 1]?.end ?? 0, chapters[n]?.start ?? Infinity];
-    // On the edge of a chapter, where its band ends a pixel short.
-    if (at < lo) return;
-    const x0 = e.clientX;
-    let drawn: Chapter | null = null;
-    setDragging(true);
-    const move = (m: globalThis.PointerEvent) => {
-      if (!drawn && Math.abs(m.clientX - x0) <= 3) return;
-      const t = clamp(pointerAt(m).at, lo, hi);
-      if (t === at) return;
-      const [old, chapter] = [drawn, { name: `Chapter ${n + 1}`, start: Math.min(at, t), end: Math.max(at, t) }];
-      drawn = chapter;
-      edit(`Add chapter "${chapter.name}"`, (s) => ({ ...s, chapters: [...s.chapters.filter((c) => c !== old), chapter].sort((a, b) => a.start - b.start) }));
-    };
-    // Scrolling stops at the gap's ends.
-    const scrolls = (dir: number, m: globalThis.PointerEvent) => (dir > 0 ? pointerAt(m).at < hi : pointerAt(m).at > lo);
-    track(e.currentTarget, e, move, () => {
-      const chapter = drawn;
-      if (!chapter) {
-        setDragging(false);
-        return addBookmark(at);
-      }
-      selectMarkers([chapter]);
-      // The drag ends once named, so naming it is part of adding it.
-      setNaming({ from: chapter.start, to: chapter.end, name: chapter.name, done: (name) => {
-        if (name && name !== chapter.name) {
-          const renamed = { ...chapter, name };
-          edit(`Add chapter "${name}"`, (s) => ({ ...s, chapters: s.chapters.map((c) => (c === chapter ? renamed : c)) }));
-          setMarked(new Set([renamed]));
-        }
-        setDragging(false);
-      } });
-    }, scrolls);
-  };
-
   /** The fields of the advanced editor's Scale, in %, as typed. */
   const [scale, setScale] = useState({ time: "100", out: "0", in: "100" });
   /** The fields of the advanced editor's Shift depth, as typed, in depth. */
@@ -1479,7 +1291,7 @@ export default function EditorPage() {
       else undo();
     } else if ((e.ctrlKey || e.metaKey) && e.key === "a") {
       e.preventDefault();
-      if (marked.size || overLane.current) selectMarkers(bookmarks);
+      if (markers.marked.size || markers.overLane.current) markers.selectMarkers(bookmarks);
       else select([...actions.keys()].filter((i) => !regionAt(regions, actions[i].at)), regions);
     } else if (e.key === "Escape") {
       // What is pending goes first, then the grid, then the selection.
@@ -1487,7 +1299,7 @@ export default function EditorPage() {
       if (gridOpen) setGridOpen(false);
       else {
         select([]);
-        setMarked(new Set());
+        markers.setMarked(new Set());
         setBox(null);
       }
     } else if (e.key.startsWith("Arrow") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.defaultPrevented && !dragging && (selected.size || chosen.length)) {
@@ -1498,12 +1310,12 @@ export default function EditorPage() {
     } else if ((e.key === "Delete" || e.key === "Backspace") && (selected.size || chosen.length)) {
       e.preventDefault();
       removeSelected();
-    } else if ((e.key === "Delete" || e.key === "Backspace") && marked.size) {
+    } else if ((e.key === "Delete" || e.key === "Backspace") && markers.marked.size) {
       e.preventDefault();
-      removeMarkers([...marked]);
-    } else if (e.key === "F2" && marked.size) {
+      markers.removeMarkers([...markers.marked]);
+    } else if (e.key === "F2" && markers.marked.size) {
       e.preventDefault();
-      rename([...marked]);
+      markers.rename([...markers.marked]);
     } else if (e.key === "e" && !e.ctrlKey && !e.metaKey) {
       // With a region alone selected, edits it instead.
       if (region) editRegion(region);
@@ -1511,7 +1323,7 @@ export default function EditorPage() {
     } else if (key === "b" && !e.ctrlKey && !e.metaKey && !markersLocked) {
       // At the playhead, or without media under the pointer.
       const at = media.videoUrl ? Math.round(media.time) : hoverAt.current;
-      if (at !== null) addBookmark(at);
+      if (at !== null) markers.addBookmark(at);
     }
   });
 
@@ -1583,7 +1395,7 @@ export default function EditorPage() {
     setTimeline(startedAt({ ...doc, chapters, bookmarks }, library, "Open"));
     setAdvanced({ ...doc, zero, from, snippet, instance: instance && regions.indexOf(instance) });
     select([]);
-    setMarked(new Set());
+    markers.setMarked(new Set());
     setBox(null);
   };
 
@@ -2054,12 +1866,12 @@ export default function EditorPage() {
       const { actions: _, ...rest } = JSON.parse(await file.text()) as Record<string, unknown>;
       setLifted(null);
       setSelected(new Set());
-      setMarked(new Set());
+      markers.setMarked(new Set());
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
-      const markers = readMarkers(rest, Math.max(opened[opened.length - 1].at, media.videoDuration));
+      const fileMarkers = readMarkers(rest, Math.max(opened[opened.length - 1].at, media.videoDuration));
       // Taken as they are, never generated again.
       const regions = readRegions((rest.ossmRsWebTools as { regions?: unknown } | null | undefined)?.regions);
-      const next = { name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...markers, regions };
+      const next = { name: file.name.replace(/\.funscript$/, ""), actions: opened, file: rest, ...fileMarkers, regions };
       setSaved(next);
       setScript(next);
       setTimeline(withLibraryChanges(startedAt(next, timeline.states[0].library, `Open ${file.name}`), timeline));
@@ -2451,21 +2263,21 @@ export default function EditorPage() {
       gap="2"
       px="1"
       onClick={(e) => {
-        if (!markersLocked && markerPicked(e, m)) return;
+        if (!markersLocked && markers.markerPicked(e, m)) return;
         if (!markersLocked) {
-          markerAnchor.current = m;
-          selectMarkers([m]);
+          markers.markerAnchor.current = m;
+          markers.selectMarkers([m]);
         }
-        goTo(timeOf(m));
+        goTo(markers.timeOf(m));
       }}
-      onDoubleClick={() => !markersLocked && rename([m])}
-      style={{ minHeight: 28, borderRadius: 4, cursor: "pointer", userSelect: "none", background: marked.has(m) ? "var(--accent-a4)" : undefined }}
+      onDoubleClick={() => !markersLocked && markers.rename([m])}
+      style={{ minHeight: 28, borderRadius: 4, cursor: "pointer", userSelect: "none", background: markers.marked.has(m) ? "var(--accent-a4)" : undefined }}
     >
       {/* A bookmark's colour, as its flag in the lane. */}
-      {!isChapter(m) && <Box flexShrink="0" width="8px" height="8px" style={{ borderRadius: "50%", background: `var(--${markerColor(m.name)}-9)` }} />}
+      {!markers.isChapter(m) && <Box flexShrink="0" width="8px" height="8px" style={{ borderRadius: "50%", background: `var(--${markerColor(m.name)}-9)` }} />}
       <Text size="2" truncate style={{ flexGrow: 1 }}>{m.name}</Text>
       <Text size="1" color="gray" style={{ flexShrink: 0 }}>
-        {isChapter(m) ? `${formatScriptTime(m.start / 1000)}–${formatScriptTime(m.end / 1000)}` : formatScriptTime(m.time / 1000)}
+        {markers.isChapter(m) ? `${formatScriptTime(m.start / 1000)}–${formatScriptTime(m.end / 1000)}` : formatScriptTime(m.time / 1000)}
       </Text>
     </Flex>
   );
@@ -2596,7 +2408,7 @@ export default function EditorPage() {
             if (!discardable()) return;
             setLifted(null);
             setSelected(new Set());
-            setMarked(new Set());
+            markers.setMarked(new Set());
             setSaved(EMPTY);
             setScript(EMPTY);
             setTimeline(withLibraryChanges(startedAt(EMPTY, timeline.states[0].library, "New script"), timeline));
@@ -3525,9 +3337,9 @@ export default function EditorPage() {
             position="relative"
             flexGrow="1"
             height={`${LANE_HEIGHT}px`}
-            onPointerDown={laneDown}
-            onPointerEnter={() => void (overLane.current = true)}
-            onPointerLeave={() => void (overLane.current = false)}
+            onPointerDown={markers.laneDown}
+            onPointerEnter={() => void (markers.overLane.current = true)}
+            onPointerLeave={() => void (markers.overLane.current = false)}
             // The advanced editor's document has no markers, so the lane takes no presses there until unlocked.
             style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair", pointerEvents: markersLocked ? "none" : undefined }}
           >
@@ -3541,8 +3353,8 @@ export default function EditorPage() {
                   key={i}
                   position="absolute"
                   height="100%"
-                  onPointerDown={(e) => markerDown(e, c)}
-                  style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)", cursor: "grab", ...(marked.has(c) && SELECTED_MARKER) }}
+                  onPointerDown={(e) => markers.markerDown(e, c)}
+                  style={{ left, width: Math.min(x(c.end), width) - left, background: light[i] ? "var(--gray-a3)" : "var(--gray-a5)", cursor: "grab", ...(markers.marked.has(c) && SELECTED_MARKER) }}
                 >
                   <Text as="div" size="1" truncate style={{ maxWidth: flag && x(flag.time) - left, boxSizing: "border-box", lineHeight: `${LANE_HEIGHT}px`, padding: "0 4px" }}>
                     {c.name}
@@ -3554,7 +3366,7 @@ export default function EditorPage() {
                       position="absolute"
                       top="0"
                       height="100%"
-                      onPointerDown={(e) => markerDown(e, c, [side])}
+                      onPointerDown={(e) => markers.markerDown(e, c, [side])}
                       style={{ [side === "start" ? "left" : "right"]: 0, width: MARKER_GRIP, cursor: "ew-resize" }}
                     />
                   ))}
@@ -3568,7 +3380,7 @@ export default function EditorPage() {
                 as="div"
                 size="1"
                 truncate
-                onPointerDown={(e) => markerDown(e, b)}
+                onPointerDown={(e) => markers.markerDown(e, b)}
                 style={{
                   position: "absolute",
                   // Its 2px edge centred on its time, like its line through the graph.
@@ -3582,23 +3394,23 @@ export default function EditorPage() {
                   // Opaque, so it hides what it covers.
                   background: `linear-gradient(var(--${markerColor(b.name)}-a4), var(--${markerColor(b.name)}-a4)), var(--color-panel-solid)`,
                   cursor: "grab",
-                  ...(marked.has(b) && SELECTED_MARKER),
+                  ...(markers.marked.has(b) && SELECTED_MARKER),
                 }}
               >
                 {b.name}
               </Text>
             ))}
             {/* Suggests the names in the script. */}
-            {naming && (
+            {markers.naming && (
               <NamePopover
-                initial={naming.name}
-                anchor={{ position: "absolute", left: Math.max(x(naming.from), 0), width: Math.min(x(naming.to), width) - Math.max(x(naming.from), 0), height: "100%", pointerEvents: "none" }}
+                initial={markers.naming.name}
+                anchor={{ position: "absolute", left: Math.max(x(markers.naming.from), 0), width: Math.min(x(markers.naming.to), width) - Math.max(x(markers.naming.from), 0), height: "100%", pointerEvents: "none" }}
                 suggestions={[...new Set([...chapters, ...bookmarks].map((m) => m.name))]}
-                onName={(name) => closeNaming(name)}
-                onCancel={() => closeNaming(null)}
-                onRemove={naming.remove && (() => {
-                  naming.remove!();
-                  setNaming(null);
+                onName={(name) => markers.closeNaming(name)}
+                onCancel={() => markers.closeNaming(null)}
+                onRemove={markers.naming.remove && (() => {
+                  markers.naming!.remove!();
+                  markers.setNaming(null);
                 })}
               />
             )}
@@ -3612,7 +3424,7 @@ export default function EditorPage() {
               title={markersUnlocked ? "Lock the markers" : "Unlock the markers, to edit the main script's chapters and bookmarks here"}
               onClick={() => {
                 setMarkersUnlocked(!markersUnlocked);
-                setMarked(new Set());
+                markers.setMarked(new Set());
               }}
               style={{ width: LANE_HEIGHT, height: LANE_HEIGHT }}
             >
