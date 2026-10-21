@@ -11,7 +11,7 @@ import { clamp, LINE_COLOR, points, speed, stats, type Action } from "../funscri
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Bookmark, type Chapter, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { NamePopover, SnippetIcon } from "../editor/NamePopover";
-import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, isRepeat, items, markersRegions, movedBy, regionAt, regionKind, regionName, regionNoun, sameContent, spanned, swapped, type Advanced, type Area, type Clip, type Content, type Inner, type Instance, type Placing, type Region, type Script } from "../editor/model";
+import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, isRepeat, items, markersRegions, movedBy, regionAt, regionName, regionNoun, sameContent, spanned, swapped, type Advanced, type Area, type Clip, type Content, type Inner, type Instance, type Placing, type Region, type Script } from "../editor/model";
 import { fastestOf, gridParams, scaled, scaleParams, shifted, shiftParams, speedLimited, typed, type GridFields } from "../editor/transforms";
 import { extent, funcAt, GENERATE_DEFAULTS, generated, KNOT_GAP, newSeed, ownScale, RANGED, rangeFields, rangeParams, refilled, REPEAT_DEFAULTS, repeated, repeatParams, reshaped, SHAPES, SPANNED, splineAt, TOOLS, withBookmarks, type Func, type FuncKey, type GenerateSetup, type GenPart, type Knots, type RepeatSetup, type Shape, type ShapeField, type ToolKind } from "../editor/generate";
 import { download, readClip, readRegions } from "../editor/file";
@@ -22,6 +22,7 @@ import { dragHeight } from "../drag";
 import { AXIS, PAD, useViewport } from "../editor/viewport";
 import { Minimap } from "../editor/Minimap";
 import { SpeedCalculator } from "../editor/SpeedCalculator";
+import { RegionPanel } from "../editor/RegionPanel";
 import { GraphLayout } from "./GraphPage";
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
@@ -2793,35 +2794,19 @@ export default function EditorPage() {
       </Text>
       </>}
       {/* The selected region, its points locked until unlocked. */}
-      {region && <>
-        <Separator size="4" />
-        <Heading size="3">{regionKind(region)}</Heading>
-        {/* Its own name, a region's only once given. */}
-        <Flex align="center" gap="2">
-          {isInstance(region) || region.name ? <Text size="2" weight="medium" truncate>{isInstance(region) ? region.snippet.name : region.name}</Text> : <Text size="2" color="gray">Unnamed</Text>}
-          <NamePopover initial={isInstance(region) ? region.snippet.name : regionName(region)} onName={(n) => n !== (isInstance(region) ? region.snippet.name : regionName(region)) && renameRegion(region, n)}>
-            <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
-          </NamePopover>
-        </Flex>
-        <Text size="2" color="gray">{points(afterTime(actions, region.to) - byTime(actions, region.from))}</Text>
-        <Flex gap="2">
-          <Button variant="soft" color="gray" style={{ flex: 1 }} disabled={!!placing} title={isInstance(region) ? "Edit its points and regions in the advanced editor (E, or double-click it)" : isRepeat(region) ? "Edit its pattern and setup with Repeat (E, or double-click it)" : "Edit its setup and box with Generate (E, or double-click it)"} onClick={() => editRegion(region)}>
-            <MixerHorizontalIcon /> Edit
-          </Button>
-          <Button variant="soft" color="gray" style={{ flex: 1 }} title="Make its points ordinary points" onClick={() => unlockRegion(region)}>
-            <LockOpen1Icon /> Unlock
-          </Button>
-          <IconButton variant="soft" color="red" aria-label="Delete" title="Delete it with its points (Delete)" onClick={() => removeSelected()}>
-            <TrashIcon />
-          </IconButton>
-        </Flex>
-        {/* Its points and generator regions, at the top level of the library. */}
-        <NamePopover initial={isInstance(region) ? region.snippet.name : region.name} taken={(n) => nameTaken([], n)} onName={(n) => saveSnippet([n], { actions: actions.slice(byTime(actions, region.from), afterTime(actions, region.to)), regions: generators([region]) })}>
-          <Button variant="soft" color="gray" disabled={afterTime(actions, region.to) - byTime(actions, region.from) < 2} title="Save its points and regions to the snippet library">
-            <SnippetIcon /> Save as snippet
-          </Button>
-        </NamePopover>
-      </>}
+      {region && (
+        <RegionPanel
+          region={region}
+          pointCount={afterTime(actions, region.to) - byTime(actions, region.from)}
+          disabled={!!placing}
+          onEdit={() => editRegion(region)}
+          onUnlock={() => unlockRegion(region)}
+          onDelete={() => removeSelected()}
+          onRename={(n) => renameRegion(region, n)}
+          onSave={(n) => saveSnippet([n], { actions: actions.slice(byTime(actions, region.from), afterTime(actions, region.to)), regions: generators([region]) })}
+          nameTaken={(n) => nameTaken([], n)}
+        />
+      )}
       {/* Stats of the selected points and regions' points, or of all points. */}
       {actions.length > 0 && (() => {
         const on = selected.size || chosen.length;
