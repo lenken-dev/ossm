@@ -3,6 +3,7 @@ import { AlertDialog, Box, Button, Callout, Checkbox, DataList, Flex, Heading, H
 import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ClipboardIcon, MagnifyingGlassIcon, PlusIcon, LockClosedIcon, LockOpen1Icon, Pencil1Icon, TrashIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, CounterClockwiseClockIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, Crosshair2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, GearIcon, HeightIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, ScissorsIcon, ShuffleIcon, TrackNextIcon, TrackPreviousIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight, bisector } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
+import { useWindowEvent } from "../hooks/useWindowEvent";
 import { PLAYER_WINDOW, SENT_SCRIPT_KEY } from "../StreamPanel";
 import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
 import { LabeledSlider } from "../TrajectoryPanel";
@@ -5242,19 +5243,4 @@ function LanePreview({ lists }: { lists: [LaneItem[], LaneItem[]][] }) {
       {lines.length > MARKER_DIFF_LINES && <Text size="1" color="gray">and {lines.length - MARKER_DIFF_LINES} more</Text>}
     </Flex>
   );
-}
-
-/**
- * Listen to `type` on the window with the latest `handler`. The listener is
- * added once: one re-added on every render can miss an event, when another
- * listener's state update re-renders while the event is being dispatched.
- */
-function useWindowEvent<K extends keyof WindowEventMap>(type: K, handler: (e: WindowEventMap[K]) => void) {
-  const latest = useRef(handler);
-  latest.current = handler;
-  useEffect(() => {
-    const listener = (e: WindowEventMap[K]) => latest.current(e);
-    window.addEventListener(type, listener);
-    return () => window.removeEventListener(type, listener);
-  }, [type]);
 }
