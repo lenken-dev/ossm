@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTM
 import { createPortal } from "react-dom";
 import { Box, Button, Callout, Flex, Heading, IconButton, SegmentedControl, Separator, Text, Theme, Tooltip } from "@radix-ui/themes";
 import {
-  CheckIcon,
   Cross2Icon,
   EnterFullScreenIcon,
   ExclamationTriangleIcon,
@@ -24,7 +23,7 @@ import { parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SCRIPT_KEY, type Fun
 import { FIRMWARE_RANGE_MM, RANGE_KEY } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
-import { capturePointer, dragHeight } from "../drag";
+import { dragHeight } from "../drag";
 import { stats, type Action } from "../funscript/model";
 import { readMarkers } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
@@ -35,9 +34,10 @@ import { PlayerCalculator } from "../player/PlayerCalculator";
 import { ScriptMinimap } from "../player/ScriptMinimap";
 import { ScriptPreview } from "../player/ScriptPreview";
 import { ScriptSettings } from "../player/ScriptSettings";
+import { TheaterGraph } from "../player/TheaterGraph";
 import { usePlayhead } from "../player/usePlayhead";
 import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, silence, TICK_MS, type Markers } from "../player/playback";
-import { DEFAULT_OVERLAY, dragAxis, handleStyle, OVERLAY_MIN_HEIGHT, OVERLAY_MIN_WIDTH, RESIZE_HANDLES } from "../player/overlay";
+import { DEFAULT_OVERLAY } from "../player/overlay";
 
 type PlayerMode = "pattern" | "funscript";
 
@@ -78,25 +78,6 @@ export default function PlayerPage() {
   /** The video area, which the graph's position and size are fractions of. */
   const stageRef = useRef<HTMLDivElement>(null);
 
-  /**
-   * Drag `edges` (some of "nsew") of the graph over the video with the pointer;
-   * all four move it. It stays inside the video area and at least the minimum size.
-   */
-  const dragOverlay = (e: PointerEvent<HTMLElement>, edges: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const stage = stageRef.current!.getBoundingClientRect();
-    const start = overlay;
-    const [startX, startY] = [e.clientX, e.clientY];
-    const move = (m: globalThis.PointerEvent) => {
-      const dx = (m.clientX - startX) / stage.width;
-      const dy = (m.clientY - startY) / stage.height;
-      const [x, width] = dragAxis(start.x, start.width, dx, edges.includes("w"), edges.includes("e"), OVERLAY_MIN_WIDTH / stage.width);
-      const [y, height] = dragAxis(start.y, start.height, dy, edges.includes("n"), edges.includes("s"), OVERLAY_MIN_HEIGHT / stage.height);
-      setOverlay({ ...start, x, y, width, height });
-    };
-    capturePointer(e.currentTarget, e.pointerId, move);
-  };
   /** Drag the top edge of the graph below the video to set its height; at most most of the window. */
   const dragGraphHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, graphHeight, setGraphHeight, PREVIEW_MIN_HEIGHT, true);
   /** An audio file plays in a bar instead of the video area. */
@@ -668,37 +649,9 @@ export default function PlayerPage() {
             <Box ref={stageRef} position="relative" flexGrow="1" minHeight="0">
               <video {...mediaProps} src={videoUrl} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", background: "black" }} />
               {inTheater && mode === "funscript" && played && showGraph && (
-                // While arranging, drag the graph to move it and its handles to resize it; otherwise
-                // clicks go through to the video. Done sits in its middle, clear of the handles.
-                <Box
-                  position="absolute"
-                  style={{
-                    left: `${overlay.x * 100}%`,
-                    top: `${overlay.y * 100}%`,
-                    width: `${overlay.width * 100}%`,
-                    height: `${overlay.height * 100}%`,
-                    ...(arranging
-                      ? { cursor: "move", borderRadius: 6, outline: "2px dashed white", boxShadow: "0 0 0 3px rgba(0,0,0,0.5)" }
-                      : { pointerEvents: "none" }),
-                  }}
-                  onPointerDown={(e) => dragOverlay(e, "nsew")}
-                >
+                <TheaterGraph stage={stageRef} overlay={overlay} setOverlay={setOverlay} arranging={arranging} onDone={() => setArranging(false)}>
                   <ScriptPreview script={played} chapters={markers.chapters} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
-                  {arranging &&
-                    RESIZE_HANDLES.map((h) => <Box key={h} title="Drag to resize" style={handleStyle(h)} onPointerDown={(e) => dragOverlay(e, h)} />)}
-                  {/* Stops the pointer here, so pressing Done does not start a drag. */}
-                  {arranging && (
-                    <Box
-                      position="absolute"
-                      style={{ left: "50%", top: "50%", translate: "-50% -50%", cursor: "auto" }}
-                      onPointerDown={(e) => e.stopPropagation()}
-                    >
-                      <Button onClick={() => setArranging(false)}>
-                        <CheckIcon /> Done
-                      </Button>
-                    </Box>
-                  )}
-                </Box>
+                </TheaterGraph>
               )}
               {/* Where the hidden pane would appear, at the pane's padding so they do not jump. */}
               {inTheater && !showControls && theaterToggles({ position: "absolute", left: "var(--space-3)", top: "var(--space-3)" })}
