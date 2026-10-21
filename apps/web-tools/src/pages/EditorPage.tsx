@@ -12,6 +12,7 @@ import { clamp, LINE_COLOR, points, speed, stats, type Action } from "../funscri
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Bookmark, type Chapter, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { NamePopover, SnippetIcon } from "../editor/NamePopover";
+import { capturePointer, dragHeight } from "../drag";
 import { GraphLayout } from "./GraphPage";
 import presetsFile from "./presets.json";
 
@@ -1154,17 +1155,6 @@ export default function EditorPage() {
     setView((v) => (t < v.from || t > v.from + v.span ? { ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) } : v));
   };
 
-  /** Drag the bottom of something `start` px high to resize it, or its top if `top`, from `min` px to 70% of the window. */
-  const dragHeight = (e: PointerEvent<HTMLElement>, start: number, set: (h: number) => void, min: number, top = false) => {
-    e.preventDefault();
-    const target = e.currentTarget;
-    const startY = e.clientY;
-    const move = (m: globalThis.PointerEvent) =>
-      set(Math.round(Math.min(Math.max(start + (top ? startY - m.clientY : m.clientY - startY), min), window.innerHeight * 0.7)));
-    target.setPointerCapture(e.pointerId);
-    target.addEventListener("pointermove", move);
-    target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
-  };
   /** Drag the bottom edge of the video to set its height; at most most of the window. */
   const dragVideoHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, videoHeight, setVideoHeight, VIDEO_MIN_HEIGHT);
 
@@ -1319,13 +1309,10 @@ export default function EditorPage() {
       armed ||= !pushed(m);
       move(m);
     };
-    target.setPointerCapture(e.pointerId);
-    target.addEventListener("pointermove", moved as EventListener);
-    target.addEventListener("lostpointercapture", () => {
-      target.removeEventListener("pointermove", moved as EventListener);
+    capturePointer(target, e.pointerId, moved, () => {
       cancelAnimationFrame(frame);
       end?.();
-    }, { once: true });
+    });
   };
 
   /** The indices of the points in `area`, but the regions' points, which are never selected. */
@@ -1700,9 +1687,7 @@ export default function EditorPage() {
     const offset = pressed >= view.from && pressed <= view.from + view.span ? pressed - view.from : view.span / 2;
     const move = (m: { clientX: number }) => setView((v) => ({ ...v, from: clamp(at(m) - offset, 0, total - v.span) }));
     move(e);
-    target.setPointerCapture(e.pointerId);
-    target.addEventListener("pointermove", move);
-    target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
+    capturePointer(target, e.pointerId, move);
   };
 
   /** Select the markers `ms`, clearing the point selection. */
