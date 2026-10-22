@@ -971,7 +971,7 @@ export default function EditorPage() {
       <Separator size="4" />
       <SpeedCalculator open={calcShown} setOpen={setCalcShown} script={calcScript} selection={selected.size > 0 || chosen.length > 0} />
       </>}
-      <ToolPanel tools={tools} grid={gridTool} advanced={!!advanced} actions={actions} regions={regions} bookmarks={bookmarks} zero={zero} selectedCount={selected.size} placing={!!placing} />
+      <ToolPanel tools={tools} grid={gridTool} advanced={!!advanced} bookmarks={bookmarks} zero={zero} />
       {/* At the panel's bottom as a tool's Apply, which takes its place while a tool is open, or the grid. */}
       {!tool && !gridTool.open && (
         <Flex direction="column" gap="2" py="3" mb="-3" style={{ marginTop: "auto", position: "sticky", bottom: 0, background: "var(--color-background)" }}>
@@ -1270,7 +1270,7 @@ export default function EditorPage() {
                 ))}
               </g>
             )}
-            <ToolHandles tools={tools} viewport={viewport} />
+            <ToolHandles tool={tool} boxes={tools.boxes} functions={tools.functions} drag={tools.drag} viewport={viewport} />
             {labelled && (
               <text
                 x={x(labelled.at)}
@@ -1327,7 +1327,7 @@ export default function EditorPage() {
           <Text size="1" color="gray" style={{ position: "absolute", top: 4, right: 8, pointerEvents: "none" }}>Out</Text>
           <Text size="1" color="gray" style={{ position: "absolute", bottom: AXIS + 4, right: 8, pointerEvents: "none" }}>In</Text>
         </Box>
-        <TimingView tools={tools} viewport={viewport} />
+        <TimingView timing={tools.timing} functions={tools.functions} drag={tools.drag} box={tools.boxes.fn} viewport={viewport} />
         <MarkerLane
           markers={markers}
           chapters={chapters}

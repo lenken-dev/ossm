@@ -4,7 +4,7 @@ import { clamp, points, type Action } from "../funscript/model";
 import type { Bookmark } from "../funscript/markers";
 import { afterTime, byTime, isInstance, isRepeat, regionAt, spanned, typed, type Area, type Inner, type Instance, type Region, type Script } from "./model";
 import { fastestOf, scaled, scaleParams, shifted, shiftParams, speedLimited } from "./transforms";
-import { funcAt, GENERATE_DEFAULTS, generated, KNOT_GAP, ownScale, RANGED, rangeFields, rangeParams, REPEAT_DEFAULTS, repeated, repeatParams, SPANNED, splineAt, TOOLS, type Func, type FuncKey, type GenerateSetup, type GenPart, type Knots, type RepeatSetup } from "./generate";
+import { funcAt, GENERATE_DEFAULTS, generated, KNOT_GAP, ownScale, RANGED, rangeFields, rangeParams, REPEAT_DEFAULTS, repeated, repeatParams, SPANNED, splineAt, TOOLS, type Func, type FuncKey, type GenerateSetup, type GenPart, type Knots, type RepeatSetup, type ToolKind } from "./generate";
 import { UNDO_SIZE } from "./history";
 import { PAD, type View, type Viewport } from "./viewport";
 import { TIMING_HEIGHT } from "./ToolHandles";
@@ -45,6 +45,8 @@ export interface Tools {
    * with its pattern. Editing a region, it takes the old one's place.
    */
   apply(): void;
+  /** Why the tool `kind`, Invert and Grid too, cannot open now: Repeat without two selected points or more, the rest but Generate and Grid without points outside the regions, any while placing; null when it can. */
+  canOpen(kind: ToolKind): string | null;
   /** Invert the selected points' depths, or all but the regions', at once as one edit, without opening a tool; not when it leaves them as they are. */
   invert(): void;
   /** Change the open tool's fields, of its kind; a Generate or Repeat setup changed is remembered for new runs, unless a region's. */
@@ -506,6 +508,11 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
     else setSelected(next.selected);
   };
 
+  const canOpen = (kind: ToolKind) => placing() ? "Not while placing"
+    : kind === "repeat" ? (selected.size < 2 ? "Select two or more points" : null)
+    : kind !== "generate" && kind !== "grid" && actions.every((a) => regionAt(regions, a.at)) ? "No points outside the regions"
+    : null;
+
   const invert = () => {
     const picked = selected.size ? [...selected] : [...actions.keys()].filter((i) => !regionAt(regions, actions[i].at));
     if (picked.every((i) => actions[i].pos === 50)) return;
@@ -515,7 +522,7 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
   };
 
   return {
-    tool, open, editRegion, close, apply, invert, setFields,
+    tool, open, editRegion, close, apply, canOpen, invert, setFields,
     history: { canRedo, undo, redo },
     preview, blocked: toolBlocked,
     boxes: { span: toolSpan, scale: scaleBox, shift: shiftBox, generate: genBox, repeat: repParams, copies: repRun, fn: fnBox },
