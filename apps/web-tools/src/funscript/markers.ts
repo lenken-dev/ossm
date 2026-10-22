@@ -15,6 +15,11 @@ export interface Bookmark {
 
 export type Marker = Chapter | Bookmark;
 
+/** Whether the marker `m` is a chapter, else a bookmark. */
+export const isChapter = (m: Marker): m is Chapter => "start" in m;
+/** Where the marker `m` is: a chapter's start, or a bookmark's time. */
+export const timeOf = (m: Marker) => (isChapter(m) ? m.start : m.time);
+
 /** A marker time from a file, in ms: ms as a number or `"HH:MM:SS.mmm"`; null when unusable. */
 export function readTime(t: unknown) {
   const ms = typeof t === "number" ? t : typeof t === "string" && /^\d+(:\d+){0,2}(\.\d+)?$/.test(t) ? t.split(":").reduce((s, p) => s * 60 + Number(p), 0) * 1000 : NaN;

@@ -5,19 +5,17 @@ import { download } from "./file";
 import { clipBy, generators, instanceOf, type Clip } from "./model";
 import { entryAt, entryName, isFolder, isPreset, itemsAt, merged, PRESETS, readEntries, under, updatedAt, type Entry, type LibraryFile, type Snippet } from "./library";
 
-/** The snippet library, its edits, and the Snippets panel's open folders, search, row selection and drags. */
+/** The snippet library, its edits, and the Snippets panel's open folders, row selection and drags. */
 export interface Library {
-  /** Set the snippet library, shared by all scripts, as its file holds it. */
-  setLibraryFile: Dispatch<SetStateAction<LibraryFile>>;
+  /** The snippet library, shared by all scripts. */
   library: Entry[];
+  /** Put back the snippet library `library`, as the undo history has it. */
+  restore(library: Entry[]): void;
   /** The library as it shows: the presets, then the user's entries. */
   shelf: Entry[];
   /** The library's open folders, by their paths as JSON. */
   openFolders: string[];
   setOpenFolders: Dispatch<SetStateAction<string[]>>;
-  /** Only the library's entries with this in their names show, their folders open. */
-  snippetQuery: string;
-  setSnippetQuery: Dispatch<SetStateAction<string>>;
   /**
    * The library row being dragged, by its path, with the pointer, and the
    * folder it would go into, by its path as JSON. Pointer events, not native
@@ -89,7 +87,6 @@ export function useLibrary({ advanced, tool, editLabel, insert, stopPlacing, set
     setLibraryFile((l) => ({ ossmRsWebTools: { version: 1, snippets: f(l.ossmRsWebTools.snippets) } }));
   };
   const [openFolders, setOpenFolders] = usePersistedState<string[]>("ossm:editorSnippetFolders", [], localStorage);
-  const [snippetQuery, setSnippetQuery] = useState("");
   const [rowDrag, setRowDrag] = useState<{ paths: string[][]; x: number; y: number; inPanel: boolean } | null>(null);
   const [dropOn, setDropOn] = useState<string | null>(null);
   /** The library's selected rows, by their paths as JSON, to move together; and the last one clicked, which Shift selects from. */
@@ -103,6 +100,7 @@ export function useLibrary({ advanced, tool, editLabel, insert, stopPlacing, set
     window.addEventListener("pointerdown", down, true);
     return () => window.removeEventListener("pointerdown", down, true);
   }, [rowsPicked]);
+  const restore = (library: Entry[]) => setLibraryFile({ ossmRsWebTools: { version: 1, snippets: library } });
   const snippetFrom = (path: string[] | null, zero: number) => {
     const s = path && entryAt(library, path);
     return s && !isFolder(s) ? clipBy(s, zero) : { actions: [], regions: [] };
@@ -236,5 +234,5 @@ export function useLibrary({ advanced, tool, editLabel, insert, stopPlacing, set
     }
   };
 
-  return { setLibraryFile, library, shelf, openFolders, setOpenFolders, snippetQuery, setSnippetQuery, rowDrag, dropOn, rowsPicked, snippetFrom, nameTaken, saveSnippet, insertSnippet, addFolder, renameEntry, deleteEntry, dropInto, dragRow, exportLibrary, importLibrary };
+  return { library, restore, shelf, openFolders, setOpenFolders, rowDrag, dropOn, rowsPicked, snippetFrom, nameTaken, saveSnippet, insertSnippet, addFolder, renameEntry, deleteEntry, dropInto, dragRow, exportLibrary, importLibrary };
 }

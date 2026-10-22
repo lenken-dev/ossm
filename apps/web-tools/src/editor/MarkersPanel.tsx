@@ -1,5 +1,5 @@
 import { Box } from "@radix-ui/themes";
-import type { Bookmark, Chapter } from "../funscript/markers";
+import { timeOf, type Bookmark, type Chapter } from "../funscript/markers";
 import { MarkersList } from "../funscript/MarkersList";
 import type { Markers } from "./useMarkers";
 
@@ -17,7 +17,7 @@ export function MarkersPanel({ markers, chapters, bookmarks, locked, onGoTo }: {
   locked: boolean;
   onGoTo: (t: number) => void;
 }) {
-  const { marked, markerAnchor, selectMarkers, timeOf, markerPicked, rename } = markers;
+  const { marked, selectMarkers, markerPicked, rename } = markers;
   return <Box p="3">
     <MarkersList
       chapters={chapters}
@@ -25,10 +25,7 @@ export function MarkersPanel({ markers, chapters, bookmarks, locked, onGoTo }: {
       highlighted={(m) => marked.has(m)}
       onClick={(m, e) => {
         if (!locked && markerPicked(e, m)) return;
-        if (!locked) {
-          markerAnchor.current = m;
-          selectMarkers([m]);
-        }
+        if (!locked) selectMarkers([m]);
         onGoTo(timeOf(m));
       }}
       onDoubleClick={(m) => !locked && rename([m])}

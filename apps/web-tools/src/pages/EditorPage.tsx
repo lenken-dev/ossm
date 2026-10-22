@@ -7,7 +7,7 @@ import { useWindowEvent } from "../hooks/useWindowEvent";
 import { PLAYER_WINDOW, SENT_SCRIPT_KEY, readFunscript } from "../funscript/file";
 import { formatScriptTime, formatTimeTick, timeTicks } from "../funscript/time";
 import { LabeledSlider, SwitchRow } from "../widgets";
-import { clamp, LINE_COLOR, stats, toggled, type Action } from "../funscript/model";
+import { clamp, LINE_COLOR, stats, type Action } from "../funscript/model";
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { NamePopover, SnippetIcon } from "../editor/NamePopover";
@@ -129,7 +129,7 @@ export default function EditorPage() {
   }, [media.paused, setView]);
 
   const { actions, chapters, bookmarks, regions } = script;
-  const { selected, setSelected, regionsOn, setRegionsOn, select, chosen, region, copyable, boxMode, selectByTime, setSelectByTime, box, setBox, fitBox, edges, selectIn, boxed, boxSelect, editBox, picked, toggleBoxMode } = useSelection({ actions, regions, viewport, placing: () => !!placing });
+  const { selected, regionsOn, select, selectPoints, clear, toggle, chosen, region, copyable, boxMode, selectByTime, setSelectByTime, box, setBox, fitBox, edges, selectIn, boxed, boxSelect, editBox, picked, toggleBoxMode } = useSelection({ actions, regions, viewport, placing: () => !!placing });
   /** While the advanced editor is open, the main script's other points, in runs broken where its points were taken out; drawn faintly behind them, never edited. */
   const context = useMemo(() => {
     if (!advanced) return [];
@@ -148,18 +148,12 @@ export default function EditorPage() {
     editLabel.current = label;
     setScript(next);
   };
-  const markers = useMarkers({ chapters, bookmarks, edit, setDragging, viewport, laneRef: timeRef, onSelect: () => {
-    setSelected(new Set());
-    setBox(null);
-  } });
+  const markers = useMarkers({ chapters, bookmarks, edit, setDragging, viewport, laneRef: timeRef, onSelect: clear });
   const markersLocked = !!advanced && !markers.unlocked;
   useEffect(() => {
     if (selected.size || regionsOn.size) markers.clearMarked();
   }, [selected, regionsOn]);
-  useEffect(() => {
-    if (markers.marked.size) setRegionsOn(new Set());
-  }, [markers.marked]);
-  const tools = useTool({ actions, regions, bookmarks, zero, selected, view, viewport, placing: () => !!placing, edit, select, setSelected, setBox, dragging, setDragging, onEditInstance: (instance) => openAdvanced(undefined, instance) });
+  const tools = useTool({ actions, regions, bookmarks, zero, selected, view, viewport, placing: () => !!placing, edit, select, selectPoints, setBox, dragging, setDragging, onEditInstance: (instance) => openAdvanced(undefined, instance) });
   const { tool, editRegion, preview } = tools;
   const gridTool = useGrid(!!advanced && !tool, zero);
   const { grid } = gridTool;
@@ -167,7 +161,7 @@ export default function EditorPage() {
     cancel();
     if (clip) start(clip);
   }, stopPlacing: () => drop(), setError });
-  const { library, setLibraryFile, rowDrag, snippetFrom, nameTaken, saveSnippet } = snippetLibrary;
+  const { library, restore, rowDrag, snippetFrom, nameTaken, saveSnippet } = snippetLibrary;
   /** Undo history: the points, markers, regions and snippet library after each edit, the first as loaded; `index` is the current one. */
   const [timeline, setTimeline] = useState(() => startedAt(script, library, advanced ? "Open" : "Start"));
 
@@ -201,9 +195,8 @@ export default function EditorPage() {
     setTimeline((tl) => ({ ...tl, index }));
     tools.close();
     setScript((s) => ({ ...s, actions, chapters, bookmarks, regions }));
-    setLibraryFile({ ossmRsWebTools: { version: 1, snippets: library } });
-    setSelected(points);
-    setRegionsOn(rs);
+    restore(library);
+    select(points, rs);
     markers.setMarked(ms);
     if (boxMode && (points.size || rs.size)) fitBox([...points].map((i) => actions[i]), [...rs], actions);
     else setBox(null);
@@ -253,7 +246,7 @@ export default function EditorPage() {
       e.stopPropagation();
       if (boxMode) return selectIn(boxed(extended(box ?? spanned(actions[i], actions[i]), actions[i])));
     }
-    if (picked(e, actions[i].at, actions[i].at, () => setSelected(toggled(i)))) return;
+    if (picked(e, actions[i].at, actions[i].at, () => toggle(i))) return;
     const [ps, rs] = selected.has(i) ? [[...selected], chosen] : [[i], []];
     select(ps, rs);
     if (consecutive(ps, rs)) carry(e, null, ps, rs, i);
@@ -262,7 +255,7 @@ export default function EditorPage() {
 
   /** A press on the region `r`'s band, as on a point. */
   const regionDown = (e: PointerEvent<SVGSVGElement>, r: Region) => {
-    if (picked(e, r.from, r.to, () => setRegionsOn(toggled(r)))) return;
+    if (picked(e, r.from, r.to, () => toggle(r))) return;
     const [ps, rs] = regionsOn.has(r) ? [[...selected], chosen] : [[], [r]];
     select(ps, rs);
     if (consecutive(ps, rs)) carry(e, null, ps, rs);
@@ -490,16 +483,14 @@ export default function EditorPage() {
       else undo();
     } else if ((e.ctrlKey || e.metaKey) && e.key === "a") {
       e.preventDefault();
-      if (markers.marked.size || markers.overLane.current) markers.selectMarkers(bookmarks);
-      else select([...actions.keys()].filter((i) => !regionAt(regions, actions[i].at)), regions);
+      if (!markers.selectAll()) select([...actions.keys()].filter((i) => !regionAt(regions, actions[i].at)), regions);
     } else if (e.key === "Escape") {
       // What is pending goes first, then the grid, then the selection.
       if (discard()) return;
       if (gridTool.open) gridTool.setOpen(false);
       else {
-        select([]);
+        clear();
         markers.clearMarked();
-        setBox(null);
       }
     } else if (e.key.startsWith("Arrow") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.defaultPrevented && !dragging && (selected.size || chosen.length)) {
       e.preventDefault();
@@ -576,9 +567,8 @@ export default function EditorPage() {
     mainTimeline.current = timeline;
     setTimeline(startedAt({ ...doc, chapters, bookmarks }, library, "Open"));
     setAdvanced({ ...doc, zero, from, snippet, instance: instance && regions.indexOf(instance) });
-    select([]);
+    clear();
     markers.clearMarked();
-    setBox(null);
   };
 
   /**
@@ -610,7 +600,7 @@ export default function EditorPage() {
     setBox(null);
     if (snippet) {
       if (done) saveSnippet(snippet.path ?? [name!], { actions: result, regions: made });
-      setSelected(new Set());
+      clear();
       cancel();
       return;
     }
@@ -706,7 +696,7 @@ export default function EditorPage() {
       const { actions: _, ...rest } = JSON.parse(await file.text()) as Record<string, unknown>;
       // Moved points go on as a paste, their stretch being the old script's.
       if (placing) start(placing);
-      setSelected(new Set());
+      clear();
       markers.clearMarked();
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
       const fileMarkers = readMarkers(rest, Math.max(opened[opened.length - 1].at, media.videoDuration));
@@ -850,7 +840,7 @@ export default function EditorPage() {
             if (!discardable()) return;
             // Moved points go on as a paste, their stretch being the old script's.
             if (placing) start(placing);
-            setSelected(new Set());
+            clear();
             markers.clearMarked();
             setSaved(EMPTY);
             setScript(EMPTY);

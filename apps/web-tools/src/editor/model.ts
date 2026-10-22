@@ -68,6 +68,27 @@ export const extended = (area: Area, a: Action): Area => ({
   high: Math.max(area.high, a.pos),
 });
 
+/** The box around the points `ps` and the regions `rs`, over every depth for regions alone. */
+export const boxAround = (ps: Action[], rs: Region[]): Area => {
+  const area = ps.length ? ps.reduce(extended, spanned(ps[0], ps[0])) : { from: Infinity, to: -Infinity, low: 0, high: 100 };
+  return { ...area, from: Math.min(area.from, ...rs.map((r) => r.from)), to: Math.max(area.to, ...rs.map((r) => r.to)) };
+};
+
+/**
+ * A click on `item` with a modifier: Shift selects with `range` from the
+ * `anchor`, the item last clicked without Shift, to it; Ctrl/Cmd toggles it
+ * with `toggle`. A click without Shift makes it the anchor. Returns whether
+ * it picked.
+ */
+export function pickRule<T>(e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, anchor: { current: T | null }, item: T, range: (from: T) => void, toggle: () => void) {
+  const from = anchor.current ?? item;
+  if (!e.shiftKey) anchor.current = item;
+  if (e.shiftKey) range(from);
+  else if (e.ctrlKey || e.metaKey) toggle();
+  else return false;
+  return true;
+}
+
 /** Out and In typed as depths, as positions `high` and `low`; null while one is refused: depths outside 0–100, or Out past In unless `flip`. */
 export function depthRange(out: string, inn: string, { flip = false } = {}) {
   const [o, i] = [typed(out), typed(inn)];

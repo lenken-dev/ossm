@@ -159,12 +159,12 @@ export interface Tools {
 /**
  * The advanced editor's tools on `actions`, `regions` and `bookmarks`, times
  * shown from `zero`: on the `selected` points, or `view`'s time, its result
- * applied as an `edit` that `select`s or `setSelected`s it; opening one
+ * applied as an `edit` that `select`s it or its points with `selectPoints`; opening one
  * drops the selection box with `setBox`, not while `placing()`. Its handles'
  * drags follow the `viewport` as one `setDragging` drag, after which its
  * undo history takes a step. Editing an instance region is `onEditInstance`.
  */
-export function useTool({ actions, regions, bookmarks, zero, selected, view, viewport, placing, edit, select, setSelected, setBox, dragging, setDragging, onEditInstance }: {
+export function useTool({ actions, regions, bookmarks, zero, selected, view, viewport, placing, edit, select, selectPoints, setBox, dragging, setDragging, onEditInstance }: {
   actions: Action[];
   regions: Region[];
   bookmarks: Bookmark[];
@@ -175,7 +175,7 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
   placing: () => boolean;
   edit: (label: string, next: SetStateAction<Script>) => void;
   select: (ps: Iterable<number>, rs?: Iterable<Region>) => void;
-  setSelected: (selected: Set<number>) => void;
+  selectPoints: (ps: Iterable<number>) => void;
   setBox: (area: Area | null) => void;
   dragging: boolean;
   setDragging: (dragging: boolean) => void;
@@ -505,7 +505,7 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
       : `${TOOLS.find((t) => t.kind === kind)!.verb} ${points(kind === "generate" ? next.selected.size : picked.length)}`;
     edit(label, (s) => ({ ...s, actions: next.actions, regions: made ? [...(next.regions ?? s.regions), made].sort((a, b) => a.from - b.from) : next.regions ?? s.regions }));
     if (made) select([], [made]);
-    else setSelected(next.selected);
+    else selectPoints(next.selected);
   };
 
   const canOpen = (kind: ToolKind) => placing() ? "Not while placing"
@@ -518,7 +518,7 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
     if (picked.every((i) => actions[i].pos === 50)) return;
     const hit = new Set(picked);
     edit(`Invert ${points(picked.length)}`, (s) => ({ ...s, actions: s.actions.map((a, i) => (hit.has(i) ? { at: a.at, pos: 100 - a.pos } : a)) }));
-    setSelected(hit);
+    selectPoints(hit);
   };
 
   return {

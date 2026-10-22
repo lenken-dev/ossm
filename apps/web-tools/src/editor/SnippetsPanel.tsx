@@ -1,4 +1,4 @@
-import { useRef, type ReactElement } from "react";
+import { useRef, useState, type ReactElement } from "react";
 import { Button, Flex, HoverCard, IconButton, Text, TextField } from "@radix-ui/themes";
 import { ChevronRightIcon, DownloadIcon, MagnifyingGlassIcon, MixerHorizontalIcon, Pencil1Icon, PlusIcon, TrashIcon, UploadIcon } from "@radix-ui/react-icons";
 import { Stats } from "../funscript/widgets";
@@ -20,7 +20,7 @@ export function SnippetsPanel({ library: lib, advanced, placing, onOpenSnippet }
   placing: boolean;
   onOpenSnippet: (path: string[] | null) => void;
 }) {
-  const { library, shelf, openFolders, setOpenFolders, snippetQuery, setSnippetQuery, rowDrag, dropOn, rowsPicked, nameTaken, insertSnippet, addFolder, renameEntry, deleteEntry, dropInto, dragRow, exportLibrary, importLibrary } = lib;
+  const { library, shelf, openFolders, setOpenFolders, rowDrag, dropOn, rowsPicked, nameTaken, insertSnippet, addFolder, renameEntry, deleteEntry, dropInto, dragRow, exportLibrary, importLibrary } = lib;
   /**
    * The library's rows in the folder at `path`, `depth` deep, an open
    * folder's rows after it, each added to `shownRows`. In the main script
@@ -29,6 +29,8 @@ export function SnippetsPanel({ library: lib, advanced, placing, onOpenSnippet }
    * Everywhere a snippet's row is dragged onto the graph to insert it.
    */
   const shownRows: string[] = [];
+  /** Only the library's entries with this in their names show, their folders open. */
+  const [snippetQuery, setSnippetQuery] = useState("");
   const libraryInput = useRef<HTMLInputElement>(null);
   const libraryRows = (items: Entry[], path: string[], depth: number): ReactElement[] => sortedEntries(items).flatMap((e) => {
     const [name, at] = [entryName(e), [...path, entryName(e)]];

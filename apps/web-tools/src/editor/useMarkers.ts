@@ -1,8 +1,8 @@
 import { useRef, useState, type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { clamp } from "../funscript/model";
-import type { Bookmark, Chapter, Marker } from "../funscript/markers";
-import { swapped, type Script } from "./model";
+import { isChapter, timeOf, type Bookmark, type Chapter, type Marker } from "../funscript/markers";
+import { pickRule, swapped, type Script } from "./model";
 import { withBookmarks } from "./generate";
 import type { Viewport } from "./viewport";
 
@@ -17,23 +17,16 @@ export interface Markers {
   unlocked: boolean;
   /** Lock the advanced editor's markers, or unlock them, selecting none. */
   toggleLock(): void;
-  /** The marker last clicked without Shift, where a Shift+click range of bookmarks starts. */
-  markerAnchor: RefObject<Marker | null>;
-  /** Whether the pointer is over the marker lane, where Ctrl/Cmd+A selects all bookmarks. */
-  overLane: RefObject<boolean>;
   /**
    * The name field open over the time from `from` to `to` in the marker lane;
    * `done` gets the accepted name, or null to keep the old one. With `remove`,
    * it has a Delete button.
    */
   naming: { from: number; to: number; name: string; done: (name: string | null) => void; remove?: () => void } | null;
-  setNaming: Dispatch<SetStateAction<Markers["naming"]>>;
   /** Select the markers `ms`, clearing the point selection. */
   selectMarkers(ms: Iterable<Marker>): void;
-  /** Whether the marker `m` is a chapter, else a bookmark. */
-  isChapter(m: Marker): m is Chapter;
-  /** Where the marker `m` is: a chapter's start, or a bookmark's time. */
-  timeOf(m: Marker): number;
+  /** Ctrl/Cmd+A: with markers selected or the pointer over the lane, select every bookmark. Returns whether it did. */
+  selectAll(): boolean;
   /**
    * Add a bookmark at `time` ms, with the last used name, and select it.
    * Without one yet, it opens its name field; naming it is part of adding it.
@@ -51,7 +44,8 @@ export interface Markers {
   /**
    * Select bookmarks together on a click on the bookmark `m` with a modifier:
    * Ctrl/Cmd toggles it in the selection, Shift selects the ones from the last
-   * clicked. Returns whether it did.
+   * marker clicked without Shift, which any click on one without it makes `m`.
+   * Returns whether it did.
    */
   markerPicked(e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, m: Marker): boolean;
   /**
@@ -64,11 +58,17 @@ export interface Markers {
   removeMarkers(ms: Marker[]): void;
   /** Close the name field with the accepted `name`, or null to keep the old one. */
   closeNaming(name: string | null): void;
+  /** Delete the markers the name field is open on, and close it. */
+  removeNamed(): void;
   /**
    * A press on empty lane: a drag draws a chapter, within the gap between the
    * chapters around it, and opens its name field; a click adds a bookmark.
    */
   laneDown(e: PointerEvent<HTMLDivElement>): void;
+  /** The pointer came over the marker lane, where Ctrl/Cmd+A selects all bookmarks. */
+  laneEnter(): void;
+  /** The pointer left the marker lane. */
+  laneLeave(): void;
 }
 
 /**
@@ -93,7 +93,9 @@ export function useMarkers({ chapters, bookmarks, edit, setDragging, viewport, l
     setUnlocked(!unlocked);
     clearMarked();
   };
+  /** The marker last clicked without Shift, where a Shift+click range of bookmarks starts. */
   const markerAnchor = useRef<Marker | null>(null);
+  /** Whether the pointer is over the marker lane. */
   const overLane = useRef(false);
   /** What a new bookmark is called: the name last given to one, for this visit to the page; none until then. */
   const [lastName, setLastName] = useState<string | null>(null);
@@ -105,8 +107,11 @@ export function useMarkers({ chapters, bookmarks, edit, setDragging, viewport, l
     setMarked(new Set(ms));
     onSelect();
   };
-  const isChapter = (m: Marker): m is Chapter => chapters.includes(m as Chapter);
-  const timeOf = (m: Marker) => (isChapter(m) ? m.start : m.time);
+  const selectAll = () => {
+    if (!marked.size && !overLane.current) return false;
+    selectMarkers(bookmarks);
+    return true;
+  };
 
   const addBookmark = (time: number) => {
     const added = { name: lastName ?? "Bookmark", time };
@@ -132,7 +137,6 @@ export function useMarkers({ chapters, bookmarks, edit, setDragging, viewport, l
     e.preventDefault();
     e.stopPropagation();
     if (markerPicked(e, m)) return;
-    markerAnchor.current = m;
     const group = !isChapter(m) && marked.has(m) ? [...marked] : [m];
     selectMarkers(group);
     const twice = lastPress.current?.m === m && e.timeStamp - lastPress.current.at < 500;
@@ -172,18 +176,18 @@ export function useMarkers({ chapters, bookmarks, edit, setDragging, viewport, l
   };
 
   const markerPicked = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, m: Marker) => {
-    if (isChapter(m)) return false;
-    if (e.ctrlKey || e.metaKey) {
+    if (isChapter(m)) {
       markerAnchor.current = m;
+      return false;
+    }
+    return pickRule(e, markerAnchor, m, (from) => {
+      const [i, j] = [bookmarks.indexOf(from as Bookmark), bookmarks.indexOf(m)];
+      selectMarkers(i < 0 ? [m] : bookmarks.slice(Math.min(i, j), Math.max(i, j) + 1));
+    }, () => {
       const next = new Set([...marked].filter((o) => !isChapter(o)));
       if (!next.delete(m)) next.add(m);
       selectMarkers(next);
-      return true;
-    }
-    if (!e.shiftKey) return false;
-    const [i, j] = [bookmarks.indexOf(markerAnchor.current as Bookmark), bookmarks.indexOf(m)];
-    selectMarkers(i < 0 ? [m] : bookmarks.slice(Math.min(i, j), Math.max(i, j) + 1));
-    return true;
+    });
   };
 
   const rename = (ms: Marker[]) => {
@@ -206,6 +210,11 @@ export function useMarkers({ chapters, bookmarks, edit, setDragging, viewport, l
 
   const closeNaming = (name: string | null) => {
     naming!.done(name);
+    setNaming(null);
+  };
+
+  const removeNamed = () => {
+    naming!.remove!();
     setNaming(null);
   };
 
@@ -249,5 +258,8 @@ export function useMarkers({ chapters, bookmarks, edit, setDragging, viewport, l
     }, scrolls);
   };
 
-  return { marked, setMarked, clearMarked, unlocked, toggleLock, markerAnchor, overLane, naming, setNaming, selectMarkers, isChapter, timeOf, addBookmark, markerDown, markerPicked, rename, removeMarkers, closeNaming, laneDown };
+  const laneEnter = () => void (overLane.current = true);
+  const laneLeave = () => void (overLane.current = false);
+
+  return { marked, setMarked, clearMarked, unlocked, toggleLock, naming, selectMarkers, selectAll, addBookmark, markerDown, markerPicked, rename, removeMarkers, closeNaming, removeNamed, laneDown, laneEnter, laneLeave };
 }

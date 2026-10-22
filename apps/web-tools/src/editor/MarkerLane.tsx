@@ -25,7 +25,7 @@ export function MarkerLane({ markers, chapters, bookmarks, viewport, locked, loc
   locked: boolean;
   lock: { unlocked: boolean; toggle: () => void } | null;
 }) {
-  const { marked, overLane, naming, setNaming, markerDown, closeNaming, laneDown } = markers;
+  const { marked, naming, markerDown, closeNaming, removeNamed, laneDown, laneEnter, laneLeave } = markers;
   const { x, width, inView } = viewport;
 
   const light = lightChapters(chapters);
@@ -41,8 +41,8 @@ export function MarkerLane({ markers, chapters, bookmarks, viewport, locked, loc
         flexGrow="1"
         height={`${LANE_HEIGHT}px`}
         onPointerDown={laneDown}
-        onPointerEnter={() => void (overLane.current = true)}
-        onPointerLeave={() => void (overLane.current = false)}
+        onPointerEnter={laneEnter}
+        onPointerLeave={laneLeave}
         // The advanced editor's document has no markers, so the lane takes no presses there until unlocked.
         style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair", pointerEvents: locked ? "none" : undefined }}
       >
@@ -111,10 +111,7 @@ export function MarkerLane({ markers, chapters, bookmarks, viewport, locked, loc
             suggestions={[...new Set([...chapters, ...bookmarks].map((m) => m.name))]}
             onName={(name) => closeNaming(name)}
             onCancel={() => closeNaming(null)}
-            onRemove={naming.remove && (() => {
-              naming.remove!();
-              setNaming(null);
-            })}
+            onRemove={naming.remove && removeNamed}
           />
         )}
       </Box>

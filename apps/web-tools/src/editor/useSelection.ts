@@ -1,21 +1,23 @@
 import { useMemo, useRef, useState, type Dispatch, type PointerEvent, type SetStateAction } from "react";
 import { usePersistedState } from "../hooks/usePersistedState";
-import { clamp, type Action } from "../funscript/model";
-import { afterTime, byTime, extended, regionAt, spanned, type Area, type Region } from "./model";
+import { clamp, toggled, type Action } from "../funscript/model";
+import { afterTime, boxAround, byTime, pickRule, regionAt, spanned, type Area, type Region } from "./model";
 import type { Viewport } from "./viewport";
 
 /** The point and region selection, and selection mode's box. */
 export interface Selecting {
   /** Indices of the selected points, moved together with the selected regions and deleted with the Delete key. */
   selected: Set<number>;
-  /** Set the selected points alone, the selected regions staying. */
-  setSelected: Dispatch<SetStateAction<Set<number>>>;
   /** The selected regions, selected, moved and deleted with the points; only while in the script. */
   regionsOn: Set<Region>;
-  /** Set the selected regions alone, the selected points staying. */
-  setRegionsOn: Dispatch<SetStateAction<Set<Region>>>;
   /** Select the points `ps` and the regions `rs`, and nothing else. */
   select(ps: Iterable<number>, rs?: Iterable<Region>): void;
+  /** Select the points `ps` alone, the selected regions staying. */
+  selectPoints(ps: Iterable<number>): void;
+  /** Select nothing, and drop the selection box. */
+  clear(): void;
+  /** Toggle the point `i`, or the region, in the selection. */
+  toggle(i: number | Region): void;
   /** The selected regions while in the script; they go with an edit that replaces them. */
   chosen: Region[];
   /** The selected region when it is all that is selected, which its panel shows. */
@@ -32,20 +34,18 @@ export interface Selecting {
   selectByTime: boolean;
   /** Switch selecting by time on or off; kept across reloads. */
   setSelectByTime: Dispatch<SetStateAction<boolean>>;
-  /** The selection box, while the points are those it was drawn on. */
+  /** The selection box, while the points are those it was drawn on: in time and depth, what it selects by. */
   box: Area | null;
   /** Show `area` as the selection box, or none for null, drawn on the points `on`, the current ones by default. */
   setBox(area: Area | null, on?: Action[]): void;
   /** In selection mode, fit the box around the points `ps` and the regions `rs`, drawn on the points `on`. */
   fitBox(ps: Action[], rs: Region[], on?: Action[]): void;
-  /** The selection box's sides, in px. */
+  /** The selection box's sides, in px: where it is drawn. */
   edges: { from: number; to: number; low: number; high: number } | null;
   /** Show `area` as the selection box and select the points and regions in it and in `base`. */
   selectIn(area: Area, base?: { points: Iterable<number>; regions: Region[] }): void;
   /** `area` as selection mode's box, over every depth when selecting by time. */
   boxed(area: Area): Area;
-  /** The box around the points `ps` and the regions `rs`, over every depth for regions alone. */
-  boxAround(ps: Action[], rs: Region[]): Area;
   /**
    * Draw a box from the pointer and select the points and regions in it. In
    * selection mode the box replaces the selection and stays; otherwise (with
@@ -87,12 +87,18 @@ export function useSelection({ actions, regions, viewport, placing }: {
     setSelected(new Set(ps));
     setRegionsOn(new Set(rs));
   };
+  const selectPoints = (ps: Iterable<number>) => setSelected(new Set(ps));
+  const toggle = (i: number | Region) => (typeof i === "number" ? setSelected(toggled(i)) : setRegionsOn(toggled(i)));
   const [boxMode, setBoxMode] = useState(false);
   const [selectByTime, setSelectByTime] = usePersistedState("ossm:editorSelectByTime", false, localStorage);
   /** The selection box, with the points it was drawn on; it goes when they change. */
   const [boxOn, setBoxOn] = useState<{ area: Area; actions: Action[] } | null>(null);
   const box = boxOn?.actions === actions ? boxOn.area : null;
   const setBox = (area: Area | null, on = actions) => setBoxOn(area && { area, actions: on });
+  const clear = () => {
+    select([]);
+    setBox(null);
+  };
   /** The point or region last clicked without Shift, by its time, where a Shift+click range starts. */
   const anchor = useRef<{ from: number; to: number } | null>(null);
   const chosen = useMemo(() => regions.filter((r) => regionsOn.has(r)), [regions, regionsOn]);
@@ -118,11 +124,6 @@ export function useSelection({ actions, regions, viewport, placing }: {
   };
 
   const boxed = (area: Area) => (selectByTime ? { ...area, low: 0, high: 100 } : area);
-
-  const boxAround = (ps: Action[], rs: Region[]): Area => {
-    const area = ps.length ? ps.reduce(extended, spanned(ps[0], ps[0])) : { from: Infinity, to: -Infinity, low: 0, high: 100 };
-    return { ...area, from: Math.min(area.from, ...rs.map((r) => r.from)), to: Math.max(area.to, ...rs.map((r) => r.to)) };
-  };
 
   const fitBox = (ps: Action[], rs: Region[], on?: Action[]) => {
     if (boxMode) setBox(boxed(boxAround(ps, rs)), on);
@@ -166,16 +167,10 @@ export function useSelection({ actions, regions, viewport, placing }: {
     track(svg, e, move);
   };
 
-  const picked = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, from: number, to: number, toggle: () => void) => {
-    const last = anchor.current ?? { from, to };
-    if (!e.shiftKey) anchor.current = { from, to };
-    if (e.shiftKey) {
-      const area = { from: Math.min(last.from, from), to: Math.max(last.to, to), low: 0, high: 100 };
-      select(within(area), regionsIn(area));
-    } else if (e.ctrlKey || e.metaKey) toggle();
-    else return false;
-    return true;
-  };
+  const picked = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, from: number, to: number, toggle: () => void) => pickRule(e, anchor, { from, to }, (last) => {
+    const area = { from: Math.min(last.from, from), to: Math.max(last.to, to), low: 0, high: 100 };
+    select(within(area), regionsIn(area));
+  }, toggle);
 
   const toggleBoxMode = () => {
     if (placing()) return;
@@ -184,5 +179,5 @@ export function useSelection({ actions, regions, viewport, placing }: {
     else setBox(null);
   };
 
-  return { selected, setSelected, regionsOn, setRegionsOn, select, chosen, region, copyable, boxMode, selectByTime, setSelectByTime, box, setBox, fitBox, edges, selectIn, boxed, boxAround, boxSelect, editBox, picked, toggleBoxMode };
+  return { selected, regionsOn, select, selectPoints, clear, toggle, chosen, region, copyable, boxMode, selectByTime, setSelectByTime, box, setBox, fitBox, edges, selectIn, boxed, boxSelect, editBox, picked, toggleBoxMode };
 }
