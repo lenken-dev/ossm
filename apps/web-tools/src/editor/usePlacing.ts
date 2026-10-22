@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type SetStateAction } from "react";
 import { clamp, type Action } from "../funscript/model";
 import { afterTime, byTime, items, markersRegions, movedBy, regionAt, stretchOf, type Area, type Placing, type Region, type Script } from "./model";
 import { refilled } from "./generate";
@@ -16,7 +16,6 @@ export interface Placement {
    * is called and, moved or added, the time its first point came from.
    */
   placing: Placing | null;
-  setPlacing: Dispatch<SetStateAction<Placing | null>>;
   /**
    * The stretch of the script being moved, from its first to its last
    * selected item, left out of the script with every point and region in it,
@@ -24,60 +23,67 @@ export interface Placement {
    * None for a paste.
    */
   lifted: { from: number; to: number; points: Set<number>; regions: Region[] } | null;
-  setLifted: Dispatch<SetStateAction<Placement["lifted"]>>;
-  /** Where the first point being placed is, under the pointer. */
-  placeAt: Action | null;
-  setPlaceAt: Dispatch<SetStateAction<Action | null>>;
-  /** Set while a drag carries what is being placed, which then follows the drag, not the pointer's moves over the graph. */
-  carrying: RefObject<boolean>;
-  /** Set on a drag's release, to put in what it carried, or by Done, to put in its result; see where it is used. */
-  setSettle: Dispatch<SetStateAction<"drop" | "try" | null>>;
   /**
-   * Modifiers held while placing: Shift replaces the points covered instead
-   * of inserting, Ctrl (or Cmd) keeps the copied depths instead of following
-   * the pointer's, or moved or added points their time; see `upright`.
+   * Start placing `clip`, lifted from `lifted` (none: a paste), its first
+   * point `at` (else where the pointer last was); `settle` it at once: see
+   * where `settle` is used.
    */
-  held: { shift: boolean; ctrl: boolean };
-  setHeld: Dispatch<SetStateAction<Placement["held"]>>;
-  /**
-   * The points that stay while placing: the lifted stretch's time goes, with
-   * every point in it, and the later points move left by as much, as do the
-   * regions after it; inserting it back there undoes it. A moved Markers
-   * region's points go on the bookmarks in its new box.
-   */
-  kept: Action[];
+  start(clip: Placing, opts?: { at?: Action; lifted?: Placement["lifted"]; settle?: "drop" | "try" }): void;
+  /** Stop placing points; moved ones go back where they were, still selected, in selection mode with the box around them. */
+  cancel(): void;
+  /** Stop placing points, leaving the script and the selection as they are. */
+  drop(): void;
+  /** The pointer moved over the graph: what is being placed follows it, unless a drag carries it, with the modifiers held. */
+  hover(e: { clientX: number; clientY: number; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): void;
+  /** The pointer left the graph: what is being placed hides, unless a drag carries it. */
+  leave(): void;
   /**
    * Follow a drag from `e` with what is being placed, its first point at
    * `start` as pressed; without one, once it has gone 3 px, with the
    * selection `ps`, `rs` lifted, by the point `grabbed`. Released, it goes in.
    */
   carry(e: PointerEvent<Element>, start: Action | null, ps?: number[], rs?: Region[], grabbed?: number): void;
-  /** Stop placing points; moved ones go back where they were, still selected, in selection mode with the box around them. */
-  cancelPlacing(): void;
   /** Put what is being placed in at the pointer, where it lands, unless refused there. */
   putAt(e: PointerEvent<Element>): void;
   /** A click places what is being placed at the pointer, as `putAt`. */
   place(e: PointerEvent<SVGRectElement>): void;
-  /** The points being placed where the pointer puts them. */
-  ghost: Action[] | null;
-  /** Where they go in; none where they can't, as they would cut into a region, and they show red. */
-  landed: Action[] | null;
-  /** Whether they can't go in where the pointer puts them. */
-  refused: boolean;
-  /** The points as drawn: placing, as they would be once placed. */
-  shown: Action[];
-  /** The regions as drawn, with the points. */
-  shownRegions: Region[];
-  /** The selected points as drawn: placing, the picked ones; with a tool open, the affected ones in its result. */
-  marks: Set<number>;
-  /** Whether the region `r` is drawn selected: a selected one, or a picked one being placed. */
-  outlined(r: Region): boolean;
-  /** Where they can't go in, their points, the time they cover there and the regions they carry, drawn red over the rest. */
-  astray: { points: Action[]; span: number[]; carried: Region[] } | null;
-  /** Replacing, the line through the points they would take out, from the point before to the one after, drawn faint red and dashed, as removed points in the undo history. */
-  removed: Action[] | null;
-  /** The point being placed or dragged apart dragged by, else the first, where it came from: a paste's depth alone, as it came from no time. */
-  dragged: { at: number | undefined; pos: number } | undefined;
+  /** What the graph draws. */
+  drawn: {
+    /** The points being placed where the pointer puts them. */
+    ghost: Action[] | null;
+    /** Where they go in; none where they can't, as they would cut into a region, and they show red. */
+    landed: Action[] | null;
+    /** Whether they can't go in where the pointer puts them. */
+    refused: boolean;
+    /** The points as drawn: placing, as they would be once placed. */
+    shown: Action[];
+    /** The regions as drawn, with the points. */
+    shownRegions: Region[];
+    /** The selected points as drawn: placing, the picked ones; with a tool open, the affected ones in its result. */
+    marks: Set<number>;
+    /** Whether the region `r` is drawn selected: a selected one, or a picked one being placed. */
+    outlined(r: Region): boolean;
+    /** Where they can't go in, their points, the time they cover there and the regions they carry, drawn red over the rest. */
+    astray: { points: Action[]; span: number[]; carried: Region[] } | null;
+    /** Replacing, the line through the points they would take out, from the point before to the one after, drawn faint red and dashed, as removed points in the undo history. */
+    removed: Action[] | null;
+    /** The point being placed or dragged apart dragged by, else the first, where it came from: a paste's depth alone, as it came from no time. */
+    dragged: { at: number | undefined; pos: number } | undefined;
+    /**
+     * Modifiers held while placing or dragging apart: Shift replaces the
+     * points covered instead of inserting, Ctrl (or Cmd) keeps the copied
+     * depths instead of following the pointer's, or moved or added points
+     * their time; see `upright`.
+     */
+    held: { shift: boolean; ctrl: boolean };
+    /**
+     * The points that stay while placing: the lifted stretch's time goes, with
+     * every point in it, and the later points move left by as much, as do the
+     * regions after it; inserting it back there undoes it. A moved Markers
+     * region's points go on the bookmarks in its new box.
+     */
+    kept: Action[];
+  };
 }
 
 /**
@@ -109,8 +115,11 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, onMark
   const { x, y, pointerAt, track } = viewport;
   const [placing, setPlacing] = useState<Placing | null>(null);
   const [lifted, setLifted] = useState<Placement["lifted"]>(null);
+  /** Where the first point being placed is, under the pointer. */
   const [placeAt, setPlaceAt] = useState<Action | null>(null);
+  /** Set while a drag carries what is being placed, which then follows the drag, not the pointer's moves over the graph. */
   const carrying = useRef(false);
+  /** Set on a drag's release, to put in what it carried, or by Done, to put in its result; see where it is used. */
   const [settle, setSettle] = useState<"drop" | "try" | null>(null);
   const [held, setHeld] = useState({ shift: false, ctrl: false });
   const inserting = !held.shift;
@@ -173,14 +182,32 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, onMark
     });
   };
 
-  const cancelPlacing = () => {
+  const start: Placement["start"] = (clip, { at, lifted = null, settle } = {}) => {
+    setPlacing(clip);
+    setLifted(lifted);
+    if (at) setPlaceAt(at);
+    if (settle) setSettle(settle);
+  };
+
+  const cancel = () => {
     if (lifted) {
       select(lifted.points, lifted.regions);
       fitBox([...lifted.points].map((i) => actions[i]), lifted.regions);
     }
+    drop();
+  };
+
+  const drop = () => {
     setPlacing(null);
     setLifted(null);
   };
+
+  const hover: Placement["hover"] = (e) => {
+    if (placing && !carrying.current) setPlaceAt(pointerAt(e));
+    setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
+  };
+
+  const leave = () => !carrying.current && setPlaceAt(null);
 
   /**
    * The points being placed with the first at `at`, `pos`; they keep their
@@ -339,8 +366,7 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, onMark
     edit(placing!.label ?? `${lifted ? "Move" : "Paste"} ${items(own.length, chosenCopies)}`, { ...script, actions: next, regions: copies.length ? [...regions, ...copies].sort((a, b) => a.from - b.from) : regions });
     select(own.map((j) => before.length + j), chosenCopies);
     fitBox(own.map((j) => placed[j]), chosenCopies, next);
-    setPlacing(null);
-    setLifted(null);
+    drop();
   };
 
   const putAt = (e: PointerEvent<Element>) => {
@@ -385,8 +411,8 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, onMark
     if (!settle) return;
     setSettle(null);
     if (landed) put(landed, inserting);
-    else if (settle === "drop") cancelPlacing();
+    else if (settle === "drop") cancel();
   }, [settle]);
 
-  return { placing, setPlacing, lifted, setLifted, placeAt, setPlaceAt, carrying, setSettle, held, setHeld, kept, carry, cancelPlacing, putAt, place, ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed, dragged };
+  return { placing, lifted, start, cancel, drop, hover, leave, carry, putAt, place, drawn: { ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed, dragged, held, kept } };
 }

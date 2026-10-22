@@ -164,9 +164,9 @@ export default function EditorPage() {
   const gridTool = useGrid(!!advanced && !tool, zero);
   const { grid } = gridTool;
   const snippetLibrary = useLibrary({ advanced: !!advanced, tool: !!tool, editLabel, insert: (clip) => {
-    cancelPlacing();
-    setPlacing(clip);
-  }, stopPlacing: () => setPlacing(null), setError });
+    cancel();
+    if (clip) start(clip);
+  }, stopPlacing: () => drop(), setError });
   const { library, setLibraryFile, rowDrag, snippetFrom, nameTaken, saveSnippet } = snippetLibrary;
   /** Undo history: the points, markers, regions and snippet library after each edit, the first as loaded; `index` is the current one. */
   const [timeline, setTimeline] = useState(() => startedAt(script, library, advanced ? "Open" : "Start"));
@@ -184,7 +184,7 @@ export default function EditorPage() {
     });
   }, [actions, chapters, bookmarks, regions, library, dragging]);
   const placement = usePlacing({ script, view, viewport, selected, regionsOn, onMarkers: snapToMarkers, grid: gridTool, preview, apartGrip: apart?.grip, edit, select, setBox, fitBox });
-  const { placing, setPlacing, lifted, setLifted, setPlaceAt, carrying, setSettle, held, setHeld, kept, carry, cancelPlacing, putAt, place, ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed, dragged } = placement;
+  const { placing, lifted, start, cancel, drop, hover, leave, carry, putAt, place, drawn: { ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed, dragged, held, kept } } = placement;
 
   // The selection goes with the current entry, to come back with it; not while dragging or placing, so an entry keeps the one from before them.
   useEffect(() => {
@@ -207,8 +207,7 @@ export default function EditorPage() {
     markers.setMarked(ms);
     if (boxMode && (points.size || rs.size)) fitBox([...points].map((i) => actions[i]), [...rs], actions);
     else setBox(null);
-    setPlacing(null);
-    setLifted(null);
+    drop();
     if (span) setView((v) => (span.to < v.from || span.from > v.from + v.span ? bringIntoView(v, span.from) : v));
   };
   /** The points and markers as last saved, opened or started anew; unknown after a reload with unsaved changes. */
@@ -238,8 +237,7 @@ export default function EditorPage() {
     if (inside) return regionDown(e, inside);
     if (selected.size > 1 || chosen.length) return select([]);
     if (point.at < 0) return;
-    setPlacing({ actions: [{ at: 0, pos: point.pos }], regions: [], label: "Add point", from: point.at });
-    setPlaceAt(point);
+    start({ actions: [{ at: 0, pos: point.pos }], regions: [], label: "Add point", from: point.at }, { at: point });
     carry(e, point);
   };
 
@@ -378,7 +376,7 @@ export default function EditorPage() {
       }
       const p = pointerAt(m);
       const lock = m.ctrlKey || m.metaKey;
-      setHeld({ shift: m.shiftKey, ctrl: lock });
+      hover(m);
       const up = Math.abs(y(p.pos) - y(origin.pos)) > Math.abs(x(p.at) - x(origin.at));
       // The point dragged by, or the first region's start, goes on the grid.
       const lead = actions[grabbed] ?? { at: rs[0].from, pos: 0 };
@@ -558,7 +556,7 @@ export default function EditorPage() {
   const discard = () => {
     if (tool) tools.close();
     else if (cancelApart.current) cancelApart.current();
-    else if (placing) cancelPlacing();
+    else if (placing) cancel();
     else return false;
     return true;
   };
@@ -613,12 +611,12 @@ export default function EditorPage() {
     if (snippet) {
       if (done) saveSnippet(snippet.path ?? [name!], { actions: result, regions: made });
       setSelected(new Set());
-      cancelPlacing();
+      cancel();
       return;
     }
     if (!done) {
       select(instance ? [] : from ?? [], instance ? [instance] : []);
-      cancelPlacing();
+      cancel();
       return;
     }
     const own = instance ? [instanceOf(instance.snippet.name, { actions: result, regions: made })] : made;
@@ -632,15 +630,12 @@ export default function EditorPage() {
     const along = stretch ? main.regions.filter((r) => r !== instance && r.from >= stretch.from && r.to <= stretch.to) : [];
     const all = [...result.map((a) => ({ a, mine: true })), ...ride.map((a) => ({ a, mine: false }))].sort((p, q) => p.a.at - q.a.at);
     const t0 = all[0].a.at;
-    setPlacing({
+    start({
       actions: all.map(({ a }) => ({ at: a.at - t0, pos: a.pos })),
       regions: [...own, ...along].map((r) => movedBy(r, -t0)),
       picked: { actions: all.map((p) => p.mine), regions: [...own.map(() => true), ...along.map(() => false)] },
       label: instance ? `Edit ${regionNoun(instance)}` : undefined,
-    });
-    setLifted(stretch && { ...stretch, points: opened, regions: instance ? [instance] : [] });
-    setPlaceAt(all[0].a);
-    setSettle("try");
+    }, { at: all[0].a, lifted: stretch && { ...stretch, points: opened, regions: instance ? [instance] : [] }, settle: "try" });
   };
 
   /** Whether the advanced editor's document differs from what it was opened on. */
@@ -666,9 +661,9 @@ export default function EditorPage() {
     }
     const clip = readClip(parsed?.actions, parsed?.ossmRsWebTools?.regions);
     if (!clip) return false;
-    cancelPlacing();
+    cancel();
     // In the advanced editor, instances come as their contents, as they do not nest.
-    setPlacing(advanced ? { ...clip, regions: generators(clip.regions) } : clip);
+    start(advanced ? { ...clip, regions: generators(clip.regions) } : clip);
     return true;
   };
 
@@ -709,7 +704,8 @@ export default function EditorPage() {
       const parsed = await readFunscript(file);
       // Read again for the rest of the file, already known to be JSON.
       const { actions: _, ...rest } = JSON.parse(await file.text()) as Record<string, unknown>;
-      setLifted(null);
+      // Moved points go on as a paste, their stretch being the old script's.
+      if (placing) start(placing);
       setSelected(new Set());
       markers.clearMarked();
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
@@ -852,7 +848,8 @@ export default function EditorPage() {
           style={{ flex: 1 }}
           onClick={() => {
             if (!discardable()) return;
-            setLifted(null);
+            // Moved points go on as a paste, their stretch being the old script's.
+            if (placing) start(placing);
             setSelected(new Set());
             markers.clearMarked();
             setSaved(EMPTY);
@@ -1137,10 +1134,9 @@ export default function EditorPage() {
                 return;
               }
               // Pasted points follow the pointer; dragged ones the drag.
-              if (!carrying.current) setPlaceAt(pointerAt(e));
-              setHeld({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
+              hover(e);
             }}
-            onPointerLeave={() => !carrying.current && setPlaceAt(null)}
+            onPointerLeave={leave}
             // A snippet's row dragged here goes in where it is released, unless refused there.
             onPointerUp={(e) => rowDrag && placing && putAt(e)}
             style={{ display: "block", cursor: "crosshair", touchAction: "none", userSelect: "none" }}
