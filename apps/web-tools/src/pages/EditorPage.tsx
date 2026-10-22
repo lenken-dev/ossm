@@ -883,7 +883,7 @@ export default function EditorPage() {
       </Flex>}
       {!tool && <Flex gap="2">
         <Button variant="soft" style={{ flex: 1 }} onClick={media.chooseFile}>
-          <VideoIcon /> {media.videoFile ? "Change media" : "Open video or audio"}
+          <UploadIcon /> {media.videoFile ? "Change media" : "Open media"}
         </Button>
         {media.videoFile && (
           <Button

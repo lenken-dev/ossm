@@ -16,11 +16,12 @@ import {
 } from "@radix-ui/react-icons";
 import { useAppearance } from "../hooks/useAppearance";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { useMediaFile } from "../hooks/useMediaFile";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
 import { parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SCRIPT_KEY, type Funscript } from "../funscript/file";
-import { LabeledSlider } from "../widgets";
+import { LabeledSlider, ResizeGrip } from "../widgets";
 import { GraphLayout } from "./GraphPage";
 import { dragHeight } from "../drag";
 import { stats, type Action } from "../funscript/model";
@@ -93,10 +94,18 @@ function PlayerMinimap({ actions, markers, speed, playhead, reverse, videoRef, s
 export default function PlayerPage() {
   const [mode, setMode] = usePersistedState<PlayerMode>("ossm:playerMode", "pattern");
   const { ossm, state, connecting, error, connect, disconnect } = useOssm();
-  const videoInput = useRef<HTMLInputElement>(null);
   const scriptInput = useRef<HTMLInputElement>(null);
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const { file: videoFile, url: videoUrl, isAudio, choose: chooseVideo, close: closeVideo, input: videoInput } = useMediaFile((file) => {
+    if (file) {
+      dropSilence("video");
+      // Switching between video and audio swaps the element, whose events then never reach React.
+      endStream("video");
+    } else {
+      // The video unmounts, so its pause and emptied events never reach React.
+      endStream("close");
+    }
+    setPaused(true);
+  });
   const [silentUrl, setSilentUrl] = useState<string | null>(null);
   const [theater, setTheater] = useState(false);
   const [showGraph, setShowGraph] = usePersistedState("ossm:playerGraph", true, localStorage);
@@ -117,8 +126,6 @@ export default function PlayerPage() {
 
   /** Drag the top edge of the graph below the video to set its height; at most most of the window. */
   const dragGraphHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, graphHeight, setGraphHeight, PREVIEW_MIN_HEIGHT, true);
-  /** An audio file plays in a bar instead of the video area. */
-  const isAudio = !!videoFile?.type.startsWith("audio/");
   /** Theater mode needs a video and a wide screen; closing the video leaves theater mode. */
   const inTheater = theater && !!videoUrl && !isAudio && !isMobile;
   /** The video, or the silent clock without one. */
@@ -253,14 +260,6 @@ export default function PlayerPage() {
     retimeClock();
     if (mode === "funscript" && e.type !== "playing") endStream(e.type);
   };
-
-  useEffect(() => {
-    setVideoUrl(null);
-    if (!videoFile) return;
-    const url = URL.createObjectURL(videoFile);
-    setVideoUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [videoFile]);
 
   const silentMs = mode === "funscript" && !videoFile && script ? script.at[script.at.length - 1] / scriptSpeed : null;
   useEffect(() => {
@@ -636,23 +635,7 @@ export default function PlayerPage() {
 
   const content = (
     <Flex direction="column" gap="3" p={inTheater ? "0" : "3"} height="100%">
-      <input
-        ref={videoInput}
-        type="file"
-        accept="video/*,audio/*"
-        hidden
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) {
-            dropSilence("video");
-            // Switching between video and audio swaps the element, whose events then never reach React.
-            endStream("video");
-            setPaused(true);
-            setVideoFile(file);
-          }
-          e.target.value = "";
-        }}
-      />
+      {videoInput}
       <input
         ref={scriptInput}
         type="file"
@@ -674,19 +657,10 @@ export default function PlayerPage() {
                   <EnterFullScreenIcon /> Theater
                 </Button>
               )}
-              <Button variant="soft" onClick={() => videoInput.current?.click()}>
-                <UploadIcon /> Open
+              <Button variant="soft" onClick={chooseVideo}>
+                <UploadIcon /> Change media
               </Button>
-              <Button
-                variant="soft"
-                color="gray"
-                onClick={() => {
-                  // The video unmounts, so its pause and emptied events never reach React.
-                  endStream("close");
-                  setPaused(true);
-                  setVideoFile(null);
-                }}
-              >
+              <Button variant="soft" color="gray" onClick={closeVideo}>
                 <Cross2Icon /> Close
               </Button>
             </Flex>
@@ -724,7 +698,7 @@ export default function PlayerPage() {
           <Text size="2" color="gray">
             {mode === "funscript" ? "Open a video or audio file to play it with the funscript." : "Open a video or audio file to play it here."}
           </Text>
-          <Button variant="soft" onClick={() => videoInput.current?.click()}>
+          <Button variant="soft" onClick={chooseVideo}>
             <UploadIcon /> Open media
           </Button>
         </Flex>
@@ -772,20 +746,7 @@ export default function PlayerPage() {
             </Flex>
             {showGraph && <Box position="relative" flexShrink="0">
               <ScriptPreview script={played} chapters={markers.chapters} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
-              <Box
-                title="Drag to resize"
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: "calc(50% - 20px)",
-                  width: 40,
-                  height: 12,
-                  borderTop: "4px solid var(--gray-a8)",
-                  cursor: "ns-resize",
-                  touchAction: "none",
-                }}
-                onPointerDown={dragGraphHeight}
-              />
+              <ResizeGrip edge="top" onPointerDown={dragGraphHeight} />
             </Box>}
             {minimap && <PlayerMinimap actions={playedActions} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />}
           </>

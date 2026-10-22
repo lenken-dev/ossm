@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type PointerEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { Box, Button, Flex, IconButton, Popover, Text, TextField } from "@radix-ui/themes";
 import { Crosshair2Icon, GearIcon, OpenInNewWindowIcon, PauseIcon, PlayIcon, TrackNextIcon, TrackPreviousIcon } from "@radix-ui/react-icons";
 import { usePersistedState } from "../hooks/usePersistedState";
+import { useMediaFile } from "../hooks/useMediaFile";
 import { clamp, type Action } from "../funscript/model";
 import { dragHeight } from "../drag";
+import { ResizeGrip } from "../widgets";
 import { byTime } from "./model";
 import { FOLLOW_AT } from "./viewport";
 
@@ -15,7 +17,6 @@ const DEFAULT_STEPS = ["1", "", ""];
 
 /** The reference video or audio: its file and element, its playback, the player's height and seek steps, and the playhead's time. */
 export interface Media {
-  videoInput: RefObject<HTMLInputElement | null>;
   videoRef: RefObject<HTMLMediaElement | null>;
   videoFile: File | null;
   videoUrl: string | null;
@@ -43,12 +44,12 @@ export interface Media {
   dragVideoHeight(e: PointerEvent<HTMLElement>): void;
   /** Props for the `<video>` or `<audio>` element. */
   mediaProps: { ref: (el: HTMLMediaElement | null) => void; src: string | undefined; controls: boolean; onPlay: () => void; onPause: () => void; onEmptied: () => void; onDurationChange: () => void; onSeeked: () => void };
-  /** Open the media `file`, paused at its start, and show the player. */
-  open(file: File): void;
   /** Close the media, pausing it. */
   close(): void;
-  /** Ask for a media file to open. */
+  /** Ask for a media file to open, paused at its start, and show the player. */
   chooseFile(): void;
+  /** The hidden file input `chooseFile` opens. */
+  fileInput: ReactNode;
 }
 
 /**
@@ -57,11 +58,7 @@ export interface Media {
  * paused brings the playhead into the view `setView` sets.
  */
 export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; span: number }>>): Media {
-  const videoInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLMediaElement>(null);
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const isAudio = !!videoFile?.type.startsWith("audio/");
   /** Separate from the player's sizes. */
   const [normalHeight, setNormalHeight] = usePersistedState("ossm:editorVideoHeight", VIDEO_HEIGHT, localStorage);
   /** The video left in the page while it plays picture-in-picture has a height of its own. */
@@ -78,14 +75,12 @@ export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; 
   const shownSteps = steps.map(Number).map((v, i) => (v > 0 ? v : i === 0 ? Number(DEFAULT_STEPS[0]) : null)).filter((v) => v !== null);
   const [time, setTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
-
-  useEffect(() => {
-    setVideoUrl(null);
-    if (!videoFile) return;
-    const url = URL.createObjectURL(videoFile);
-    setVideoUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [videoFile]);
+  const { file: videoFile, url: videoUrl, isAudio, choose: chooseFile, close, input: fileInput } = useMediaFile((file) => {
+    setPaused(true);
+    if (!file) return;
+    setTime(0);
+    setPlayerShown(true);
+  });
 
   // Picture-in-picture events bubble, so the document sees them for whichever video is shown.
   useEffect(() => {
@@ -126,19 +121,7 @@ export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; 
     onSeeked: seeked,
   };
 
-  const open = (file: File) => {
-    setPaused(true);
-    setTime(0);
-    setVideoFile(file);
-    setPlayerShown(true);
-  };
-  const close = () => {
-    setPaused(true);
-    setVideoFile(null);
-  };
-  const chooseFile = () => videoInput.current?.click();
-
-  return { videoInput, videoRef, videoFile, videoUrl, isAudio, paused, pip, playerShown, togglePlayer, videoHeight, steps, setSteps, shownSteps, time, setTime, videoDuration, seek, dragVideoHeight, mediaProps, open, close, chooseFile };
+  return { videoRef, videoFile, videoUrl, isAudio, paused, pip, playerShown, togglePlayer, videoHeight, steps, setSteps, shownSteps, time, setTime, videoDuration, seek, dragVideoHeight, mediaProps, close, chooseFile, fileInput };
 }
 
 /**
@@ -147,42 +130,19 @@ export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; 
  * previous and next point; and the file input `media.chooseFile` opens.
  */
 export function MediaPlayer({ media, actions, view }: { media: Media; actions: Action[]; view: { from: number; span: number } }) {
-  const { videoInput, videoRef, videoUrl, isAudio, paused, pip, playerShown, videoHeight, steps, setSteps, shownSteps, time, seek, dragVideoHeight, mediaProps, open } = media;
+  const { videoRef, videoUrl, isAudio, paused, pip, playerShown, videoHeight, steps, setSteps, shownSteps, time, seek, dragVideoHeight, mediaProps, fileInput } = media;
   /** The point after (`dir` 1) or before (-1) the playhead; half a ms of slack for the media's rounding. */
   const neighbour = (dir: 1 | -1) => actions[dir > 0 ? byTime(actions, time + 0.5) : byTime(actions, time - 0.5) - 1];
 
   return (
     // Hidden, not unmounted, so the media stays loaded; without media, so it leaves no gap.
     <Flex direction="column" gap="3" flexShrink="0" display={videoUrl && playerShown ? undefined : "none"}>
-      <input
-        ref={videoInput}
-        type="file"
-        accept="video/*,audio/*"
-        hidden
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) open(file);
-          e.target.value = "";
-        }}
-      />
+      {fileInput}
       {videoUrl && isAudio && <audio {...mediaProps} style={{ width: "100%", flexShrink: 0 }} />}
       {videoUrl && !isAudio && (
         <Box position="relative" flexShrink="0">
           <video {...mediaProps} style={{ display: "block", width: "100%", height: videoHeight, background: "black", borderRadius: 6 }} />
-          <Box
-            title="Drag to resize"
-            style={{
-              position: "absolute",
-              bottom: -10,
-              left: "calc(50% - 20px)",
-              width: 40,
-              height: 12,
-              borderBottom: "4px solid var(--gray-a8)",
-              cursor: "ns-resize",
-              touchAction: "none",
-            }}
-            onPointerDown={dragVideoHeight}
-          />
+          <ResizeGrip edge="bottom" onPointerDown={dragVideoHeight} />
         </Box>
       )}
       {videoUrl && (
