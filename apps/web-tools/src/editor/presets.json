@@ -591,6 +591,50 @@
                     }
                   }
                 ]
+              },
+              {
+                "name": "Slow Strokes",
+                "actions": [
+                  {"at":0,"pos":100},
+                  {"at":4000,"pos":0},
+                  {"at":7750,"pos":100},
+                  {"at":11293,"pos":0},
+                  {"at":14660,"pos":100},
+                  {"at":17875,"pos":0},
+                  {"at":20957,"pos":100},
+                  {"at":23922,"pos":0},
+                  {"at":26782,"pos":100},
+                  {"at":29548,"pos":0},
+                  {"at":32229,"pos":100},
+                  {"at":34832,"pos":0},
+                  {"at":37363,"pos":100},
+                  {"at":39829,"pos":0},
+                  {"at":42234,"pos":100},
+                  {"at":44582,"pos":0},
+                  {"at":46877,"pos":100},
+                  {"at":49123,"pos":0},
+                  {"at":51323,"pos":100},
+                  {"at":53479,"pos":0},
+                  {"at":55594,"pos":100},
+                  {"at":57671,"pos":0},
+                  {"at":59711,"pos":100}
+                ],
+                "regions": [
+                  {
+                    "from": 0,
+                    "to": 60000,
+                    "low": 0,
+                    "high": 100,
+                    "generate": {
+                      "timing": "speed",
+                      "first": "out",
+                      "interval": {"shape":"constant","value":"1000"},
+                      "speed": {"shape":"ramp","start":"25","end":"50"},
+                      "out": {"shape":"constant","value":"0"},
+                      "in": {"shape":"constant","value":"100"}
+                    }
+                  }
+                ]
               }
             ]
           },
