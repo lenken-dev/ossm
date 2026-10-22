@@ -10,6 +10,27 @@ import { LINE_COLOR, type Action } from "./model";
 const MINIMAP_HEIGHT = 40;
 
 /**
+ * `actions` with only the first, lowest, highest and last point of each px
+ * column `px` puts them in, in order: the same line, quick to draw for a
+ * long script.
+ */
+function thinned(actions: Action[], px: (at: number) => number): Action[] {
+  const kept: Action[] = [];
+  for (let i = 0; i < actions.length; ) {
+    const column = Math.floor(px(actions[i].at));
+    let [j, lo, hi] = [i, i, i];
+    while (j + 1 < actions.length && Math.floor(px(actions[j + 1].at)) === column) {
+      j++;
+      if (actions[j].pos < actions[lo].pos) lo = j;
+      if (actions[j].pos > actions[hi].pos) hi = j;
+    }
+    for (const k of new Set([i, Math.min(lo, hi), Math.max(lo, hi), j])) kept.push(actions[k]);
+    i = j + 1;
+  }
+  return kept;
+}
+
+/**
  * The minimap below the graph: the whole script, `total` ms across, with its
  * chapters shaded, the line (upside down if `reverse`), the bookmarks, the
  * playhead at `playheadAt` (null for none) and the graph's time, `window`.
@@ -56,8 +77,8 @@ export function Minimap({ actions, total, chapters, bookmarks, window: { from, s
   };
 
   // Built only when they change, not on every frame or pointer move.
-  const contextPath = useMemo(() => context.map((run) => `M${run.map((a) => `${x(a.at)},${y(a.pos)}`).join("L")}`).join(""), [context, width, total, reverse]);
-  const line = useMemo(() => actions.map((a) => `${x(a.at)},${y(a.pos)}`).join(" "), [actions, width, total, reverse]);
+  const contextPath = useMemo(() => context.map((run) => `M${thinned(run, x).map((a) => `${x(a.at)},${y(a.pos)}`).join("L")}`).join(""), [context, width, total, reverse]);
+  const line = useMemo(() => thinned(actions, x).map((a) => `${x(a.at)},${y(a.pos)}`).join(" "), [actions, width, total, reverse]);
   const selectedPath = useMemo(() => {
     if (!selected) return "";
     const { of, indices } = selected;
@@ -81,7 +102,6 @@ export function Minimap({ actions, total, chapters, bookmarks, window: { from, s
       ))}
       {/* The main script's other points behind the advanced editor's. */}
       {context.length > 0 && <path d={contextPath} fill="none" strokeWidth={1} style={{ stroke: "var(--gray-a7)", pointerEvents: "none" }} />}
-      {/* ponytail: the whole script as one polyline; fine for thousands of points, thin it out if a long script lags. */}
       <polyline points={line} fill="none" stroke={LINE_COLOR} strokeWidth={1} />
       {/* The selected runs over it, a lone selected point as a dot. */}
       {selected && (
