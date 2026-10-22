@@ -25,12 +25,12 @@ import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 import { dragHeight } from "../drag";
 import { stats, type Action } from "../funscript/model";
-import { readMarkers } from "../funscript/markers";
+import { readMarkers, type Bookmark, type Chapter } from "../funscript/markers";
+import { MarkersList } from "../funscript/MarkersList";
 import { Minimap } from "../funscript/Minimap";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { DEPTH_ENDS, PatternControls, PortalContainer, SettingSlider, SetupDialog, STROKE_ENDS } from "../player/controls";
 import { GraphSettings } from "../player/GraphSettings";
-import { MarkersList } from "../player/MarkersList";
 import { PlayerCalculator } from "../player/PlayerCalculator";
 import { ScriptPreview } from "../player/ScriptPreview";
 import { ScriptSettings } from "../player/ScriptSettings";
@@ -564,7 +564,18 @@ export default function PlayerPage() {
             )}
             <Separator size="4" />
             {/* The script's chapters and bookmarks in time; a click plays from there. */}
-            {played && (markers.chapters.length > 0 || markers.bookmarks.length > 0) && <MarkersList markers={markers} playhead={playhead} chapterAt={chapterAt} open={markersOpen} setOpen={setMarkersOpen} />}
+            {played && (markers.chapters.length > 0 || markers.bookmarks.length > 0) && <>
+              <SectionHeader title="Markers" open={markersOpen} setOpen={setMarkersOpen} summary={`${markers.chapters.length + markers.bookmarks.length}`} />
+              {markersOpen && (
+                <MarkersList
+                  chapters={markers.chapters}
+                  bookmarks={markers.bookmarks}
+                  highlighted={(m) => m === markers.chapters[chapterAt]}
+                  onClick={(m) => playhead.current.set("start" in m ? (m as Chapter).start : (m as Bookmark).time)}
+                />
+              )}
+              <Separator size="4" />
+            </>}
             {/* The played script's stats; collapsed, its average speed. */}
             {played && <>
               <SectionHeader title="Stats" open={statsOpen} setOpen={setStatsOpen} summary={!!playedAverage && `${Math.round(playedAverage)}/s avg`} />
