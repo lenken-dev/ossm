@@ -6,6 +6,8 @@ export interface Action {
 }
 
 export const LINE_COLOR = "#ec4899";
+/** The machine line's colour, beside the script's line in the player's graph. */
+export const MACHINE_COLOR = "#22d3ee";
 export const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 /** The speed from `a` to `b`, in depth per second. */
 export const speed = (a: Action, b: Action) => (Math.abs(b.pos - a.pos) / (b.at - a.at)) * 1000;

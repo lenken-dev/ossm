@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type PointerEvent, type RefObject } from "react";
-import { Box, Text } from "@radix-ui/themes";
+import { Box, Text, Theme, useThemeContext } from "@radix-ui/themes";
 import { bisectLeft } from "d3";
 import { capturePointer } from "../drag";
-import { LINE_COLOR } from "../funscript/model";
-import { useAppearance } from "../hooks/useAppearance";
+import { LINE_COLOR, MACHINE_COLOR } from "../funscript/model";
 import type { Funscript } from "../StreamPanel";
 import type { Ossm } from "./ble";
 import type { OverlayStyle } from "./overlay";
@@ -36,11 +35,12 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
   span: { before: number; after: number };
   /** In px; without, the graph fills its parent. */
   height?: number;
-  /** Drawn over the video in this style, filling its parent, with colors for a dark backdrop. */
+  /** Drawn over the video in this style, filling its parent, in the dark theme for a dark backdrop. */
   overlay?: OverlayStyle;
 }) {
   const overlaid = !!overlay;
-  const [appearance] = useAppearance();
+  // Redrawn on a theme change, so the canvas picks up its colours. Radix's own context, as the theme's colours change a render after the app's appearance does.
+  const theme = useThemeContext();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
 
@@ -59,15 +59,14 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const isDark = overlaid || appearance === "dark";
-    const gridColor = isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.15)";
-    const playheadColor = isDark ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.7)";
-    const chapterColor = isDark ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.45)";
-    const labelBackground = overlaid ? "rgba(0,0,0,0.7)" : getComputedStyle(canvas).getPropertyValue("--color-panel-solid");
-    ctx.font = `11px ${getComputedStyle(canvas).fontFamily}`;
+    const css = getComputedStyle(canvas);
+    const gridColor = css.getPropertyValue("--gray-a5");
+    const playheadColor = css.getPropertyValue("--gray-12");
+    const chapterColor = css.getPropertyValue("--gray-a9");
+    const labelBackground = overlaid ? "rgba(0,0,0,0.7)" : css.getPropertyValue("--color-panel-solid");
+    ctx.font = `11px ${css.fontFamily}`;
     ctx.textBaseline = "middle";
     const lineColor = LINE_COLOR;
-    const machineColor = "#22d3ee";
     const pad = 6;
     const y = (pos: number) => pad + (1 - (reverse ? 100 - pos : pos) / 100) * (height - 2 * pad);
 
@@ -179,7 +178,7 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
       }
       // Through the samples and on to the dot.
       if (machineLine && machine !== null && trail.at.length) {
-        ctx.strokeStyle = machineColor;
+        ctx.strokeStyle = MACHINE_COLOR;
         ctx.lineWidth = lineWidth;
         ctx.beginPath();
         for (let i = 0; i < trail.at.length; i++) ctx.lineTo(x(trail.at[i]), y(trail.pos[i]));
@@ -201,7 +200,7 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
       cancelAnimationFrame(frame);
       ossm?.removeEventListener("position", record);
     };
-  }, [script, chapters, speed, playhead, reverse, appearance, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
+  }, [script, chapters, speed, playhead, reverse, theme, width, videoRef, ossm, machineLine, overlaid, height, lineWidth, before, after]);
 
   /**
    * Drag the graph sideways to seek, as if grabbing the line; playback pauses
@@ -220,7 +219,7 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
     });
   };
 
-  return (
+  const graph = (
     <Box position="relative" flexShrink="0" height={cssHeight === undefined ? "100%" : undefined}>
       <canvas
         ref={canvasRef}
@@ -250,4 +249,6 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
       <Text size="1" color="gray" style={{ position: "absolute", bottom: 4, right: 8 }}>In</Text>
     </Box>
   );
+  // Over the video, the dark theme's colours whatever the app's.
+  return overlaid ? <Theme asChild appearance="dark" hasBackground={false}>{graph}</Theme> : graph;
 }
