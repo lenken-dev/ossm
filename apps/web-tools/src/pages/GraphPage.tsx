@@ -10,15 +10,13 @@ import { Chart, type ChartOverlay, type ChartSeries } from "../Chart";
 import { TrajectorySidebar, useTrajectoryData } from "../TrajectoryPanel";
 import {
   StreamSidebar,
-  formatScriptTime,
-  formatTimeTick,
   trajectoryEndSecs,
-  timeTicks,
   useStreamCharts,
   useStreamStats,
   useStreamTrajectory,
-  type Funscript,
 } from "../StreamPanel";
+import { type Funscript } from "../funscript/file";
+import { formatScriptTime, formatTimeTick, timeTicks } from "../funscript/time";
 import styles from "./GraphPage.module.css";
 
 type GraphMode = "pattern" | "funscript";

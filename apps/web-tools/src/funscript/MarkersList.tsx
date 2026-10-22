@@ -1,6 +1,6 @@
 import type { MouseEvent, ReactNode } from "react";
 import { Box, Flex, Text } from "@radix-ui/themes";
-import { formatScriptTime } from "../StreamPanel";
+import { formatScriptTime } from "./time";
 import { markerColor, type Bookmark, type Chapter, type Marker } from "./markers";
 
 /**

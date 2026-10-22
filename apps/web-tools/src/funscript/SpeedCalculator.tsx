@@ -2,10 +2,9 @@ import { useContext, useEffect, useMemo } from "react";
 import { DataList, TextField, Tooltip } from "@radix-ui/themes";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
-import { LabeledSlider } from "../TrajectoryPanel";
-import type { Funscript } from "../StreamPanel";
-import { PortalContainer } from "../player/controls";
-import { SectionHeader } from "./widgets";
+import { LabeledSlider } from "../widgets";
+import type { Funscript } from "./file";
+import { PortalContainer, SectionHeader } from "./widgets";
 
 /**
  * The Speed Calculator section of the player and the editor: the fastest

@@ -1,5 +1,5 @@
 import { Flex, Switch, Text } from "@radix-ui/themes";
-import { LabeledSlider } from "../TrajectoryPanel";
+import { LabeledSlider } from "../widgets";
 
 /**
  * The Funscript section of the controls: how fast the script plays against

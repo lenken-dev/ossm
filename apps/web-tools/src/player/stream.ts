@@ -1,5 +1,5 @@
 import { bisectRight } from "d3";
-import type { Funscript } from "../StreamPanel";
+import type { Funscript } from "../funscript/file";
 
 /** A stream point to send. */
 export interface OutgoingPoint {

@@ -1,6 +1,6 @@
 // Runs in the follow worker, which loads the WASM; see `hooks/useFollow.ts`.
 import { FollowCalculator } from "@ossm-rs/trajectory-recorder";
-import type { Funscript } from "./StreamPanel";
+import type { Funscript } from "./funscript/file";
 
 /** Machine settings, 0–1, on a machine range `rangeMm` long. */
 export interface MachineSettings {

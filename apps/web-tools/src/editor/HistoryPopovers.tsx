@@ -1,6 +1,6 @@
 import { Button, Flex, HoverCard, IconButton, Popover, Text } from "@radix-ui/themes";
 import { CounterClockwiseClockIcon } from "@radix-ui/react-icons";
-import { formatScriptTime } from "../StreamPanel";
+import { formatScriptTime } from "../funscript/time";
 import { points } from "../funscript/model";
 import type { Clip } from "./model";
 import type { Timeline } from "./history";

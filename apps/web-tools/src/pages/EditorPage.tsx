@@ -4,9 +4,9 @@ import { ClipboardIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDow
 import { bisectLeft, bisectRight } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { useWindowEvent } from "../hooks/useWindowEvent";
-import { PLAYER_WINDOW, SENT_SCRIPT_KEY } from "../StreamPanel";
-import { formatScriptTime, formatTimeTick, readFunscript, timeTicks } from "../StreamPanel";
-import { LabeledSlider } from "../TrajectoryPanel";
+import { PLAYER_WINDOW, SENT_SCRIPT_KEY, readFunscript } from "../funscript/file";
+import { formatScriptTime, formatTimeTick, timeTicks } from "../funscript/time";
+import { LabeledSlider } from "../widgets";
 import { clamp, LINE_COLOR, stats, type Action } from "../funscript/model";
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";

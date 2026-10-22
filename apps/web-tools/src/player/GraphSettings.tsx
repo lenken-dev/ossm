@@ -1,6 +1,6 @@
 import { Button, Flex, Switch, Text } from "@radix-ui/themes";
 import { MoveIcon } from "@radix-ui/react-icons";
-import { LabeledSlider } from "../TrajectoryPanel";
+import { LabeledSlider } from "../widgets";
 import type { OverlayStyle } from "./overlay";
 
 /** Choices for the time after the video time, in s: by the second up to 30 s, then by 10 s. */

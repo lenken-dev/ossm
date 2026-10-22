@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Box, Button, Checkbox, Flex, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField } from "@radix-ui/themes";
 import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ResetIcon, ShuffleIcon } from "@radix-ui/react-icons";
-import { formatScriptTime } from "../StreamPanel";
+import { formatScriptTime } from "../funscript/time";
 import { clamp, LINE_COLOR, points, speed, type Action } from "../funscript/model";
 import { markerColor, type Bookmark } from "../funscript/markers";
 import { regionAt, type Region } from "./model";

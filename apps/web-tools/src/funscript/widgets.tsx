@@ -1,8 +1,11 @@
-import type { ReactNode } from "react";
+import { createContext, type ReactNode } from "react";
 import { DataList, Flex, Heading, Text } from "@radix-ui/themes";
 import { ChevronRightIcon } from "@radix-ui/react-icons";
-import { formatScriptTime } from "../StreamPanel";
+import { formatScriptTime } from "./time";
 import { stats, type Action } from "./model";
+
+/** Where dialogs, menus and tooltips open: the popout window's body while the controls are in it. */
+export const PortalContainer = createContext<HTMLElement | undefined>(undefined);
 
 /** A sidebar section's title, pressed to expand or collapse it; collapsed, `summary` at its end. */
 export function SectionHeader({ title, open, setOpen, summary }: { title: string; open: boolean; setOpen: (open: boolean) => void; summary?: ReactNode }) {

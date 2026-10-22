@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import type { FollowRequest, FollowResult } from "../follow";
-import { getRecorder } from "../TrajectoryPanel";
+import { getRecorder } from "../recorder";
 
 /** The firmware's machine range, in mm. */
 export const FIRMWARE_RANGE_MM = getRecorder().max_position_mm() - getRecorder().min_position_mm();

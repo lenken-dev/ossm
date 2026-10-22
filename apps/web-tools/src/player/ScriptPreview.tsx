@@ -3,7 +3,7 @@ import { Box, Text, Theme, useThemeContext } from "@radix-ui/themes";
 import { bisectLeft } from "d3";
 import { capturePointer } from "../drag";
 import { LINE_COLOR, MACHINE_COLOR } from "../funscript/model";
-import type { Funscript } from "../StreamPanel";
+import type { Funscript } from "../funscript/file";
 import type { Ossm } from "./ble";
 import type { OverlayStyle } from "./overlay";
 import type { Markers, Playhead } from "./playback";

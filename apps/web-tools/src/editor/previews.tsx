@@ -1,5 +1,5 @@
 import { Flex, Text } from "@radix-ui/themes";
-import { formatScriptTime, formatTimeTick, timeTicks } from "../StreamPanel";
+import { formatScriptTime, formatTimeTick, timeTicks } from "../funscript/time";
 import { clamp, LINE_COLOR, type Action } from "../funscript/model";
 import type { Bookmark, Chapter } from "../funscript/markers";
 import { isInstance, regionName, type Region } from "./model";

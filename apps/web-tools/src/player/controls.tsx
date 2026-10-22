@@ -1,12 +1,10 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { AlertDialog, Box, Button, Dialog, Flex, IconButton, Select, Text } from "@radix-ui/themes";
 import { GearIcon, PauseIcon, StopIcon } from "@radix-ui/react-icons";
 import { usePersistedState } from "../hooks/usePersistedState";
-import { LabeledSlider } from "../TrajectoryPanel";
+import { LabeledSlider } from "../widgets";
+import { PortalContainer } from "../funscript/widgets";
 import { log, type Ossm, type OssmState, type PatternInfo } from "./ble";
-
-/** Where dialogs, menus and tooltips open: the popout window's body while the controls are in it. */
-export const PortalContainer = createContext<HTMLElement | undefined>(undefined);
 
 /** How long a slider shows the user's value before following the device again; the device reports settings at least once a second. */
 const PENDING_MS = 1500;
