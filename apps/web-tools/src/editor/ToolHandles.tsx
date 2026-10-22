@@ -5,7 +5,7 @@ import { dragHeight } from "../drag";
 import { typed } from "./model";
 import { ownScale, type Func, type FuncKey, type ShapeField } from "./generate";
 import { PAD, type Viewport } from "./viewport";
-import { TIMING_HEIGHT, type Tools } from "./useTool";
+import type { Tools } from "./useTool";
 
 /** The selection box's edges, then its corners on top, as the sides dragging them changes. */
 export const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"], ["from", "high"], ["to", "high"], ["from", "low"], ["to", "low"]] as const;
@@ -13,6 +13,8 @@ export const GRIPS = [["from", null], ["to", null], [null, "high"], [null, "low"
 export const TOOL_BOX = { fill: "var(--accent-a3)", stroke: "var(--accent-9)" };
 /** Size of the selection box's grips, in px. */
 export const GRIP = 8;
+/** Least and first height of the view of Generate's Interval or Speed below the graph, in px. */
+export const TIMING_HEIGHT = 80;
 
 /** A grip of a tool's handle in the graph, at `x`, `y` and as wide and high as given; `square` shows it, as the selection box's corners. */
 const grip = (key: string, [gx, gy, gw, gh]: number[], cursor: string, down: (e: PointerEvent<SVGRectElement>) => void, square = false) => (
@@ -26,6 +28,20 @@ const grip = (key: string, [gx, gy, gw, gh]: number[], cursor: string, down: (e:
     onPointerDown={down}
   />
 );
+
+/** A line from `left` to `right` at `ly`, dashed unless `hidden`, dragged by it or its grip at the right end. */
+const gripLine = (key: string, left: number, right: number, ly: number, down: (e: PointerEvent<SVGRectElement>) => void, hidden = false) => (
+  <g key={key}>
+    {!hidden && <line x1={left} x2={right} y1={ly} y2={ly} strokeDasharray="6 4" strokeWidth={1.5} style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />}
+    {grip(`${key}-line`, [left, ly - GRIP / 2, right - left, GRIP], "ns-resize", down)}
+    {grip(`${key}-grip`, [right - GRIP / 2, ly - GRIP / 2, GRIP, GRIP], "ns-resize", down, true)}
+  </g>
+);
+
+/** Out's and In's curves dashed across the open tool's box, `depth` placing their values, the part shown's bolder. */
+const outInCurves = ({ genCurve, genPart }: Tools, depth: (v: number) => number) => (["out", "in"] as const).map((key) => (
+  <polyline key={key} points={genCurve(key, (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
+));
 
 /**
  * The handles of the function `key` in the box or, for Interval, Speed and
@@ -54,16 +70,9 @@ const funcHandles = (tools: Tools, { x }: Viewport, key: FuncKey, yOf: (v: numbe
   };
   /** A value's line across the box, dragged by it or its grip at the right end; drawn unless it is a constant's, which its curve shows. */
   const line = (field: ShapeField) => {
-    const [v0, ly] = [f(field), yOf(f(field))];
+    const v0 = f(field);
     if (!Number.isFinite(v0)) return null;
-    const down = (e: PointerEvent<SVGElement>) => drag(e, (_, dv) => ({ [field]: fit(v0 + dv) }));
-    return (
-      <g key={field}>
-        {field !== "value" && <line x1={x(from)} x2={x(to)} y1={ly} y2={ly} strokeDasharray="6 4" strokeWidth={1.5} style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />}
-        {grip(`${field}-line`, [x(from), ly - GRIP / 2, x(to) - x(from), GRIP], "ns-resize", down)}
-        {grip(`${field}-grip`, [x(to) - GRIP / 2, ly - GRIP / 2, GRIP, GRIP], "ns-resize", down, true)}
-      </g>
-    );
+    return gripLine(field, x(from), x(to), yOf(v0), (e) => drag(e, (_, dv) => ({ [field]: fit(v0 + dv) })), field === "value");
   };
   /** A square grip `t` ms into the box at value `v`. */
   const point = (k: string, t: number, v: number, cursor: string, down: (e: PointerEvent<SVGElement>) => void) => (Number.isFinite(t + v) ? grip(k, [x(from + t) - GRIP / 2, yOf(v) - GRIP / 2, GRIP, GRIP], cursor, down, true) : null);
@@ -133,7 +142,7 @@ const funcHandles = (tools: Tools, { x }: Viewport, key: FuncKey, yOf: (v: numbe
 
 /** The open tool's boxes and handles in the graph, `viewport`'s, as SVG: Scale's, Shift depth's, Generate's and Repeat's. */
 export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewport }) {
-  const { tool, scaleBox, shiftBox, toolSpan, genBox, genPart, genCurve, repParams, repBox, fnBox, dragScale, dragShift, dragGenerate, dragRepeat, addPattern, dragPattern } = tools;
+  const { tool, scaleBox, shiftBox, toolSpan, genBox, genPart, repParams, repBox, fnBox, dragScale, dragShift, dragGenerate, dragRepeat, addPattern, dragPattern } = tools;
   const { x, y, plotHeight } = viewport;
   return <>
     {/* Scale's box, like the selection box: its right edge stretches time, its top and bottom set the depths, the right corners both, its body moves the depths together; all at one time, it only has the depths. */}
@@ -163,13 +172,7 @@ export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewp
       return (
         <g>
           <rect x={left} y={(top + bottom - h) / 2} width={w} height={h} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "ns-resize" }} onPointerDown={(e) => dragShift(e, "offset")} />
-          {(["min", "max"] as const).map((v) => (
-            <g key={v}>
-              <line x1={left} x2={left + w} y1={y(shiftBox[v])} y2={y(shiftBox[v])} strokeDasharray="6 4" strokeWidth={1.5} style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
-              {grip(`${v}-line`, [left, y(shiftBox[v]) - GRIP / 2, w, GRIP], "ns-resize", (e) => dragShift(e, v))}
-              {grip(`${v}-grip`, [left + w - GRIP / 2, y(shiftBox[v]) - GRIP / 2, GRIP, GRIP], "ns-resize", (e) => dragShift(e, v), true)}
-            </g>
-          ))}
+          {(["min", "max"] as const).map((v) => gripLine(v, left, left + w, y(shiftBox[v]), (e) => dragShift(e, v)))}
         </g>
       );
     })()}
@@ -181,9 +184,7 @@ export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewp
       return (
         <g>
           <rect x={b.from} y={b.high} width={b.to - b.from} height={b.low - b.high} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "move", pointerEvents: position ? undefined : "none" }} onPointerDown={(e) => dragGenerate(e, ["from", "to", "low", "high"])} />
-          {(["out", "in"] as const).map((key) => (
-            <polyline key={key} points={genCurve(key, (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
-          ))}
+          {outInCurves(tools, depth)}
           {position && GRIPS.map(([h, v]) => grip(
             `${h}-${v}`,
             [h ? b[h] - GRIP / 2 : b.from, v ? b[v] - GRIP / 2 : b.high, h ? GRIP : b.to - b.from, v ? GRIP : b.low - b.high],
@@ -205,9 +206,7 @@ export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewp
       return (
         <g>
           {fnBox && <rect x={left} y={top} width={x(fnBox.to) - left} height={bottom - top} style={{ fill: TOOL_BOX.fill, pointerEvents: "none" }} />}
-          {fnBox && (["out", "in"] as const).map((key) => (
-            <polyline key={key} points={genCurve(key, (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
-          ))}
+          {fnBox && outInCurves(tools, depth)}
           <rect x={left} width={right - left} height={plotHeight} fill="transparent" style={{ cursor: "copy" }} onPointerDown={addPattern} />
           <rect x={left} y={top} width={right - left} height={bottom - top} strokeDasharray="4 2" style={{ fill: "none", stroke: TOOL_BOX.stroke, pointerEvents: "none" }} />
           {(["low", "high"] as const).map((v) => grip(v, [left, y(repParams[v === "low" ? "bottom" : "top"]) - GRIP / 2, right - left, GRIP], "ns-resize", (e) => dragRepeat(e, [v])))}

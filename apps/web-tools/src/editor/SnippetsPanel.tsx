@@ -72,7 +72,7 @@ export function SnippetsPanel({ library: lib, advanced, placing, tool, onOpenSni
           )}
         </HoverCard.Root>
         {!advanced && !isPreset(at) && !isFolder(e) && (
-          <IconButton size="1" variant="ghost" color="gray" disabled={!!placing} aria-label="Edit" title="Edit it in the advanced editor" onClick={() => onOpenSnippet(at)}><MixerHorizontalIcon /></IconButton>
+          <IconButton size="1" variant="ghost" color="gray" disabled={placing} aria-label="Edit" title="Edit it in the advanced editor" onClick={() => onOpenSnippet(at)}><MixerHorizontalIcon /></IconButton>
         )}
         {!advanced && !isPreset(at) && <>
           <NamePopover initial={name} taken={(n) => n !== name && nameTaken(path, n)} onName={(n) => n !== name && renameEntry(at, n)}>
@@ -101,7 +101,7 @@ export function SnippetsPanel({ library: lib, advanced, placing, tool, onOpenSni
     <Flex direction="column" gap="2" {...dropInto([])} style={{ borderRadius: 4, background: dropOn === "[]" ? "var(--accent-a4)" : undefined }}>
       <Text size="2" weight="medium">Snippets</Text>
       {!advanced && <Flex gap="2" wrap="wrap">
-        <Button size="1" variant="soft" color="gray" disabled={!!placing} title="Make a snippet in the advanced editor" onClick={() => onOpenSnippet(null)}>
+        <Button size="1" variant="soft" color="gray" disabled={placing} title="Make a snippet in the advanced editor" onClick={() => onOpenSnippet(null)}>
           <PlusIcon /> New snippet
         </Button>
         <NamePopover taken={(n) => nameTaken([], n)} onName={addFolder}>

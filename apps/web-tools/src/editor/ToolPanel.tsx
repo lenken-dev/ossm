@@ -26,7 +26,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
   selectedCount: number;
   placing: boolean;
 }) {
-  const { tool, setTool, gridOpen, setGridOpen, gridFields, setGridFields, scale, setScale, shift, setShift, maxSpeed, setMaxSpeed, speedAnchor, setSpeedAnchor, genSetup, setGenSetup, timingView, setTimingView, genRange, setGenRange, genPart, setGenPart, repSetup, setRepSetup, repBox, setRepBox, openTool, repParams, repRun, preview, fnSetup, setFunc, toolBlocked, genMarked, applyTool, invert } = tools;
+  const { tool, setTool, gridOpen, setGridOpen, gridFields, setGridFields, scale, setScale, shift, setShift, maxSpeed, setMaxSpeed, speedAnchor, setSpeedAnchor, genSetup, setGenSetup, timingView, setTimingView, genRange, setGenRange, genPart, setGenPart, repSetup, setRepSetup, repBox, setRepBox, openTool, repParams, repRun, preview, fnSetup, fnDefaults, setFunc, toolBlocked, genMarked, applyTool, invert } = tools;
 
   /** A part's header in Generate's list, pressed to expand it: its name, then `right`, the part's controls while it is expanded, else a summary. */
   const partHeader = (part: GenPart, label: string, right?: ReactNode) => (
@@ -68,7 +68,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
       const shapeSelect = (
         <Select.Root size="1" value={func.shape} onValueChange={(v) => set(part
           ? reshaped(func, v as Shape, undefined, key === "out" ? extent(fnSetup.in!)[0] : extent(fnSetup.out!)[1])
-          : reshaped(func, v as Shape, typed((tool?.kind === "repeat" ? REPEAT_DEFAULTS.time : GENERATE_DEFAULTS[key as "interval"]).value ?? "")))}>
+          : reshaped(func, v as Shape, typed(fnDefaults[key]!.value ?? "")))}>
           <Select.Trigger aria-label={`${label} shape`} />
           <Select.Content>
             {/* Each with a small graph, which the trigger shows too. */}
@@ -153,7 +153,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
           key={kind}
           variant="soft"
           color="gray"
-          disabled={(kind === "repeat" ? selectedCount < 2 : kind !== "generate" && kind !== "grid" && actions.every((a) => regionAt(regions, a.at))) || !!placing}
+          disabled={(kind === "repeat" ? selectedCount < 2 : kind !== "generate" && kind !== "grid" && actions.every((a) => regionAt(regions, a.at))) || placing}
           title={kind === "repeat" ? "Repeat the selected points, two or more" : kind === "grid" ? "Snap points to a grid while it is open" : undefined}
           onClick={() => (kind === "invert" ? invert() : kind === "grid" ? setGridOpen(true) : openTool(kind))}
           style={{ justifyContent: "flex-start" }}

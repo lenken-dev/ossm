@@ -165,7 +165,7 @@ export default function EditorPage() {
     if (markers.marked.size) setRegionsOn(new Set());
   }, [markers.marked]);
   const tools = useTool({ actions, regions, bookmarks, zero, selected, view, viewport, advanced: !!advanced, placing: !!placing, edit, select, setSelected, setBox, dragging, setDragging, onEditInstance: (instance) => openAdvanced(undefined, instance) });
-  const { tool, setTool, gridOpen, setGridOpen, grid, gridAt, gridPos, setGenRange, timingHeight, repBox, editRegion, repParams, preview, genBox, fnBox, timingShown } = tools;
+  const { tool, setTool, gridOpen, setGridOpen, grid, gridAt, gridPos, setGenRange, timingSpace, repBox, editRegion, repParams, preview, genBox, fnBox } = tools;
   const snippetLibrary = useLibrary({ advanced: !!advanced, tool: !!tool, editLabel, cancelPlacing: () => cancelPlacing(), setPlacing, setError });
   const { library, setLibraryFile, rowDrag, snippetFrom, nameTaken, saveSnippet } = snippetLibrary;
   /** Undo history: the points, markers, regions and snippet library after each edit, the first as loaded; `index` is the current one. */
@@ -1124,7 +1124,7 @@ export default function EditorPage() {
         gap="3"
         flexGrow="1"
         // Its own least height, so it shrinks with the graph instead of keeping the graph's measured one.
-        minHeight={`${120 + 12 + LANE_HEIGHT + (timingShown ? timingHeight + 12 : 0)}px`}
+        minHeight={`${120 + 12 + LANE_HEIGHT + timingSpace}px`}
         onPointerMove={(e) => void (hoverAt.current = Math.max(pointerAt(e).at, 0))}
         onPointerLeave={() => void (hoverAt.current = null)}
       >

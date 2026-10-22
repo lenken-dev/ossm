@@ -7,9 +7,12 @@ import { fastestOf, gridParams, scaled, scaleParams, shifted, shiftParams, speed
 import { funcAt, GENERATE_DEFAULTS, generated, KNOT_GAP, ownScale, RANGED, rangeFields, rangeParams, REPEAT_DEFAULTS, repeated, repeatParams, SPANNED, splineAt, TOOLS, type Func, type FuncKey, type GenerateSetup, type GenPart, type Knots, type RepeatSetup, type ToolKind } from "./generate";
 import { UNDO_SIZE } from "./history";
 import { PAD, type View, type Viewport } from "./viewport";
+import { TIMING_HEIGHT } from "./ToolHandles";
 
-/** Least and first height of the view of Generate's Interval or Speed below the graph, in px. */
-export const TIMING_HEIGHT = 80;
+/** Generate's and Repeat's setups, by their tool's kind. */
+type Setups = { generate: GenerateSetup; repeat: RepeatSetup };
+/** The setup of the tool `K`, as `useState` gives it. */
+type SetupState<K extends keyof Setups> = [Setups[K], Dispatch<SetStateAction<Setups[K]>>];
 
 /** The advanced editor's tools, Scale, Shift depth, Max speed, Generate, Repeat, Invert and Grid: the open tool, its fields and its own undo history, its result, and the drags of its handles. */
 export interface Tools {
@@ -60,6 +63,8 @@ export interface Tools {
   setGenPart: Dispatch<SetStateAction<GenPart>>;
   /** The timing view's height as shown, its first while another part is edited. */
   timingHeight: number;
+  /** The room the timing view takes below the graph, with the gap above it, in px; none while it is hidden. */
+  timingSpace: number;
   /** Repeat's setup as shown and changed: the edited region's, or the remembered one. */
   repSetup: RepeatSetup;
   setRepSetup: Dispatch<SetStateAction<RepeatSetup>>;
@@ -94,6 +99,8 @@ export interface Tools {
   fnBox: Area | null;
   /** The open tool's functions, Generate's or Repeat's, as shown, and a change to one of them. */
   fnSetup: Partial<Record<FuncKey, Func>>;
+  /** The open tool's functions as its defaults have them, which one reshaped takes its value from. */
+  fnDefaults: Partial<Record<FuncKey, Func>>;
   setFunc(key: FuncKey, f: (func: Func) => Func): void;
   /** The open tool's timing function, shown in its own view below the graph: Generate's Interval or Speed, none with Markers timing, or Repeat's Time. */
   timingKey: FuncKey | null;
@@ -193,20 +200,24 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
   const [shift, setShift] = useState({ offset: "0", out: "0", in: "100" });
   const [maxSpeed, setMaxSpeed] = useState("");
   const [speedAnchor, setSpeedAnchor] = usePersistedState<"in" | "out">("ossm:editorSpeedAnchor", "in", localStorage);
-  /** Generate's setup for new runs, remembered unlike the other tools' fields. */
-  const [remembered, setRemembered] = usePersistedState<GenerateSetup>("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage);
-  /** The setup of the region being edited, its own; the remembered one stays as it is. */
-  const [regionSetup, setRegionSetup] = useState(GENERATE_DEFAULTS);
-  const [genSetup, setGenSetup] = tool?.region ? [regionSetup, setRegionSetup] : [remembered, setRemembered];
+  /** Generate's and Repeat's setups for new runs, remembered unlike the other tools' fields. */
+  const remembered: { [K in keyof Setups]: SetupState<K> } = {
+    generate: usePersistedState("ossm:editorGenerate", GENERATE_DEFAULTS, localStorage),
+    repeat: usePersistedState("ossm:editorRepeat", REPEAT_DEFAULTS, localStorage),
+  };
+  /** The setups of the region being edited, its own; the remembered ones stay as they are. */
+  const [regionSetups, setRegionSetups] = useState<Setups>({ generate: GENERATE_DEFAULTS, repeat: REPEAT_DEFAULTS });
+  /** The setup of the tool `kind` as shown and changed: the edited region's, or the remembered one. */
+  const setupOf = <K extends keyof Setups>(kind: K): SetupState<K> => (tool?.region
+    ? [regionSetups[kind], (next) => setRegionSetups((s) => ({ ...s, [kind]: next instanceof Function ? next(s[kind]) : next }))]
+    : remembered[kind]);
+  const [genSetup, setGenSetup] = setupOf("generate");
   const [timingView, setTimingView] = usePersistedState("ossm:editorTimingView", true, localStorage);
   const [timingTall, setTimingTall] = usePersistedState("ossm:editorTimingHeight", TIMING_HEIGHT, localStorage);
   const [genRange, setGenRange] = useState({ from: "0", to: "0", out: "0", in: "100" });
   const [genPart, setGenPart] = useState<GenPart>("position");
   const timingHeight = genPart === "timing" ? timingTall : TIMING_HEIGHT;
-  /** Repeat's setup for new runs, remembered as Generate's; a region's own while editing it. */
-  const [rememberedRepeat, setRememberedRepeat] = usePersistedState<RepeatSetup>("ossm:editorRepeat", REPEAT_DEFAULTS, localStorage);
-  const [regionRepeat, setRegionRepeat] = useState(REPEAT_DEFAULTS);
-  const [repSetup, setRepSetup] = tool?.region ? [regionRepeat, setRegionRepeat] : [rememberedRepeat, setRememberedRepeat];
+  const [repSetup, setRepSetup] = setupOf("repeat");
   const [repBox, setRepBox] = useState({ from: 0, pattern: [] as Action[], length: "1", out: "0", in: "100" });
   /** The tools' fields and setups, as the open tool's undo history keeps them. */
   const toolFields = { scale, shift, maxSpeed, speedAnchor, genSetup, genRange, repSetup, repBox };
@@ -268,11 +279,11 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
     if (isRepeat(r)) {
       const { pattern, length, bottom, top, ...setup } = r.repeat;
       setTool({ kind: "repeat", actions, picked: [], fastest: null, region: r });
-      setRegionRepeat(setup);
+      setRegionSetups((s) => ({ ...s, repeat: setup }));
       setRepBox({ from: r.from, pattern: pattern.map((a) => ({ at: a.at + r.from, pos: a.pos })), length: String(length / 1000), out: String(100 - top), in: String(100 - bottom) });
     } else {
       setTool({ kind: "generate", actions, picked: [], fastest: null, region: r });
-      setRegionSetup(r.generate);
+      setRegionSetups((s) => ({ ...s, generate: r.generate }));
       setGenRange(rangeFields(r, zero));
     }
     setGenPart("position");
@@ -280,7 +291,7 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
   };
 
   const repParams = tool?.kind === "repeat" ? repeatParams(repBox) : null;
-  const repRun = useMemo(() => repParams && repeated(repSetup, repBox.from, repBox.pattern, repParams.length, repParams.bottom, repParams.top), [repSetup, repBox, tool]);
+  const repRun = useMemo(() => repParams && repeated(repSetup, repBox.from, repBox.pattern, repParams.length, repParams.bottom, repParams.top), [repSetup, repBox, tool?.kind]);
 
   const preview = useMemo(() => {
     if (!tool) return null;
@@ -330,6 +341,7 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
   const genBox = tool?.kind === "generate" ? rangeParams(genRange, zero) : null;
   const fnBox = genBox ?? (repRun && repParams && { from: repBox.from, to: repRun.end, low: repParams.bottom, high: repParams.top });
   const fnSetup: Partial<Record<FuncKey, Func>> = tool?.kind === "repeat" ? repSetup : genSetup;
+  const fnDefaults: Partial<Record<FuncKey, Func>> = tool?.kind === "repeat" ? REPEAT_DEFAULTS : GENERATE_DEFAULTS;
   const setFunc = (key: FuncKey, f: (func: Func) => Func) => (tool?.kind === "repeat"
     ? setRepSetup((s) => ({ ...s, [key]: f(s[key as "time"]) }))
     : setGenSetup((s) => ({ ...s, [key]: f(s[key as "interval"]) })));
@@ -342,14 +354,15 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
     const func = fnSetup[key]!;
     return RANGED.includes(func.shape) ? funcAt(func, rangeU(t), 100) : funcAt(func, t - fnBox!.from, fnBox!.to - fnBox!.from);
   };
-  const toolBlocked = genBox && regions.some((r) => r !== tool!.region && r.from <= genBox.to && r.to >= genBox.from) ? "The box overlaps a region"
-    : genBox && tool!.region && genBox.to <= genBox.from ? "A region's box needs a length"
-    : repRun && regions.some((r) => r !== tool!.region && r.from <= repRun.end && r.to >= repBox.from) ? "The copies overlap a region"
+  const toolBlocked = genBox && regions.some((r) => r !== tool?.region && r.from <= genBox.to && r.to >= genBox.from) ? "The box overlaps a region"
+    : genBox && tool?.region && genBox.to <= genBox.from ? "A region's box needs a length"
+    : repRun && regions.some((r) => r !== tool?.region && r.from <= repRun.end && r.to >= repBox.from) ? "The copies overlap a region"
     : repRun && repRun.end <= repBox.from ? "The copies need a length"
     : scaleBox && scaleBox.time !== 100 && regions.some((r) => r.from > scaleBox.t0 && r.to < scaleBox.t1) ? "Time cannot be scaled across a region"
     : null;
   const genMarked = !!genBox && bookmarks.some((b) => b.time >= genBox.from && b.time <= genBox.to);
   const timingShown = !!fnBox && timingView && !!timingKey;
+  const timingSpace = timingShown ? timingHeight + 12 : 0;
 
   /** Times every 2 px across the functions' box's part in view, where they are drawn. */
   const genTimes = (() => {
@@ -522,8 +535,8 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
   return {
     tool, setTool, gridOpen, setGridOpen, gridFields, setGridFields, grid, gridAt, gridPos, scale, setScale, shift, setShift, maxSpeed, setMaxSpeed,
     speedAnchor, setSpeedAnchor, genSetup, setGenSetup, timingView, setTimingView, timingTall, setTimingTall, genRange, setGenRange, genPart, setGenPart,
-    timingHeight, repSetup, setRepSetup, repBox, setRepBox, canRedo, undo, redo, openTool, editRegion, repParams, repRun, preview, toolSpan, scaleBox,
-    shiftBox, genBox, fnBox, fnSetup, setFunc, timingKey, rangeTime, toolBlocked, genMarked, timingShown, genCurve, timingLow, timingHigh, timingY,
+    timingHeight, timingSpace, repSetup, setRepSetup, repBox, setRepBox, canRedo, undo, redo, openTool, editRegion, repParams, repRun, preview, toolSpan, scaleBox,
+    shiftBox, genBox, fnBox, fnSetup, fnDefaults, setFunc, timingKey, rangeTime, toolBlocked, genMarked, timingShown, genCurve, timingLow, timingHigh, timingY,
     dragHandle, dragScale, dragShift, dragGenerate, dragRepeat, dragPattern, addPattern, dragKnot, addKnot, applyTool, invert,
   };
 }
