@@ -46,6 +46,12 @@ export function MarkerLane({ markers, chapters, bookmarks, viewport, locked, loc
         // The advanced editor's document has no markers, so the lane takes no presses there until unlocked.
         style={{ borderRadius: 6, background: "var(--gray-a2)", overflow: "hidden", userSelect: "none", touchAction: "none", cursor: "crosshair", pointerEvents: locked ? "none" : undefined }}
       >
+        {/* The empty lane says what a press on it does. */}
+        {!locked && !naming && !chapters.length && !bookmarks.length && (
+          <Text as="div" size="1" color="gray" align="center" style={{ lineHeight: `${LANE_HEIGHT}px`, pointerEvents: "none" }}>
+            Click to add a bookmark, drag to add a chapter
+          </Text>
+        )}
         {chapters.map((c, i) => {
           if (!inView(c.start, c.end)) return null;
           // Kept in view, so the name of a chapter that starts before it still shows; it ends at the first flag on it, which goes over it.
