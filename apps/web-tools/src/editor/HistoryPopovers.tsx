@@ -30,16 +30,16 @@ function HistoryRow({ preview, maxWidth, children }: { preview: ReactNode; maxWi
 /**
  * The toolbox's undo history button, docked to the Undo button, and its list
  * of the `timeline`'s edits, newest first, each previewing its change; a
- * click on one goes to it with `onJump`.
+ * click on one goes to it with `onJump`. Off while `disabled`.
  */
-export function UndoHistory({ timeline, onJump }: { timeline: Timeline; onJump: (index: number) => void }) {
+export function UndoHistory({ timeline, onJump, disabled }: { timeline: Timeline; onJump: (index: number) => void; disabled: boolean }) {
   return (
     <Popover.Root modal>
       <Popover.Trigger>
         <IconButton
           variant="soft"
           color="gray"
-          disabled={timeline.states.length < 2}
+          disabled={disabled || timeline.states.length < 2}
           aria-label="Undo history"
           title="Undo history"
           style={DOCKED.history}

@@ -1019,7 +1019,8 @@ export default function EditorPage() {
           >
             <ResetIcon />
           </IconButton>
-          <UndoHistory timeline={timeline} onJump={jump} />
+          {/* Not while placing: a jump would drop what is being placed, where Undo drops it first. */}
+          <UndoHistory timeline={timeline} onJump={jump} disabled={!!placing} />
         </Flex>
         <IconButton variant="soft" color="gray" disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)" onClick={redo}>
           <ResetIcon style={{ transform: "scaleX(-1)" }} />
