@@ -7,9 +7,6 @@ export type Markers = ReturnType<typeof readMarkers>;
 /** Send loop period in ms. */
 export const TICK_MS = 10;
 
-/** Speed limit of the funscript speed sliders until the user changes it, in percent. */
-export const DEFAULT_SPEED_LIMIT = 5;
-
 /** The media's time moves on: it plays and is not seeking or waiting for data. */
 export const advancing = (media: HTMLMediaElement) =>
   !media.paused && !media.seeking && media.readyState >= media.HAVE_FUTURE_DATA && media.playbackRate > 0;

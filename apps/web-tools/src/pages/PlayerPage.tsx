@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type RefObject, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type RefObject, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { Box, Button, Callout, Flex, Heading, IconButton, SegmentedControl, Separator, Text, Theme, Tooltip } from "@radix-ui/themes";
 import {
@@ -18,40 +18,34 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { useMediaFile } from "../hooks/useMediaFile";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm } from "../player/ble";
-import { FunscriptStream, simplify } from "../player/stream";
+import { simplify } from "../player/stream";
 import { parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SCRIPT_KEY, type Funscript } from "../funscript/file";
 import { DEPTH_ENDS, LabeledSlider, ResizeGrip, SENSATION_ENDS, STROKE_ENDS } from "../widgets";
 import { GraphLayout } from "./GraphPage";
-import { dragHeight } from "../drag";
 import { stats, type Action } from "../funscript/model";
 import { readMarkers, type Bookmark, type Chapter } from "../funscript/markers";
 import { MarkersList } from "../funscript/MarkersList";
 import { Minimap } from "../funscript/Minimap";
 import { PortalContainer, SectionHeader, Stats } from "../funscript/widgets";
 import { SpeedCalculator } from "../funscript/SpeedCalculator";
-import { PatternControls, SettingSlider, SetupDialog, StopButton } from "../player/controls";
-import { GraphSettings } from "../player/GraphSettings";
+import { MACHINE_DEFAULTS, PatternControls, SettingSlider, SetupDialog, StopButton, type MachinePrefs } from "../player/controls";
+import { GRAPH_DEFAULTS, GraphSettings, type GraphPrefs } from "../player/GraphSettings";
 import { ScriptPreview } from "../player/ScriptPreview";
-import { ScriptSettings } from "../player/ScriptSettings";
+import { ScriptSettings, type PlaybackPrefs } from "../player/ScriptSettings";
 import { TheaterGraph } from "../player/TheaterGraph";
 import { usePlayhead } from "../player/usePlayhead";
-import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, isPatternActive, silence, TICK_MS, type Markers, type Playhead } from "../player/playback";
-import { DEFAULT_OVERLAY } from "../player/overlay";
+import { isHomed, isPatternActive, type Markers, type Playhead } from "../player/playback";
+import { useArrangement } from "../player/useArrangement";
+import { useScriptStream } from "../player/useScriptStream";
+import { useSilentClock } from "../player/useSilentClock";
 
 type PlayerMode = "pattern" | "funscript";
+/** The collapsible sections of the controls. */
+type Section = "funscript" | "markers" | "stats" | "calc" | "graph";
 
 const NO_MARKERS: Markers = { chapters: [], bookmarks: [] };
 /** The markers in the .funscript `text` that parsed to `script`. */
 const markersOf = (text: string, script: Funscript): Markers => readMarkers(JSON.parse(text) as Record<string, unknown>, script.at[script.at.length - 1]);
-
-/** Size the popout window opens at, in px. */
-const POPOUT_SIZE = { width: 320, height: 640 };
-
-/** Default and smallest height of the preview graph below the video, in px. */
-const PREVIEW_HEIGHT = 140;
-const PREVIEW_MIN_HEIGHT = 60;
-/** Default time the preview graphs show before and after the video time, in ms. */
-const DEFAULT_WINDOW = { before: 2000, after: 8000 };
 
 /**
  * The minimap with the graph's time, `before` and `after` the playhead at
@@ -96,7 +90,7 @@ export default function PlayerPage() {
   const scriptInput = useRef<HTMLInputElement>(null);
   const { file: videoFile, url: videoUrl, isAudio, choose: chooseVideo, close: closeVideo, input: videoInput } = useMediaFile((file) => {
     if (file) {
-      dropSilence("video");
+      silent.drop("video");
       // Switching between video and audio swaps the element, whose events then never reach React.
       endStream("video");
     } else {
@@ -105,28 +99,14 @@ export default function PlayerPage() {
     }
     setPaused(true);
   });
-  const [silentUrl, setSilentUrl] = useState<string | null>(null);
-  const [theater, setTheater] = useState(false);
-  const [showGraph, setShowGraph] = usePersistedState("ossm:playerGraph", true, localStorage);
-  const [showControls, setShowControls] = useState(true);
   const isMobile = useIsMobile();
   const [appearance] = useAppearance();
-  /** The always-on-top window the controls float in, over other tabs and applications. */
-  const [popout, setPopout] = useState<Window | null>(null);
-  const [overlay, setOverlay] = usePersistedState("ossm:playerOverlay", DEFAULT_OVERLAY, localStorage);
-  /** Height of the graph below the video, in px. */
-  const [graphHeight, setGraphHeight] = usePersistedState("ossm:playerGraphHeight", PREVIEW_HEIGHT, localStorage);
-  /** Time both graphs show before and after the video time, in ms. */
-  const [graphWindow, setGraphWindow] = usePersistedState("ossm:playerGraphWindow", DEFAULT_WINDOW, localStorage);
-  /** Moving and resizing the graph; otherwise clicks go through it to the video. */
-  const [arranging, setArranging] = useState(false);
-  /** The video area, which the graph's position and size are fractions of. */
-  const stageRef = useRef<HTMLDivElement>(null);
-
-  /** Drag the top edge of the graph below the video to set its height; at most most of the window. */
-  const dragGraphHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, graphHeight, setGraphHeight, PREVIEW_MIN_HEIGHT, true);
-  /** Theater mode needs a video and a wide screen; closing the video leaves theater mode. */
-  const inTheater = theater && !!videoUrl && !isAudio && !isMobile;
+  const [graph, setGraph] = usePersistedState<GraphPrefs>("ossm:playerGraphPrefs", GRAPH_DEFAULTS, localStorage);
+  const { inTheater, enterTheater, leaveTheater, showControls, toggleControls, popout, openPopout, arranging, arrange, doneArranging, stageRef, dragGraphHeight } = useArrangement({
+    canTheater: !!videoUrl && !isAudio && !isMobile,
+    height: graph.height,
+    onHeight: (height) => setGraph((g) => ({ ...g, height })),
+  });
   /** The video, or the silent clock without one. */
   const videoRef = useRef<HTMLMediaElement>(null);
   const [paused, setPaused] = useState(true);
@@ -134,39 +114,42 @@ export default function PlayerPage() {
   const [script, setScript] = useState<Funscript | null>(null);
   const [markers, setMarkers] = useState(NO_MARKERS);
   const [scriptError, setScriptError] = useState<string | null>(null);
+  /** The playback prefs by how long they are kept: across sessions, for the tab's session, not at all. */
+  const [kept, setKept] = usePersistedState("ossm:playerPlayback", { simplified: true, looped: false }, localStorage);
+  const [session, setSession] = usePersistedState("ossm:playerPlaybackSession", { speed: 1, synced: true });
   const [reverse, setReverse] = useState(false);
-  const [simplified, setSimplified] = usePersistedState("ossm:playerSimplify", true, localStorage);
-  /** Start the media, and with it the script, over at its end; the seek back reopens the stream. */
-  const [looped, setLooped] = usePersistedState("ossm:playerLoop", false, localStorage);
-  /** Trace the machine's position on the graph as a second line. */
-  const [machineLine, setMachineLine] = usePersistedState("ossm:playerMachineLine", false, localStorage);
-  /** A minimap of the whole script below the graph. */
-  const [minimap, setMinimap] = usePersistedState("ossm:playerMinimap", true, localStorage);
-  /** A minimap of the whole script below the video in theater mode. */
-  const [theaterMinimap, setTheaterMinimap] = usePersistedState("ossm:playerTheaterMinimap", true, localStorage);
+  const playback: PlaybackPrefs = { ...kept, ...session, reverse };
+  const { speed: scriptSpeed, simplified, synced, looped } = playback;
   /** The script as streamed and previewed. */
   const played = useMemo(() => script && simplified ? simplify(script) : script, [script, simplified]);
   /** Sync offset in ms; positive moves the machine earlier. Never sent to the device. */
   const [offset, setOffset] = usePersistedState("ossm:playerOffset", 50);
   /** The offset slider's value while dragged; the offset applies on release. */
   const [offsetDraft, setOffsetDraft] = useState<number | null>(null);
-  /** How fast the script plays against the video, which keeps its own speed. */
-  const [scriptSpeed, setScriptSpeed] = usePersistedState("ossm:playerScriptSpeed", 1);
-  /** The script follows the media's playhead; otherwise it keeps its own and only plays and pauses with the media. */
-  const [synced, setSynced] = usePersistedState("ossm:playerSynced", true);
   const { playhead, retimeClock, stopClockAt } = usePlayhead({ videoRef, synced, scriptSpeed, scriptEnd: played ? played.at[played.at.length - 1] : 0 });
-  /** Script time in ms the machine plays at, `offset` ahead of the playhead. */
-  const streamTime = () => playhead.current.get() + offset * scriptSpeed;
-  /** Script time in ms to put the silent clock back at once it reloads at a new length. */
-  const silentResume = useRef<number | null>(null);
-  const stream = useRef(new FunscriptStream());
-  /** Depth and stroke set since connecting or entering funscript mode. */
-  const [configured, setConfigured] = useState(false);
-  const [setupOpen, setSetupOpen] = useState(false);
-  const [speedLimit, setSpeedLimit] = usePersistedState("ossm:playerSpeedLimit", DEFAULT_SPEED_LIMIT, localStorage);
-  /** Depth and stroke sliders in the controls, changed while playing. */
-  const [depthSliders, setDepthSliders] = usePersistedState("ossm:playerDepthSliders", false, localStorage);
-  const blocked = blockReason(ossm, state, configured, setupOpen);
+  const [machine, setMachine] = usePersistedState<MachinePrefs>("ossm:playerMachine", MACHINE_DEFAULTS, localStorage);
+  const { configured, setupOpen, blocked, endStream, openSetup, closeSetup, setUp } = useScriptStream({
+    active: mode === "funscript",
+    ossm,
+    state,
+    videoRef,
+    paused,
+    script: played,
+    playhead,
+    offset,
+    speed: scriptSpeed,
+    reverse,
+    speedLimit: machine.speedLimit,
+  });
+  const silent = useSilentClock({
+    ms: mode === "funscript" && !videoFile && script ? script.at[script.at.length - 1] / scriptSpeed : null,
+    speed: scriptSpeed,
+    videoRef,
+    onDrop: (reason) => {
+      endStream(reason);
+      setPaused(true);
+    },
+  });
   /**
    * Why the mode cannot change while it plays, or `null` when it can; the
    * device refuses the switch too. A video the machine does not follow does
@@ -182,97 +165,18 @@ export default function PlayerPage() {
   /** Switch to mode `v`; callers check `switchLock`. */
   const switchMode = (v: PlayerMode) => {
     log(`mode ${v}`);
-    dropSilence("mode");
+    silent.drop("mode");
     // Leaving funscript mode leaves streaming (any remote's), so patterns can play;
     // the switch is locked while the stream runs, so none of ours is open.
     if (v === "pattern" && state?.state === "streaming") void ossm?.command("go:menu");
     setMode(v);
   };
 
-  /** Send `stream:end` if a stream is open. */
-  const endStream = (reason: string) => {
-    if (!stream.current.end()) return;
-    void ossm?.command("stream:end", `(${reason}, media=${Math.round(streamTime())})`);
-  };
-
-  // Entering funscript mode (or connecting in it) sends `go:streaming`.
-  useEffect(() => {
-    if (mode !== "funscript" || !ossm || ossm.lookahead === 0) return;
-    void ossm.command("go:streaming");
-  }, [mode, ossm]);
-
-  // Depth and stroke may have changed elsewhere (pattern mode, another remote).
-  useEffect(() => {
-    setConfigured(false);
-    setSetupOpen(false);
-  }, [ossm, mode]);
-
-  // The setup's speed limit also holds for a speed raised while playing or a lowered limit.
-  useEffect(() => {
-    if (setupOpen && ossm && state && state.speed > speedLimit) void ossm.command(`set:speed:${speedLimit}`);
-  }, [setupOpen, ossm, state, speedLimit]);
-
-  // A disconnect closes the stream (nothing to send it to) and pauses the video.
-  useEffect(() => {
-    if (!ossm) return;
-    const onDisconnect = () => {
-      stream.current.end();
-      videoRef.current?.pause();
-    };
-    ossm.addEventListener("disconnect", onDisconnect);
-    return () => ossm.removeEventListener("disconnect", onDisconnect);
-  }, [ossm]);
-
-  // The video plays on without the machine; the machine stops once it is blocked.
-  useEffect(() => {
-    if (mode === "funscript" && blocked) endStream(blocked);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, blocked]);
-
-  /** Pause the video and the machine, then ask for depth and stroke. */
-  const openSetup = () => {
-    videoRef.current?.pause();
-    endStream("setup");
-    setSetupOpen(true);
-  };
-
-  // The send loop. It keeps running, throttled, in background tabs. A stream
-  // starts on the first tick while the video actually plays, so after an end
-  // that does not stop playback (rate, script) the next one starts
-  // right away.
-  useEffect(() => {
-    if (mode !== "funscript" || paused || blocked || !ossm || !played) return;
-    const id = setInterval(() => {
-      const video = videoRef.current;
-      if (!video || !advancing(video)) return;
-      for (const p of stream.current.tick(played, streamTime(), video.playbackRate * scriptSpeed, reverse, ossm.lookahead)) {
-        void ossm.streamPoint(p.position, p.duration);
-      }
-    }, TICK_MS);
-    return () => clearInterval(id);
-  }, [mode, paused, blocked, ossm, played, offset, scriptSpeed, synced, reverse]);
-
   // Video events that matter; in funscript mode all but `playing` end the stream.
   const videoEvent = (e: SyntheticEvent<HTMLMediaElement>) => {
     log(`video ${e.type}`);
     retimeClock();
     if (mode === "funscript" && e.type !== "playing") endStream(e.type);
-  };
-
-  const silentMs = mode === "funscript" && !videoFile && script ? script.at[script.at.length - 1] / scriptSpeed : null;
-  useEffect(() => {
-    setSilentUrl(null);
-    if (silentMs == null) return;
-    const url = URL.createObjectURL(silence(silentMs));
-    setSilentUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [silentMs]);
-
-  /** Before the silent clock unmounts: its events no longer reach React then. */
-  const dropSilence = (reason: string) => {
-    if (!silentUrl) return;
-    endStream(reason);
-    setPaused(true);
   };
 
   const loadScript = async (file: File) => {
@@ -323,33 +227,21 @@ export default function PlayerPage() {
       <IconButton
         variant="surface"
         aria-label={showControls ? "Hide controls" : "Show controls"}
-        onClick={() => setShowControls(!showControls)}
+        onClick={toggleControls}
       >
         <HamburgerMenuIcon />
       </IconButton>
     </Flex>
   );
 
-  const openPopout = async () => {
-    const win = await window.documentPictureInPicture!.requestWindow(POPOUT_SIZE);
-    // The page's styles: <style>s in dev, <link>s in builds.
-    for (const sheet of document.styleSheets) {
-      win.document.head.append(sheet.href
-        ? Object.assign(win.document.createElement("link"), { rel: "stylesheet", href: sheet.href })
-        : Object.assign(win.document.createElement("style"), { textContent: sheet.ownerNode?.textContent ?? "" }));
-    }
-    win.document.body.style.margin = "0";
-    win.addEventListener("pagehide", () => setPopout(null), { once: true });
-    setPopout(win);
-  };
-  // Leaving the page takes the controls with it.
-  useEffect(() => () => popout?.close(), [popout]);
-
-  /** The Funscript and Graph sections of the controls show only their titles until expanded. */
-  const [funscriptOpen, setFunscriptOpen] = useState(false);
-  const [graphOpen, setGraphOpen] = useState(false);
-  const [statsOpen, setStatsOpen] = useState(false);
-  const [markersOpen, setMarkersOpen] = useState(false);
+  /** The sections of the controls that are expanded; the rest show only their titles. */
+  const [open, setOpen] = useState(new Set<Section>());
+  /** Whether section `name` is expanded, and expanding and collapsing it. */
+  const section = (name: Section) => ({
+    open: open.has(name),
+    setOpen: (on: boolean) => setOpen((o) => new Set(on ? [...o, name] : [...o].filter((s) => s !== name))),
+  });
+  const markersOpen = open.has("markers");
   /** The index of the chapter the playhead is in, or -1; followed only while the Markers list shows. */
   const [chapterAt, setChapterAt] = useState(-1);
   useEffect(() => {
@@ -363,8 +255,7 @@ export default function PlayerPage() {
   /** The played script's points, for its stats. */
   const playedActions = useMemo<Action[]>(() => played ? Array.from(played.at, (at, i) => ({ at, pos: played.pos[i] })) : [], [played]);
   const playedAverage = useMemo(() => playedActions.length && stats(playedActions, [...playedActions.keys()]).average, [playedActions]);
-  const [calcOpen, setCalcOpen] = useState(false);
-  const media = videoUrl || silentUrl;
+  const media = videoUrl || silent.url;
   const playButton = media && (
     <Button variant="soft" onClick={() => (paused ? void videoRef.current?.play() : videoRef.current?.pause())}>
       {paused ? <><PlayIcon /> Play</> : <><PauseIcon /> Pause</>}
@@ -456,7 +347,7 @@ export default function PlayerPage() {
               ) : <>
                 <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
                 <SettingSlider ossm={ossm} setting="sensation" label="Sensation" value={state.sensation} ends={SENSATION_ENDS} />
-                {depthSliders && <>
+                {machine.depthSliders && <>
                   <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} ends={DEPTH_ENDS} />
                   <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} ends={STROKE_ENDS} />
                 </>}
@@ -472,12 +363,10 @@ export default function PlayerPage() {
               <SetupDialog
                 ossm={ossm}
                 state={state}
-                speedLimit={speedLimit}
-                setSpeedLimit={setSpeedLimit}
-                depthSliders={depthSliders}
-                setDepthSliders={setDepthSliders}
-                onDone={() => setConfigured(true)}
-                onClose={() => setSetupOpen(false)}
+                prefs={machine}
+                onChange={setMachine}
+                onDone={setUp}
+                onClose={closeSetup}
               />
             )}
             {ready && (
@@ -508,34 +397,26 @@ export default function PlayerPage() {
               />
             )}
             <Separator size="4" />
-            <SectionHeader title="Funscript" open={funscriptOpen} setOpen={setFunscriptOpen} />
-            {funscriptOpen && (
+            <SectionHeader title="Funscript" {...section("funscript")} />
+            {open.has("funscript") && (
               <ScriptSettings
                 paused={paused}
-                scriptSpeed={scriptSpeed}
-                onScriptSpeed={(v) => {
+                prefs={playback}
+                onChange={(next) => {
                   // The silent clock's length follows the speed; keep the playhead at the same script time.
-                  if (silentUrl) silentResume.current ??= (videoRef.current?.currentTime ?? 0) * 1000 * scriptSpeed;
-                  setScriptSpeed(Math.round(v * 100) / 100);
-                }}
-                reverse={reverse}
-                setReverse={setReverse}
-                simplified={simplified}
-                setSimplified={setSimplified}
-                synced={synced}
-                onSynced={(on) => {
+                  if (next.speed !== scriptSpeed) silent.hold();
                   // The script's own playhead starts where the media's left it.
-                  if (!on) stopClockAt(playhead.current.get());
-                  setSynced(on);
+                  if (synced && !next.synced) stopClockAt(playhead.current.get());
+                  setKept({ simplified: next.simplified, looped: next.looped });
+                  setSession({ speed: next.speed, synced: next.synced });
+                  setReverse(next.reverse);
                 }}
-                looped={looped}
-                setLooped={setLooped}
               />
             )}
             <Separator size="4" />
             {/* The script's chapters and bookmarks in time; a click plays from there. */}
             {played && (markers.chapters.length > 0 || markers.bookmarks.length > 0) && <>
-              <SectionHeader title="Markers" open={markersOpen} setOpen={setMarkersOpen} summary={`${markers.chapters.length + markers.bookmarks.length}`} />
+              <SectionHeader title="Markers" {...section("markers")} summary={`${markers.chapters.length + markers.bookmarks.length}`} />
               {markersOpen && (
                 <MarkersList
                   chapters={markers.chapters}
@@ -548,35 +429,14 @@ export default function PlayerPage() {
             </>}
             {/* The played script's stats; collapsed, its average speed. */}
             {played && <>
-              <SectionHeader title="Stats" open={statsOpen} setOpen={setStatsOpen} summary={!!playedAverage && `${Math.round(playedAverage)}/s avg`} />
-              {statsOpen && <Stats actions={playedActions} picked={[...playedActions.keys()]} size="2" />}
+              <SectionHeader title="Stats" {...section("stats")} summary={!!playedAverage && `${Math.round(playedAverage)}/s avg`} />
+              {open.has("stats") && <Stats actions={playedActions} picked={[...playedActions.keys()]} size="2" />}
               <Separator size="4" />
             </>}
-            <SpeedCalculator open={calcOpen} setOpen={setCalcOpen} script={played} rate={scriptSpeed} machine={state} machineRangeMm={ossm?.travelMm ?? null} />
+            <SpeedCalculator {...section("calc")} script={played} rate={scriptSpeed} machine={state} machineRangeMm={ossm?.travelMm ?? null} />
             <Separator size="4" />
-            <SectionHeader title="Graph" open={graphOpen} setOpen={setGraphOpen} />
-            {graphOpen && (
-              <GraphSettings
-                showGraph={showGraph}
-                setShowGraph={setShowGraph}
-                minimap={inTheater ? theaterMinimap : minimap}
-                setMinimap={inTheater ? setTheaterMinimap : setMinimap}
-                overlay={overlay}
-                setOverlay={setOverlay}
-                machineLine={machineLine}
-                setMachineLine={setMachineLine}
-                span={graphWindow}
-                setSpan={setGraphWindow}
-                theater={inTheater}
-                canArrange={!!played}
-                onArrange={() => setArranging(true)}
-                onReset={() => {
-                  setOverlay(DEFAULT_OVERLAY);
-                  setGraphHeight(PREVIEW_HEIGHT);
-                  setGraphWindow(DEFAULT_WINDOW);
-                }}
-              />
-            )}
+            <SectionHeader title="Graph" {...section("graph")} />
+            {open.has("graph") && <GraphSettings prefs={graph} onChange={setGraph} theater={inTheater} canArrange={!!played} onArrange={arrange} />}
           </>
         )}
       </Flex>
@@ -643,7 +503,7 @@ export default function PlayerPage() {
             <Text size="2" weight="medium" truncate title={videoFile?.name}>{videoFile?.name}</Text>
             <Flex gap="2">
               {!isMobile && !isAudio && (
-                <Button variant="soft" onClick={() => setTheater(true)}>
+                <Button variant="soft" onClick={enterTheater}>
                   <EnterFullScreenIcon /> Theater
                 </Button>
               )}
@@ -661,9 +521,9 @@ export default function PlayerPage() {
             /* The video stays at this place in the tree, so toggling theater mode does not reload it. */
             <Box ref={stageRef} position="relative" flexGrow="1" minHeight="0">
               <video {...mediaProps} src={videoUrl} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", background: "black" }} />
-              {inTheater && mode === "funscript" && played && showGraph && (
-                <TheaterGraph stage={stageRef} overlay={overlay} setOverlay={setOverlay} arranging={arranging} onDone={() => setArranging(false)}>
-                  <ScriptPreview script={played} chapters={markers.chapters} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} overlay={overlay} />
+              {inTheater && mode === "funscript" && played && graph.shown && (
+                <TheaterGraph stage={stageRef} overlay={graph.overlay} setOverlay={(overlay) => setGraph((g) => ({ ...g, overlay }))} arranging={arranging} onDone={doneArranging}>
+                  <ScriptPreview script={played} chapters={markers.chapters} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={graph.machineLine} notice={blocked} lineWidth={graph.overlay.lineWidth} span={graph.window} overlay={graph.overlay} />
                 </TheaterGraph>
               )}
               {/* Where the hidden pane would appear, at the pane's padding so they do not jump. */}
@@ -671,7 +531,7 @@ export default function PlayerPage() {
               {inTheater && (
                 <Button
                   variant="surface"
-                  onClick={() => setTheater(false)}
+                  onClick={leaveTheater}
                   style={{ position: "absolute", top: "var(--space-3)", right: "var(--space-3)" }}
                 >
                   <ExitFullScreenIcon /> Exit
@@ -679,8 +539,8 @@ export default function PlayerPage() {
               )}
             </Box>
           )}
-          {inTheater && mode === "funscript" && played && theaterMinimap && (
-            <PlayerMinimap actions={playedActions} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />
+          {inTheater && mode === "funscript" && played && graph.theaterMinimap && (
+            <PlayerMinimap actions={playedActions} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graph.window} />
           )}
         </>
       ) : (
@@ -693,14 +553,10 @@ export default function PlayerPage() {
           </Button>
         </Flex>
       )}
-      {silentUrl && <audio
+      {silent.url && <audio
         {...mediaProps}
-        src={silentUrl}
-        onLoadedMetadata={(e) => {
-          if (silentResume.current === null) return;
-          e.currentTarget.currentTime = silentResume.current / 1000 / scriptSpeed;
-          silentResume.current = null;
-        }}
+        src={silent.url}
+        onLoadedMetadata={silent.onLoadedMetadata}
         style={{ width: "100%", flexShrink: 0 }} />}
       {mode === "funscript" && scriptError && (
         <Callout.Root color="red" size="1">
@@ -723,7 +579,7 @@ export default function PlayerPage() {
                   variant="soft"
                   color="gray"
                   onClick={() => {
-                    dropSilence("close");
+                    silent.drop("close");
                     endStream("close");
                     setScript(null);
                     setMarkers(NO_MARKERS);
@@ -734,14 +590,14 @@ export default function PlayerPage() {
                 </Button>
               </Flex>
             </Flex>
-            {showGraph && <Box position="relative" flexShrink="0">
-              <ScriptPreview script={played} chapters={markers.chapters} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={machineLine} notice={blocked} lineWidth={overlay.lineWidth} span={graphWindow} height={graphHeight} />
+            {graph.shown && <Box position="relative" flexShrink="0">
+              <ScriptPreview script={played} chapters={markers.chapters} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} ossm={ossm} machineLine={graph.machineLine} notice={blocked} lineWidth={graph.overlay.lineWidth} span={graph.window} height={graph.height} />
               <ResizeGrip edge="top" onPointerDown={dragGraphHeight} />
             </Box>}
-            {minimap && <PlayerMinimap actions={playedActions} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />}
+            {graph.minimap && <PlayerMinimap actions={playedActions} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graph.window} />}
           </>
         ) : (
-          <Flex align="center" justify="center" flexShrink="0" height={`${graphHeight}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
+          <Flex align="center" justify="center" flexShrink="0" height={`${graph.height}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
             <Button variant="soft" onClick={() => scriptInput.current?.click()}>
               <UploadIcon /> Open funscript
             </Button>

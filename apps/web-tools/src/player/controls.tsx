@@ -198,6 +198,16 @@ function DepthStrokeSliders({ ossm, state, disabled, onDepth, onStroke }: {
   );
 }
 
+/** The machine's settings in funscript mode. */
+export interface MachinePrefs {
+  /** Speed limit of the funscript speed sliders, in percent. */
+  speedLimit: number;
+  /** Depth and stroke sliders in the controls, changed while playing. */
+  depthSliders: boolean;
+}
+/** The speed limit is low until the user changes it. */
+export const MACHINE_DEFAULTS: MachinePrefs = { speedLimit: 5, depthSliders: false };
+
 /**
  * Sets the depth and the stroke while the machine follows them. A change
  * streams one point to the end it sets, the deep end (depth) or the shallow
@@ -206,14 +216,11 @@ function DepthStrokeSliders({ ossm, state, disabled, onDepth, onStroke }: {
  * for a speed above zero, so the machine moves no faster than the speed shown.
  * Done returns the machine to the stroke end.
  */
-export function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSliders, setDepthSliders, onDone, onClose }: {
+export function SetupDialog({ ossm, state, prefs, onChange, onDone, onClose }: {
   ossm: Ossm;
   state: OssmState;
-  speedLimit: number;
-  setSpeedLimit: (limit: number) => void;
-  /** Depth and stroke sliders in the controls. */
-  depthSliders: boolean;
-  setDepthSliders: (on: boolean) => void;
+  prefs: MachinePrefs;
+  onChange: (prefs: MachinePrefs) => void;
   onDone: () => void;
   onClose: () => void;
 }) {
@@ -250,7 +257,7 @@ export function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSlide
           machine fully. Stroke sets the shallowest point.
         </Dialog.Description>
         <Flex direction="column" gap="3">
-          <SpeedSlider ossm={ossm} value={state.speed} limit={speedLimit} setLimit={setSpeedLimit} />
+          <SpeedSlider ossm={ossm} value={state.speed} limit={prefs.speedLimit} setLimit={(speedLimit) => onChange({ ...prefs, speedLimit })} />
           <DepthStrokeSliders ossm={ossm} state={state} disabled={still} onDepth={() => track(0)} onStroke={() => track(100)} />
           <Flex gap="2">
             <Button variant="soft" disabled={still} style={{ flex: 1 }} onClick={() => track(0)}>
@@ -272,8 +279,8 @@ export function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSlide
           )}
         </Flex>
         <Flex justify="between" gap="2" mt="4">
-          {depthSliders ? (
-            <Button variant="soft" color="gray" onClick={() => setDepthSliders(false)}>
+          {prefs.depthSliders ? (
+            <Button variant="soft" color="gray" onClick={() => onChange({ ...prefs, depthSliders: false })}>
               Hide sliders in controls
             </Button>
           ) : (
@@ -292,7 +299,7 @@ export function SetupDialog({ ossm, state, speedLimit, setSpeedLimit, depthSlide
                     <Button variant="soft" color="gray">Cancel</Button>
                   </AlertDialog.Cancel>
                   <AlertDialog.Action>
-                    <Button color="red" onClick={() => setDepthSliders(true)}>Show sliders</Button>
+                    <Button color="red" onClick={() => onChange({ ...prefs, depthSliders: true })}>Show sliders</Button>
                   </AlertDialog.Action>
                 </Flex>
               </AlertDialog.Content>
