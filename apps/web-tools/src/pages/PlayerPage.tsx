@@ -20,7 +20,6 @@ import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
 import { parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SCRIPT_KEY, type Funscript } from "../StreamPanel";
-import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
 import { LabeledSlider } from "../TrajectoryPanel";
 import { GraphLayout } from "./GraphPage";
 import { dragHeight } from "../drag";
@@ -29,9 +28,9 @@ import { readMarkers, type Bookmark, type Chapter } from "../funscript/markers";
 import { MarkersList } from "../funscript/MarkersList";
 import { Minimap } from "../funscript/Minimap";
 import { SectionHeader, Stats } from "../funscript/widgets";
+import { SpeedCalculator } from "../funscript/SpeedCalculator";
 import { DEPTH_ENDS, PatternControls, PortalContainer, SettingSlider, SetupDialog, STROKE_ENDS } from "../player/controls";
 import { GraphSettings } from "../player/GraphSettings";
-import { PlayerCalculator } from "../player/PlayerCalculator";
 import { ScriptPreview } from "../player/ScriptPreview";
 import { ScriptSettings } from "../player/ScriptSettings";
 import { TheaterGraph } from "../player/TheaterGraph";
@@ -368,24 +367,6 @@ export default function PlayerPage() {
   const playedActions = useMemo<Action[]>(() => played ? Array.from(played.at, (at, i) => ({ at, pos: played.pos[i] })) : [], [played]);
   const playedAverage = useMemo(() => playedActions.length && stats(playedActions, [...playedActions.keys()]).average, [playedActions]);
   const [calcOpen, setCalcOpen] = useState(false);
-  /** The calculator's machine range, in mm, shared with the editor's. */
-  const [savedRangeMm, setRangeMm] = usePersistedState(RANGE_KEY, FIRMWARE_RANGE_MM, localStorage);
-  /** The connected machine's travel, or until known the range typed in. */
-  const machineRangeMm = ossm?.travelMm ?? null;
-  const rangeMm = machineRangeMm ?? savedRangeMm;
-  // Saved for the editor's calculator too.
-  useEffect(() => {
-    if (machineRangeMm !== null) setRangeMm(machineRangeMm);
-  }, [machineRangeMm, setRangeMm]);
-  /** The machine's settings, 0–100, or until connected full depth and stroke at the middle sensation. */
-  const calcSettings = { depth: state?.depth ?? 100, stroke: state?.stroke ?? 100, sensation: state?.sensation ?? 50, speed: state?.speed ?? 0 };
-  /** The speed the script needs, and the share of its points reached at the machine's speed. */
-  const calc = useFollow(useMemo(() => {
-    if (!calcOpen || !played) return null;
-    const { depth, stroke, sensation, speed } = calcSettings;
-    return { kind: "script" as const, script: played, rate: scriptSpeed, settings: { rangeMm, depth: depth / 100, stroke: stroke / 100, jerk: sensation / 100 }, speed: speed / 100 };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- its values, not the object made each render
-  }, [calcOpen, played, scriptSpeed, rangeMm, calcSettings.depth, calcSettings.stroke, calcSettings.sensation, calcSettings.speed]));
   const media = videoUrl || silentUrl;
   const controls = (inPopout: boolean) => (
     <>
@@ -582,7 +563,7 @@ export default function PlayerPage() {
               {statsOpen && <Stats actions={playedActions} picked={[...playedActions.keys()]} size="2" />}
               <Separator size="4" />
             </>}
-            <PlayerCalculator open={calcOpen} setOpen={setCalcOpen} played={played} scriptSpeed={scriptSpeed} settings={calcSettings} calc={calc} connected={!!state} rangeMm={rangeMm} machineRangeMm={machineRangeMm} setRangeMm={setRangeMm} />
+            <SpeedCalculator open={calcOpen} setOpen={setCalcOpen} script={played} rate={scriptSpeed} machine={state} machineRangeMm={ossm?.travelMm ?? null} />
             <Separator size="4" />
             <SectionHeader title="Graph" open={graphOpen} setOpen={setGraphOpen} />
             {graphOpen && (

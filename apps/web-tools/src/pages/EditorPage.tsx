@@ -29,7 +29,7 @@ import { MarkersPanel } from "../editor/MarkersPanel";
 import { SnippetsPanel } from "../editor/SnippetsPanel";
 import { Minimap } from "../funscript/Minimap";
 import { GraphCanvas } from "../editor/GraphCanvas";
-import { SpeedCalculator } from "../editor/SpeedCalculator";
+import { SpeedCalculator } from "../funscript/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
 import { ClipboardHistory, UndoHistory } from "../editor/HistoryPopovers";
 import { GraphLayout } from "./GraphPage";
@@ -112,6 +112,7 @@ export default function EditorPage() {
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
   /** The sidebar's stats are expanded, else just their header. */
   const [statsShown, setStatsShown] = usePersistedState("ossm:editorStatsShown", true, localStorage);
+  const [calcShown, setCalcShown] = usePersistedState("ossm:editorCalcShown", false, localStorage);
   /** The advanced editor shows times from its 0, earlier ones negative; only as shown, the points keep the main script's times. */
   const [fromZero, setFromZero] = usePersistedState("ossm:editorFromZero", false, localStorage);
   /** The advanced editor's marker lane and Markers panel take presses, and B adds a bookmark, editing the main script's markers. */
@@ -437,6 +438,12 @@ export default function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the picked points follow from these
     [selected, regionsOn, regions, actions],
   );
+  /** The stats' points, at least two, as the Speed Calculator follows them while open. */
+  const calcScript = useMemo(() => {
+    if (!calcShown || statsPicked.length < 2) return null;
+    const points = statsPicked.map((i) => actions[i]);
+    return { name: "", at: Uint32Array.from(points, (a) => a.at), pos: Float64Array.from(points, (a) => a.pos) };
+  }, [calcShown, actions, statsPicked]);
 
   /** Give the region `r` the name `name`. */
   const renameRegion = (r: Region, name: string) => {
@@ -984,7 +991,8 @@ export default function EditorPage() {
           {statsShown && <Stats actions={actions} picked={picked} size="2" />}
         </>;
       })()}
-      <SpeedCalculator actions={actions} picked={statsPicked} selectionOn={selected.size > 0 || chosen.length > 0} />
+      <Separator size="4" />
+      <SpeedCalculator open={calcShown} setOpen={setCalcShown} script={calcScript} selection={selected.size > 0 || chosen.length > 0} />
       </>}
       <ToolPanel tools={tools} advanced={!!advanced} actions={actions} regions={regions} bookmarks={bookmarks} zero={zero} selectedCount={selected.size} placing={!!placing} />
       {/* At the panel's bottom as a tool's Apply, which takes its place while a tool is open, or the grid. */}
