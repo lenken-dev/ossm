@@ -2,7 +2,7 @@ use embassy_futures::poll_once;
 use ossm::{MotionSender, StreamMove};
 
 use crate::input::StreamInput;
-use crate::{PlannerStats, PushError, StreamPlanner};
+use crate::{MoveRequest, PlannerStats, PushError, StreamPlanner};
 
 /// Speed limit for the moves of a stream's entry, so that its first target
 /// (after a seek, play or resume) is approached gently whatever the speed
@@ -12,6 +12,8 @@ const ENTRY_SPEED: f64 = 0.2;
 const ENTRY_HOLD_MS: u64 = 1000;
 /// How long after the hold the cap rises linearly to the speed setting.
 const ENTRY_RAMP_MS: u64 = 1000;
+/// How often a move sent under the cap is re-sent as the cap rises.
+const ENTRY_RESEND_MS: u64 = 50;
 
 /// What a [`StreamSequencer`] asks of the motion controller in a tick.
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +59,9 @@ pub struct StreamSequencer {
     /// When the first move since the last stop was sent; set while the
     /// controller may be streaming.
     started_ms: Option<u64>,
+    /// The last move sent, if capped below the speed setting: its request,
+    /// its speed limit and when it was sent.
+    capped: Option<(MoveRequest, f64, u64)>,
 }
 
 impl StreamSequencer {
@@ -69,6 +74,7 @@ impl StreamSequencer {
             planner: StreamPlanner::new(input.stroke_range()),
             input,
             started_ms: None,
+            capped: None,
         }
     }
 
@@ -130,27 +136,38 @@ impl StreamSequencer {
     ///
     /// Moves sent in the first [`ENTRY_HOLD_MS`] after the stream starts (or
     /// resumes) are limited to [`ENTRY_SPEED`]; over the following
-    /// [`ENTRY_RAMP_MS`] the limit rises to the speed setting.
+    /// [`ENTRY_RAMP_MS`] the limit rises to the speed setting; a move sent
+    /// under the limit is re-sent every [`ENTRY_RESEND_MS`] as it rises, so
+    /// that a long move sent early does not stay slow.
     pub fn tick(&mut self, now_ms: u64, machine_position: f64) -> Option<StreamStep> {
         let request = self.planner.poll(now_ms, machine_position);
         if self.input.velocity <= 0.0 {
             return self.started_ms.take().map(|_| StreamStep::Stop);
         }
-        let request = request?;
+        let request = match request {
+            Some(request) => request,
+            None => {
+                let (request, speed, sent_ms) = self.capped?;
+                let elapsed_ms = now_ms - self.started_ms?;
+                if now_ms < sent_ms + ENTRY_RESEND_MS || self.entry_speed(elapsed_ms) <= speed {
+                    return None;
+                }
+                request
+            }
+        };
         let started_ms = *self.started_ms.get_or_insert(now_ms);
+        let speed = self.entry_speed(now_ms - started_ms);
+        self.capped = (speed < self.input.velocity).then_some((request, speed, now_ms));
         Some(StreamStep::Move(StreamMove {
             position: request.position,
             velocity: request.velocity,
             duration: request.duration_secs(now_ms),
-            speed: self.entry_speed(now_ms - started_ms),
+            speed,
             jerk: self.input.jerk,
         }))
     }
 
     /// The speed limit for a move sent `elapsed_ms` after the stream started.
-    ///
-    /// ponytail: a move keeps the limit it was sent with, so a long move sent
-    /// early stays slow; re-send moves during the ramp if that shows.
     fn entry_speed(&self, elapsed_ms: u64) -> f64 {
         let ramp = elapsed_ms.saturating_sub(ENTRY_HOLD_MS).min(ENTRY_RAMP_MS) as f64
             / ENTRY_RAMP_MS as f64;
