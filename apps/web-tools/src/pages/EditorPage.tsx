@@ -15,7 +15,7 @@ import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanc
 import { rangeFields, refilled, withBookmarks } from "../editor/generate";
 import { download, readClip, readRegions } from "../editor/file";
 import { changedSpan, HISTORY_SIZE, startedAt, UNDO_SIZE, withLibraryChanges, type Timeline } from "../editor/history";
-import { AXIS, FOLLOW_AT, useViewport } from "../editor/viewport";
+import { AXIS, bringIntoView, FOLLOW_AT, useViewport } from "../editor/viewport";
 import { MediaPlayer, useMediaPlayer } from "../editor/MediaPlayer";
 import { useMarkers } from "../editor/useMarkers";
 import { useTool } from "../editor/useTool";
@@ -103,7 +103,7 @@ export default function EditorPage() {
   /** The graph and the marker lane, which scroll and zoom alike. */
   const timeRef = useRef<HTMLDivElement>(null);
   const viewport = useViewport(boxRef, view, setView);
-  const { width, height, plotHeight, x, y, pointerAt, track } = viewport;
+  const { width, height, plotHeight, x, y, inView, pointerAt, track } = viewport;
   const media = useMediaPlayer(setView);
   /** A minimap of the whole script to scroll with, instead of the slider. */
   const [minimap, setMinimap] = usePersistedState("ossm:editorMinimap", true, localStorage);
@@ -112,9 +112,6 @@ export default function EditorPage() {
   const [calcShown, setCalcShown] = usePersistedState("ossm:editorCalcShown", false, localStorage);
   /** The advanced editor shows times from its 0, earlier ones negative; only as shown, the points keep the main script's times. */
   const [fromZero, setFromZero] = usePersistedState("ossm:editorFromZero", false, localStorage);
-  /** The advanced editor's marker lane and Markers panel take presses, and B adds a bookmark, editing the main script's markers. */
-  const [markersUnlocked, setMarkersUnlocked] = usePersistedState("ossm:editorMarkersUnlocked", false, localStorage);
-  const markersLocked = !!advanced && !markersUnlocked;
   /** In the advanced editor, points are added and dragged onto the nearest bookmark's time; only with bookmarks. */
   const [onMarkers, setOnMarkers] = usePersistedState("ossm:editorOnMarkers", false, localStorage);
   useEffect(() => {
@@ -130,7 +127,7 @@ export default function EditorPage() {
     let frame = requestAnimationFrame(function tick() {
       const t = (media.videoRef.current?.currentTime ?? 0) * 1000;
       media.setTime(t);
-      setView((v) => ({ ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) }));
+      setView((v) => bringIntoView(v, t));
       frame = requestAnimationFrame(tick);
     });
     return () => cancelAnimationFrame(frame);
@@ -160,8 +157,9 @@ export default function EditorPage() {
     setSelected(new Set());
     setBox(null);
   } });
+  const markersLocked = !!advanced && !markers.unlocked;
   useEffect(() => {
-    if (selected.size || regionsOn.size) markers.setMarked(new Set());
+    if (selected.size || regionsOn.size) markers.clearMarked();
   }, [selected, regionsOn]);
   useEffect(() => {
     if (markers.marked.size) setRegionsOn(new Set());
@@ -210,7 +208,7 @@ export default function EditorPage() {
     setBox(boxMode && (points.size || rs.size) ? boxed(boxAround([...points].map((i) => actions[i]), [...rs])) : null, actions);
     setPlacing(null);
     setLifted(null);
-    if (span) setView((v) => (span.to < v.from || span.from > v.from + v.span ? { ...v, from: Math.max(span.from - v.span * FOLLOW_AT, 0) } : v));
+    if (span) setView((v) => (span.to < v.from || span.from > v.from + v.span ? bringIntoView(v, span.from) : v));
   };
   /** The points and markers as last saved, opened or started anew; unknown after a reload with unsaved changes. */
   const [unsaved, setUnsaved] = usePersistedState("ossm:editorUnsaved", false, localStorage);
@@ -502,7 +500,7 @@ export default function EditorPage() {
       if (gridOpen) setGridOpen(false);
       else {
         select([]);
-        markers.setMarked(new Set());
+        markers.clearMarked();
         setBox(null);
       }
     } else if (e.key.startsWith("Arrow") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.defaultPrevented && !dragging && (selected.size || chosen.length)) {
@@ -581,7 +579,7 @@ export default function EditorPage() {
     setTimeline(startedAt({ ...doc, chapters, bookmarks }, library, "Open"));
     setAdvanced({ ...doc, zero, from, snippet, instance: instance && regions.indexOf(instance) });
     select([]);
-    markers.setMarked(new Set());
+    markers.clearMarked();
     setBox(null);
   };
 
@@ -715,7 +713,7 @@ export default function EditorPage() {
       const { actions: _, ...rest } = JSON.parse(await file.text()) as Record<string, unknown>;
       setLifted(null);
       setSelected(new Set());
-      markers.setMarked(new Set());
+      markers.clearMarked();
       const opened = Array.from(parsed.at, (at, i) => ({ at, pos: parsed.pos[i] }));
       const fileMarkers = readMarkers(rest, Math.max(opened[opened.length - 1].at, media.videoDuration));
       // Taken as they are, never generated again.
@@ -836,6 +834,7 @@ export default function EditorPage() {
     media.seek(t);
   };
 
+  const { videoFile } = media;
   const sidebar = (
     // At least the panel's height, so the buttons docked at its bottom sit there.
     <Flex direction="column" gap="3" p="3" minHeight="100%">
@@ -860,7 +859,7 @@ export default function EditorPage() {
             if (!discardable()) return;
             setLifted(null);
             setSelected(new Set());
-            markers.setMarked(new Set());
+            markers.clearMarked();
             setSaved(EMPTY);
             setScript(EMPTY);
             setTimeline(withLibraryChanges(startedAt(EMPTY, timeline.states[0].library, "New script"), timeline));
@@ -891,14 +890,14 @@ export default function EditorPage() {
       <Box>
         <Text as="label" size="2" weight="medium" mb="1" style={{ display: "block" }} htmlFor="editor-name">Name</Text>
         <TextField.Root id="editor-name" value={script.name} onChange={(e) => setScript({ ...script, name: e.target.value })}>
-          {media.videoFile && (
+          {videoFile && (
             <TextField.Slot side="right">
               <IconButton
                 size="1"
                 variant="ghost"
                 aria-label="Name after the media"
                 title="Name after the media"
-                onClick={() => setScript({ ...script, name: media.videoFile!.name.replace(/\.[^.]+$/, "") })}
+                onClick={() => setScript({ ...script, name: videoFile.name.replace(/\.[^.]+$/, "") })}
               >
                 <VideoIcon />
               </IconButton>
@@ -1005,9 +1004,6 @@ export default function EditorPage() {
       )}
     </Flex>
   );
-
-  /** Whether the time from `from` to `to` is in view, to draw only the markers there. */
-  const inView = (from: number, to: number) => to >= view.from && from <= view.from + view.span;
 
   const light = lightChapters(chapters);
 
@@ -1348,13 +1344,9 @@ export default function EditorPage() {
           markers={markers}
           chapters={chapters}
           bookmarks={bookmarks}
-          view={view}
           viewport={viewport}
           locked={markersLocked}
-          lock={advanced ? { unlocked: markersUnlocked, toggle: () => {
-            setMarkersUnlocked(!markersUnlocked);
-            markers.setMarked(new Set());
-          } } : null}
+          lock={advanced ? { unlocked: markers.unlocked, toggle: markers.toggleLock } : null}
         />
       </Flex>
       {minimap ? (

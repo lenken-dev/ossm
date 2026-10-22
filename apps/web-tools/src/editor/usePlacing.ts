@@ -3,7 +3,7 @@ import { clamp, type Action } from "../funscript/model";
 import { afterTime, byTime, items, markersRegions, movedBy, regionAt, type Area, type Placing, type Region, type Script } from "./model";
 import { refilled } from "./generate";
 import type { Tools } from "./useTool";
-import type { Viewport } from "./viewport";
+import type { View, Viewport } from "./viewport";
 
 /** What is being placed: the points following the pointer or a drag until placed, the stretch lifted for a move, and where they would land. */
 export interface Placement {
@@ -87,7 +87,7 @@ export interface Placement {
  */
 export function usePlacing({ script, view, viewport, selected, regionsOn, boxMode, onMarkers, gridAt, gridPos, preview, placing, setPlacing, edit, select, setBox, fitBox }: {
   script: Script;
-  view: { from: number; span: number };
+  view: View;
   viewport: Viewport;
   selected: Set<number>;
   regionsOn: Set<Region>;

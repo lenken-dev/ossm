@@ -1,15 +1,22 @@
 import { useRef, useState, type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
+import { usePersistedState } from "../hooks/usePersistedState";
 import { clamp } from "../funscript/model";
 import type { Bookmark, Chapter, Marker } from "../funscript/markers";
 import { swapped, type Script } from "./model";
 import { withBookmarks } from "./generate";
 import type { Viewport } from "./viewport";
 
-/** The marker selection, and the marker lane's and the Markers panel's edits of the chapters and bookmarks. */
+/** The marker selection, the marker lane's and the Markers panel's edits of the chapters and bookmarks, and their lock in the advanced editor. */
 export interface Markers {
   /** The selected markers, moved, renamed and deleted together: a chapter, or bookmarks; selecting points or regions clears them, and they the regions. */
   marked: Set<Marker>;
   setMarked: Dispatch<SetStateAction<Set<Marker>>>;
+  /** Select no markers. */
+  clearMarked(): void;
+  /** The advanced editor's marker lane and Markers panel take presses, and B adds a bookmark, editing the main script's markers. */
+  unlocked: boolean;
+  /** Lock the advanced editor's markers, or unlock them, selecting none. */
+  toggleLock(): void;
   /** The marker last clicked without Shift, where a Shift+click range of bookmarks starts. */
   markerAnchor: RefObject<Marker | null>;
   /** Whether the pointer is over the marker lane, where Ctrl/Cmd+A selects all bookmarks. */
@@ -23,7 +30,9 @@ export interface Markers {
   setNaming: Dispatch<SetStateAction<Markers["naming"]>>;
   /** Select the markers `ms`, clearing the point selection. */
   selectMarkers(ms: Iterable<Marker>): void;
+  /** Whether the marker `m` is a chapter, else a bookmark. */
   isChapter(m: Marker): m is Chapter;
+  /** Where the marker `m` is: a chapter's start, or a bookmark's time. */
   timeOf(m: Marker): number;
   /**
    * Add a bookmark at `time` ms, with the last used name, and select it.
@@ -51,6 +60,7 @@ export interface Markers {
    * next one's.
    */
   rename(ms: Marker[]): void;
+  /** Delete the markers `ms` as one edit, selecting none. */
   removeMarkers(ms: Marker[]): void;
   /** Close the name field with the accepted `name`, or null to keep the old one. */
   closeNaming(name: string | null): void;
@@ -77,6 +87,12 @@ export function useMarkers({ chapters, bookmarks, edit, setDragging, viewport, l
 }): Markers {
   const { pointerAt, track } = viewport;
   const [marked, setMarked] = useState<Set<Marker>>(() => new Set());
+  const clearMarked = () => setMarked(new Set());
+  const [unlocked, setUnlocked] = usePersistedState("ossm:editorMarkersUnlocked", false, localStorage);
+  const toggleLock = () => {
+    setUnlocked(!unlocked);
+    clearMarked();
+  };
   const markerAnchor = useRef<Marker | null>(null);
   const overLane = useRef(false);
   /** What a new bookmark is called: the name last given to one, for this visit to the page; none until then. */
@@ -185,7 +201,7 @@ export function useMarkers({ chapters, bookmarks, edit, setDragging, viewport, l
 
   const removeMarkers = (ms: Marker[]) => {
     edit(ms.length > 1 ? `Delete ${ms.length} bookmarks` : `Delete ${isChapter(ms[0]) ? "chapter" : "bookmark"} "${ms[0].name}"`, (s) => withBookmarks({ ...s, chapters: s.chapters.filter((c) => !ms.includes(c)) }, s.bookmarks.filter((b) => !ms.includes(b))));
-    setMarked(new Set());
+    clearMarked();
   };
 
   const closeNaming = (name: string | null) => {
@@ -233,5 +249,5 @@ export function useMarkers({ chapters, bookmarks, edit, setDragging, viewport, l
     }, scrolls);
   };
 
-  return { marked, setMarked, markerAnchor, overLane, naming, setNaming, selectMarkers, isChapter, timeOf, addBookmark, markerDown, markerPicked, rename, removeMarkers, closeNaming, laneDown };
+  return { marked, setMarked, clearMarked, unlocked, toggleLock, markerAnchor, overLane, naming, setNaming, selectMarkers, isChapter, timeOf, addBookmark, markerDown, markerPicked, rename, removeMarkers, closeNaming, laneDown };
 }

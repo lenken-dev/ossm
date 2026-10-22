@@ -6,7 +6,7 @@ import { afterTime, byTime, isInstance, isRepeat, regionAt, spanned, typed, type
 import { fastestOf, gridParams, scaled, scaleParams, shifted, shiftParams, speedLimited, type GridFields } from "./transforms";
 import { funcAt, GENERATE_DEFAULTS, generated, KNOT_GAP, ownScale, RANGED, rangeFields, rangeParams, REPEAT_DEFAULTS, repeated, repeatParams, SPANNED, splineAt, TOOLS, type Func, type FuncKey, type GenerateSetup, type GenPart, type Knots, type RepeatSetup, type ToolKind } from "./generate";
 import { UNDO_SIZE } from "./history";
-import { PAD, type Viewport } from "./viewport";
+import { PAD, type View, type Viewport } from "./viewport";
 
 /** Least and first height of the view of Generate's Interval or Speed below the graph, in px. */
 export const TIMING_HEIGHT = 80;
@@ -170,7 +170,7 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
   bookmarks: Bookmark[];
   zero: number;
   selected: Set<number>;
-  view: { from: number; span: number };
+  view: View;
   viewport: Viewport;
   advanced: boolean;
   placing: boolean;

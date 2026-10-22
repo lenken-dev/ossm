@@ -9,6 +9,15 @@ export const PAD = 10;
 /** Where the playhead stays in view while the video plays, as a fraction of the visible time. */
 export const FOLLOW_AT = 0.2;
 
+/** The visible time: where it starts and how long it is, in ms. */
+export interface View {
+  from: number;
+  span: number;
+}
+
+/** The view `v` moved to show the time `t` ms where the playhead stays while the video plays, from 0 on. */
+export const bringIntoView = (v: View, t: number): View => ({ ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) });
+
 /** Width of the graph's left and right edges where a drag scrolls it, in px, and its fastest scroll, in visible times per second. */
 const EDGE = 30;
 const EDGE_SPEED = 1.5;
@@ -21,6 +30,8 @@ export interface Viewport {
   plotHeight: number;
   x(at: number): number;
   y(pos: number): number;
+  /** Whether the time from `from` to `to` is in view, to draw only what is there. */
+  inView(from: number, to: number): boolean;
   /** The script time and position under the pointer, in the latest view. */
   pointerAt(e: { clientX: number; clientY: number }): { at: number; pos: number };
   /**
@@ -42,8 +53,8 @@ export interface Viewport {
 /** The graph's viewport: `boxRef`'s measured size and the visible time, `view`, which a drag at an edge scrolls with `setView`. */
 export function useViewport(
   boxRef: RefObject<HTMLDivElement | null>,
-  view: { from: number; span: number },
-  setView: Dispatch<SetStateAction<{ from: number; span: number }>>,
+  view: View,
+  setView: Dispatch<SetStateAction<View>>,
 ): Viewport {
   const { width, height } = useElementSize(boxRef);
   /** The latest view, for drags, which read it between renders as they scroll it; `x` and `y` draw the view as rendered. */
@@ -52,6 +63,7 @@ export function useViewport(
   const plotHeight = height - AXIS;
   const x = (at: number) => ((at - view.from) / view.span) * width;
   const y = (pos: number) => PAD + (1 - pos / 100) * (plotHeight - 2 * PAD);
+  const inView = (from: number, to: number) => to >= view.from && from <= view.from + view.span;
   const pointerAt = (e: { clientX: number; clientY: number }) => {
     const rect = boxRef.current!.getBoundingClientRect();
     const { from, span } = viewRef.current;
@@ -98,5 +110,5 @@ export function useViewport(
     });
   };
 
-  return { width, height, plotHeight, x, y, pointerAt, track };
+  return { width, height, plotHeight, x, y, inView, pointerAt, track };
 }

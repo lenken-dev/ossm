@@ -13,23 +13,20 @@ const SELECTED_MARKER = { outline: "2px solid var(--accent-9)", outlineOffset: -
 const MARKER_GRIP = 6;
 
 /**
- * The marker lane below the graph, in its time `view` across the `viewport`,
+ * The marker lane below the graph, in the `viewport`'s time,
  * with the `markers`' selection, presses and name field; `locked`, it takes
  * no presses, and `lock`, in the advanced editor, is the lock beside it.
  */
-export function MarkerLane({ markers, chapters, bookmarks, view, viewport, locked, lock }: {
+export function MarkerLane({ markers, chapters, bookmarks, viewport, locked, lock }: {
   markers: Markers;
   chapters: Chapter[];
   bookmarks: Bookmark[];
-  view: { from: number; span: number };
   viewport: Viewport;
   locked: boolean;
   lock: { unlocked: boolean; toggle: () => void } | null;
 }) {
   const { marked, overLane, naming, setNaming, markerDown, closeNaming, laneDown } = markers;
-  const { x, width } = viewport;
-  /** Whether the time from `from` to `to` is in view, to draw only the markers there. */
-  const inView = (from: number, to: number) => to >= view.from && from <= view.from + view.span;
+  const { x, width, inView } = viewport;
 
   const light = lightChapters(chapters);
 

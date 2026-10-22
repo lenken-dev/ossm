@@ -2,6 +2,7 @@ import { useMemo, useRef, type PointerEvent, type RefObject } from "react";
 import { dragSeeking } from "../drag";
 import { useElementSize } from "../hooks/useElementSize";
 import { bandOf, type Region } from "../editor/model";
+import type { View } from "../editor/viewport";
 import { lightChapters, markerColor, type Bookmark, type Chapter } from "./markers";
 import { LINE_COLOR, type Action } from "./model";
 
@@ -26,7 +27,7 @@ export function Minimap({ actions, total, chapters, bookmarks, window: { from, s
   total: number;
   chapters: Chapter[];
   bookmarks: Bookmark[];
-  window: { from: number; span: number };
+  window: View;
   onDrag: (from: number, playing: boolean) => void;
   playheadAt: number | null;
   media?: RefObject<HTMLMediaElement | null>;

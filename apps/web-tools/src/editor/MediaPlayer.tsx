@@ -7,7 +7,7 @@ import { clamp, type Action } from "../funscript/model";
 import { dragHeight } from "../drag";
 import { ResizeGrip } from "../widgets";
 import { byTime } from "./model";
-import { FOLLOW_AT } from "./viewport";
+import { bringIntoView, FOLLOW_AT, type View } from "./viewport";
 
 /** Default and smallest height of the reference video, in px. */
 const VIDEO_HEIGHT = 300;
@@ -57,7 +57,7 @@ export interface Media {
  * and seek steps, kept across reloads, and the playhead's time; seeking while
  * paused brings the playhead into the view `setView` sets.
  */
-export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; span: number }>>): Media {
+export function useMediaPlayer(setView: Dispatch<SetStateAction<View>>): Media {
   const videoRef = useRef<HTMLMediaElement>(null);
   /** Separate from the player's sizes. */
   const [normalHeight, setNormalHeight] = usePersistedState("ossm:editorVideoHeight", VIDEO_HEIGHT, localStorage);
@@ -97,16 +97,16 @@ export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; 
   const seeked = () => {
     const t = (videoRef.current?.currentTime ?? 0) * 1000;
     setTime(t);
-    setView((v) => (t < v.from || t > v.from + v.span ? { ...v, from: Math.max(t - v.span * FOLLOW_AT, 0) } : v));
+    setView((v) => (t < v.from || t > v.from + v.span ? bringIntoView(v, t) : v));
   };
 
   const dragVideoHeight = (e: PointerEvent<HTMLElement>) => dragHeight(e, videoHeight, setVideoHeight, VIDEO_MIN_HEIGHT);
 
   const seek = (t: number) => {
-    const media = videoRef.current;
-    if (!media) return;
-    t = clamp(t, 0, (media.duration || 0) * 1000);
-    media.currentTime = t / 1000;
+    const element = videoRef.current;
+    if (!element) return;
+    t = clamp(t, 0, (element.duration || 0) * 1000);
+    element.currentTime = t / 1000;
     setTime(t);
   };
 
@@ -129,7 +129,7 @@ export function useMediaPlayer(setView: Dispatch<SetStateAction<{ from: number; 
  * controls, `view` for moving the playhead into view and `actions` for the
  * previous and next point; and the file input `media.chooseFile` opens.
  */
-export function MediaPlayer({ media, actions, view }: { media: Media; actions: Action[]; view: { from: number; span: number } }) {
+export function MediaPlayer({ media, actions, view }: { media: Media; actions: Action[]; view: View }) {
   const { videoRef, videoUrl, isAudio, paused, pip, playerShown, videoHeight, steps, setSteps, shownSteps, time, seek, dragVideoHeight, mediaProps, fileInput } = media;
   /** The point after (`dir` 1) or before (-1) the playhead; half a ms of slack for the media's rounding. */
   const neighbour = (dir: 1 | -1) => actions[dir > 0 ? byTime(actions, time + 0.5) : byTime(actions, time - 0.5) - 1];

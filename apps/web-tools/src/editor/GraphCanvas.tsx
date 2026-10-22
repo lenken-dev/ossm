@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from "react";
 import { useThemeContext } from "@radix-ui/themes";
 import { LINE_COLOR, type Action } from "../funscript/model";
 import { byTime, regionAt, type Region } from "./model";
-import type { Viewport } from "./viewport";
+import type { View, Viewport } from "./viewport";
 
 /** Below this average spacing between the points in view, in px, the points are not drawn, only the line. */
 const DOT_SPACING = 6;
@@ -20,7 +20,7 @@ const RING_LIMIT = 50;
  */
 export function GraphCanvas({ viewport, view, context, visible, first, marks, shownRegions, lit, dashed, apart, removed, muted, dotsAllowed, astray }: {
   viewport: Viewport;
-  view: { from: number; span: number };
+  view: View;
   context: Action[][];
   visible: Action[];
   first: number;
