@@ -166,7 +166,7 @@ export interface Tools {
  * The advanced editor's tools on `actions`, `regions` and `bookmarks`, times
  * shown from `zero`: on the `selected` points, or `view`'s time, its result
  * applied as an `edit` that `select`s or `setSelected`s it; opening one
- * drops the selection box with `setBox`, not while `placing`. Its handles'
+ * drops the selection box with `setBox`, not while `placing()`. Its handles'
  * drags follow the `viewport` as one `setDragging` drag, after which its
  * undo history takes a step. Editing an instance region is `onEditInstance`.
  * The grid only in the `advanced` editor.
@@ -180,7 +180,7 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
   view: View;
   viewport: Viewport;
   advanced: boolean;
-  placing: boolean;
+  placing: () => boolean;
   edit: (label: string, next: SetStateAction<Script>) => void;
   select: (ps: Iterable<number>, rs?: Iterable<Region>) => void;
   setSelected: (selected: Set<number>) => void;
@@ -274,7 +274,7 @@ export function useTool({ actions, regions, bookmarks, zero, selected, view, vie
   };
 
   const editRegion = (r: Region) => {
-    if (placing) return;
+    if (placing()) return;
     if (isInstance(r)) return onEditInstance(r);
     if (isRepeat(r)) {
       const { pattern, length, bottom, top, ...setup } = r.repeat;

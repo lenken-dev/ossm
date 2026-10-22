@@ -8,9 +8,11 @@ import type { Viewport } from "./viewport";
 export interface Selecting {
   /** Indices of the selected points, moved together with the selected regions and deleted with the Delete key. */
   selected: Set<number>;
+  /** Set the selected points alone, the selected regions staying. */
   setSelected: Dispatch<SetStateAction<Set<number>>>;
   /** The selected regions, selected, moved and deleted with the points; only while in the script. */
   regionsOn: Set<Region>;
+  /** Set the selected regions alone, the selected points staying. */
   setRegionsOn: Dispatch<SetStateAction<Set<Region>>>;
   /** Select the points `ps` and the regions `rs`, and nothing else. */
   select(ps: Iterable<number>, rs?: Iterable<Region>): void;
@@ -28,9 +30,14 @@ export interface Selecting {
   boxMode: boolean;
   /** Selection mode's box selects by time: it takes in whole stretches of the script, whatever their depth. */
   selectByTime: boolean;
+  /** Switch selecting by time on or off; kept across reloads. */
   setSelectByTime: Dispatch<SetStateAction<boolean>>;
+  /** The selection box, while the points are those it was drawn on. */
   box: Area | null;
+  /** Show `area` as the selection box, or none for null, drawn on the points `on`, the current ones by default. */
   setBox(area: Area | null, on?: Action[]): void;
+  /** In selection mode, fit the box around the points `ps` and the regions `rs`, drawn on the points `on`. */
+  fitBox(ps: Action[], rs: Region[], on?: Action[]): void;
   /** The selection box's sides, in px. */
   edges: { from: number; to: number; low: number; high: number } | null;
   /** Show `area` as the selection box and select the points and regions in it and in `base`. */
@@ -65,13 +72,13 @@ export interface Selecting {
 /**
  * The selection of the `actions`' points, but the `regions`' ones, and of the
  * regions, and selection mode's box, drawn and dragged on the `viewport`;
- * selection mode does not switch while `placing`.
+ * selection mode does not switch while `placing()`.
  */
 export function useSelection({ actions, regions, viewport, placing }: {
   actions: Action[];
   regions: Region[];
   viewport: Viewport;
-  placing: boolean;
+  placing: () => boolean;
 }): Selecting {
   const { x, y, pointerAt, track } = viewport;
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
@@ -115,6 +122,10 @@ export function useSelection({ actions, regions, viewport, placing }: {
   const boxAround = (ps: Action[], rs: Region[]): Area => {
     const area = ps.length ? ps.reduce(extended, spanned(ps[0], ps[0])) : { from: Infinity, to: -Infinity, low: 0, high: 100 };
     return { ...area, from: Math.min(area.from, ...rs.map((r) => r.from)), to: Math.max(area.to, ...rs.map((r) => r.to)) };
+  };
+
+  const fitBox = (ps: Action[], rs: Region[], on?: Action[]) => {
+    if (boxMode) setBox(boxed(boxAround(ps, rs)), on);
   };
 
   const boxSelect = (e: PointerEvent<SVGSVGElement>, click = () => select([])) => {
@@ -167,11 +178,11 @@ export function useSelection({ actions, regions, viewport, placing }: {
   };
 
   const toggleBoxMode = () => {
-    if (placing) return;
+    if (placing()) return;
     setBoxMode(!boxMode);
     if (!boxMode && (selected.size || chosen.length)) selectIn(boxed(boxAround([...selected].map((i) => actions[i]), chosen)));
     else setBox(null);
   };
 
-  return { selected, setSelected, regionsOn, setRegionsOn, select, chosen, region, copyable, boxMode, selectByTime, setSelectByTime, box, setBox, edges, selectIn, boxed, boxAround, boxSelect, editBox, picked, toggleBoxMode };
+  return { selected, setSelected, regionsOn, setRegionsOn, select, chosen, region, copyable, boxMode, selectByTime, setSelectByTime, box, setBox, fitBox, edges, selectIn, boxed, boxAround, boxSelect, editBox, picked, toggleBoxMode };
 }

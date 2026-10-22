@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
 import { clamp, type Action } from "../funscript/model";
-import { afterTime, byTime, items, markersRegions, movedBy, regionAt, type Area, type Placing, type Region, type Script } from "./model";
+import { afterTime, byTime, items, markersRegions, movedBy, regionAt, stretchOf, type Area, type Placing, type Region, type Script } from "./model";
 import { refilled } from "./generate";
 import type { Tools } from "./useTool";
 import type { View, Viewport } from "./viewport";
 
 /** What is being placed: the points following the pointer or a drag until placed, the stretch lifted for a move, and where they would land. */
 export interface Placement {
+  /**
+   * Points being placed, timed from the first, with the regions they carry,
+   * following the pointer until a click or a drag's release places them; with
+   * the `picked` ones of them, the selection being moved, which alone take the
+   * depth change and are selected once placed (all without), what the edit
+   * is called and, moved or added, the time its first point came from.
+   */
+  placing: Placing | null;
+  setPlacing: Dispatch<SetStateAction<Placing | null>>;
   /**
    * The stretch of the script being moved, from its first to its last
    * selected item, left out of the script with every point and region in it,
@@ -44,20 +53,15 @@ export interface Placement {
   carry(e: PointerEvent<Element>, start: Action | null, ps?: number[], rs?: Region[], grabbed?: number): void;
   /** Stop placing points; moved ones go back where they were, still selected, in selection mode with the box around them. */
   cancelPlacing(): void;
-  /**
-   * Put `pasted` into the script, inserting or replacing, with the regions
-   * they carry, each with its own copy of the setup, and select the picked
-   * ones; in selection mode, with the box around them.
-   */
-  put(pasted: Action[], insert: boolean): void;
-  /** A click places what is being placed at the pointer, where it lands, unless refused there. */
+  /** Put what is being placed in at the pointer, where it lands, unless refused there. */
+  putAt(e: PointerEvent<Element>): void;
+  /** A click places what is being placed at the pointer, as `putAt`. */
   place(e: PointerEvent<SVGRectElement>): void;
-  /** What is being placed at the pointer where it lands, null where refused, and whether it would insert, by the modifiers held. */
-  landedAt(e: { clientX: number; clientY: number; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): readonly [Action[] | null, boolean];
   /** The points being placed where the pointer puts them. */
   ghost: Action[] | null;
   /** Where they go in; none where they can't, as they would cut into a region, and they show red. */
   landed: Action[] | null;
+  /** Whether they can't go in where the pointer puts them. */
   refused: boolean;
   /** The points as drawn: placing, as they would be once placed. */
   shown: Action[];
@@ -71,31 +75,31 @@ export interface Placement {
   astray: { points: Action[]; span: number[]; carried: Region[] } | null;
   /** Replacing, the line through the points they would take out, from the point before to the one after, drawn faint red and dashed, as removed points in the undo history. */
   removed: Action[] | null;
+  /** The point being placed or dragged apart dragged by, else the first, where it came from: a paste's depth alone, as it came from no time. */
+  dragged: { at: number | undefined; pos: number } | undefined;
 }
 
 /**
- * What is being placed, `placing` as `setPlacing` sets it, on the
- * `viewport`'s time and depth, and the `script`'s stretch lifted to move it:
- * lifting `select`s nothing and drops the box with `setBox`; put in as an
- * `edit`, the picked ones are selected, in `boxMode` with `fitBox` around
- * them. It snaps to the grid by `gridAt` and `gridPos`, or `onMarkers` to the
- * nearest bookmark, and keeps off the regions it would cut into while their
- * edges are in `view`. Drawn as it would go in, else as the tool's `preview`
- * or the script, with the `selected` points and `regionsOn`.
+ * What is being placed, on the `viewport`'s time and depth, and the
+ * `script`'s stretch lifted to move it: lifting `select`s nothing and drops
+ * the box with `setBox`; put in as an `edit`, the picked ones are selected,
+ * with `fitBox` around them. It snaps to the grid by `gridAt` and `gridPos`,
+ * or `onMarkers` to the nearest bookmark, and keeps off the regions it would
+ * cut into while their edges are in `view`. Drawn as it would go in, else as
+ * the tool's `preview` or the script, with the `selected` points and
+ * `regionsOn`. A selection dragged apart is dragged by `apartGrip`.
  */
-export function usePlacing({ script, view, viewport, selected, regionsOn, boxMode, onMarkers, gridAt, gridPos, preview, placing, setPlacing, edit, select, setBox, fitBox }: {
+export function usePlacing({ script, view, viewport, selected, regionsOn, onMarkers, gridAt, gridPos, preview, apartGrip, edit, select, setBox, fitBox }: {
   script: Script;
   view: View;
   viewport: Viewport;
   selected: Set<number>;
   regionsOn: Set<Region>;
-  boxMode: boolean;
   onMarkers: boolean;
   gridAt: (at: number) => number;
   gridPos: (pos: number) => number;
   preview: Tools["preview"];
-  placing: Placing | null;
-  setPlacing: Dispatch<SetStateAction<Placing | null>>;
+  apartGrip: Action | undefined;
   edit: (label: string, next: SetStateAction<Script>) => void;
   select: (ps: Iterable<number>, rs?: Iterable<Region>) => void;
   setBox: (area: Area | null) => void;
@@ -103,6 +107,7 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
 }): Placement {
   const { actions, bookmarks, regions } = script;
   const { x, y, pointerAt, track } = viewport;
+  const [placing, setPlacing] = useState<Placing | null>(null);
   const [lifted, setLifted] = useState<Placement["lifted"]>(null);
   const [placeAt, setPlaceAt] = useState<Action | null>(null);
   const carrying = useRef(false);
@@ -130,8 +135,7 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
    * Returns its first point; null when it has none, as there is nothing to place.
    */
   const lift = (ps: number[], rs: Region[], grabbed?: number) => {
-    const times = [...ps.map((i) => actions[i].at), ...rs.flatMap((r) => [r.from, r.to])];
-    const [from, to] = [Math.min(...times), Math.max(...times)];
+    const { from, to } = stretchOf(ps.map((i) => actions[i]), rs);
     const [lo, hi] = [byTime(actions, from), afterTime(actions, to)];
     if (lo === hi) return null;
     const first = actions[lo];
@@ -172,7 +176,7 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
   const cancelPlacing = () => {
     if (lifted) {
       select(lifted.points, lifted.regions);
-      if (boxMode) fitBox([...lifted.points].map((i) => actions[i]), lifted.regions);
+      fitBox([...lifted.points].map((i) => actions[i]), lifted.regions);
     }
     setPlacing(null);
     setLifted(null);
@@ -321,6 +325,11 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
     };
   }, [placing]);
 
+  /**
+   * Put `pasted` into the script, inserting or replacing, with the regions
+   * they carry, each with its own copy of the setup, and select the picked
+   * ones; in selection mode, with the box around them.
+   */
   const put = (pasted: Action[], insert: boolean) => {
     const { before, after, regions } = around(pasted, insert);
     const { placed, carried, points: own, regions: picked } = goingIn(pasted);
@@ -329,19 +338,24 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
     const next = [...before, ...placed, ...after];
     edit(placing!.label ?? `${lifted ? "Move" : "Paste"} ${items(own.length, chosenCopies)}`, { ...script, actions: next, regions: copies.length ? [...regions, ...copies].sort((a, b) => a.from - b.from) : regions });
     select(own.map((j) => before.length + j), chosenCopies);
-    if (boxMode) fitBox(own.map((j) => placed[j]), chosenCopies, next);
+    fitBox(own.map((j) => placed[j]), chosenCopies, next);
     setPlacing(null);
     setLifted(null);
+  };
+
+  const putAt = (e: PointerEvent<Element>) => {
+    const [pasted, insert] = landedAt(e);
+    if (pasted) put(pasted, insert);
   };
 
   const place = (e: PointerEvent<SVGRectElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    const [pasted, insert] = landedAt(e);
-    if (pasted) put(pasted, insert);
+    putAt(e);
   };
 
+  /** What is being placed at the pointer where it lands, null where refused, and whether it would insert, by the modifiers held. */
   const landedAt = (e: { clientX: number; clientY: number; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
     const point = pointerAt(e);
     const insert = !e.shiftKey;
@@ -364,6 +378,7 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
     const [lo, hi] = [byTime(kept, start), afterTime(kept, end)];
     return lo < hi ? kept.slice(Math.max(lo - 1, 0), hi + 1) : null;
   })() : null;
+  const dragged = placing && placeAt ? { at: placing.from === undefined ? undefined : placing.from + placing.actions[placing.grip ?? 0].at, pos: placing.actions[placing.grip ?? 0].pos } : apartGrip;
 
   // A drag's release, or Done, goes in once rendered with where it lands; refused there, a drag goes back, and Done's result follows the pointer as a paste.
   useEffect(() => {
@@ -373,5 +388,5 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
     else if (settle === "drop") cancelPlacing();
   }, [settle]);
 
-  return { lifted, setLifted, placeAt, setPlaceAt, carrying, setSettle, held, setHeld, kept, carry, cancelPlacing, put, place, landedAt, ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed };
+  return { placing, setPlacing, lifted, setLifted, placeAt, setPlaceAt, carrying, setSettle, held, setHeld, kept, carry, cancelPlacing, putAt, place, ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed, dragged };
 }

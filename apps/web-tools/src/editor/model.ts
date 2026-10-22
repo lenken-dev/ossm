@@ -54,6 +54,12 @@ export const spanned = (a: Action, b: Action): Area => ({
   high: Math.max(a.pos, b.pos),
 });
 
+/** The time from the first to the last of the points `ps` and the regions `rs`. */
+export const stretchOf = (ps: Action[], rs: Region[]) => ({
+  from: Math.min(...ps.map((a) => a.at), ...rs.map((r) => r.from)),
+  to: Math.max(...ps.map((a) => a.at), ...rs.map((r) => r.to)),
+});
+
 /** `area` grown to take in `a`. */
 export const extended = (area: Area, a: Action): Area => ({
   from: Math.min(area.from, a.at),

@@ -116,7 +116,10 @@ export function useMediaPlayer(setView: Dispatch<SetStateAction<View>>): Media {
     controls: true,
     onPlay: () => setPaused(false),
     onPause: () => setPaused(true),
-    onEmptied: () => (setPaused(true), setVideoDuration(0)),
+    onEmptied: () => {
+      setPaused(true);
+      setVideoDuration(0);
+    },
     onDurationChange: () => setVideoDuration((videoRef.current?.duration || 0) * 1000),
     onSeeked: seeked,
   };
