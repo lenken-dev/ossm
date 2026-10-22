@@ -1,14 +1,6 @@
-import type { Marker } from "../funscript/markers";
-import type { Content, Region } from "./model";
+import { only, type Content, type Selection } from "./model";
 import type { Entry } from "./library";
 import { withBookmarks } from "./generate";
-
-/** What is selected: points by index, regions and markers. */
-interface Selection {
-  points: Set<number>;
-  regions: Set<Region>;
-  markers: Set<Marker>;
-}
 
 /** An undo history entry: the content after an edit, what the edit is called, the snippet library with it, and the selection last made on it. */
 interface Step extends Content {
@@ -59,10 +51,6 @@ export function changedSpan(a: Content, b: Content) {
   while (start < a.actions.length && start < b.actions.length && same(start, start)) start++;
   let end = 0;
   while (end < a.actions.length - start && end < b.actions.length - start && same(a.actions.length - 1 - end, b.actions.length - 1 - end)) end++;
-  const only = <T,>(p: T[], q: T[]) => {
-    const kept = new Set(q);
-    return p.filter((m) => !kept.has(m));
-  };
   const times = [a, b].flatMap((x) => x.actions.slice(start, x.actions.length - end).map((p) => p.at));
   for (const [p, q] of [[a, b], [b, a]]) {
     times.push(...only(p.chapters, q.chapters).flatMap((c) => [c.start, c.end]), ...only(p.bookmarks, q.bookmarks).map((m) => m.time), ...only(p.regions, q.regions).flatMap((r) => [r.from, r.to]));

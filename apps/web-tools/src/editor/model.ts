@@ -19,6 +19,13 @@ export interface Script {
 export type Content = Pick<Script, "actions" | "chapters" | "bookmarks" | "regions">;
 export const sameContent = (a: Content, b: Content) => a.actions === b.actions && a.chapters === b.chapters && a.bookmarks === b.bookmarks && a.regions === b.regions;
 
+/** What is selected: points by index, regions and markers. */
+export interface Selection {
+  points: Set<number>;
+  regions: Set<Region>;
+  markers: Set<Marker>;
+}
+
 /** `list` with the markers in `to` swapped for what they map to. */
 export const swapped = <T extends Marker>(list: T[], to: Map<Marker, Marker>) => list.map((m) => (to.get(m) as T | undefined) ?? m);
 
@@ -28,6 +35,15 @@ export const toggled = <T,>(item: T) => (set: Set<T>) => {
   if (!next.delete(item)) next.add(item);
   return next;
 };
+
+/** The items of `a` that `b` doesn't have, compared by `key`, else as they are. */
+export const only = <T,>(a: T[], b: T[], key: (m: T) => unknown = (m) => m) => {
+  const kept = new Set(b.map(key));
+  return a.filter((m) => !kept.has(key(m)));
+};
+
+/** A typed number; NaN when empty. */
+export const typed = (v: string) => (v.trim() ? Number(v) : NaN);
 
 /** A time range, in ms, and depth range. */
 export interface Area {
@@ -52,6 +68,12 @@ export const extended = (area: Area, a: Action): Area => ({
   low: Math.min(area.low, a.pos),
   high: Math.max(area.high, a.pos),
 });
+
+/** Out and In typed as depths, as positions `high` and `low`; null while one is refused: depths outside 0–100, or Out past In unless `flip`. */
+export function depthRange(out: string, inn: string, { flip = false } = {}) {
+  const [o, i] = [typed(out), typed(inn)];
+  return o >= 0 && o <= 100 && i >= 0 && i <= 100 && (flip || o <= i) ? { low: 100 - i, high: 100 - o } : null;
+}
 
 /**
  * A stretch of points made by Generate: its box, times in whole ms, and its
@@ -91,8 +113,9 @@ export type Inner = (Generated | Repeated) & { name?: string };
 export type Region = Inner | Instance;
 export const isInstance = (r: Region): r is Instance => "snippet" in r;
 export const isRepeat = (r: Region): r is Repeated => "repeat" in r;
+export const isGenerated = (r: Region): r is Generated => "generate" in r;
 /** The Markers regions of `regions` and in their instances: those that put points on the bookmarks. */
-export const markersRegions = (regions: Region[]) => generators(regions).filter((r): r is Generated => "generate" in r && r.generate.timing === "markers");
+export const markersRegions = (regions: Region[]) => generators(regions).filter((r): r is Generated => isGenerated(r) && r.generate.timing === "markers");
 /** What the undo history calls `r`: a region, or a snippet by its name. */
 export const regionNoun = (r: Region) => (isInstance(r) ? `snippet "${r.snippet.name}"` : r.name ? `region "${r.name}"` : "region");
 
@@ -126,7 +149,7 @@ export type Placing = Clip & { picked?: { actions: boolean[]; regions: boolean[]
 export const items = (n: number, rs: Region[]) => [n ? points(n) : "", rs.length === 1 ? regionNoun(rs[0]) : rs.length ? `${rs.length} regions` : ""].filter(Boolean).join(" and ");
 
 /** `clip` moved `dt` ms in time, its regions with it. */
-export const clipBy =(clip: Clip, dt: number): Clip => ({ actions: clip.actions.map((a) => ({ at: a.at + dt, pos: a.pos })), regions: clip.regions.map((r) => movedBy(r, dt)) });
+export const clipBy = (clip: Clip, dt: number): Clip => ({ actions: clip.actions.map((a) => ({ at: a.at + dt, pos: a.pos })), regions: clip.regions.map((r) => movedBy(r, dt)) });
 
 /** What made a region, after the timing that placed its points. */
 export const regionKind = (r: Region) => (isInstance(r) ? "Snippet" : isRepeat(r) ? `Repeat · ×${r.repeat.count}` : `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`);

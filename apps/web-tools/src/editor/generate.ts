@@ -1,7 +1,6 @@
 import { clamp, type Action } from "../funscript/model";
 import type { Bookmark } from "../funscript/markers";
-import { afterTime, byTime, markersRegions, type Area, type Content, type Generated } from "./model";
-import { typed } from "./transforms";
+import { afterTime, byTime, depthRange, markersRegions, typed, type Area, type Content, type Generated } from "./model";
 
 /** The shapes a Generate function can take, their names, small graphs (32×16) and fields, in the order shown. */
 export const SHAPES = {
@@ -331,15 +330,15 @@ export function repeated(setup: RepeatSetup, from: number, pattern: Action[], le
 
 /** Repeat's box fields as numbers, Length in whole ms from shown seconds, Out and In typed as depths, as positions `top` and `bottom`; null while one is refused: a Length not above 0, or depths outside 0–100 or Out past In. */
 export function repeatParams(fields: { length: string; out: string; in: string }) {
-  const [length, out, inn] = [Math.round(typed(fields.length) * 1000), typed(fields.out), typed(fields.in)];
-  return length > 0 && out >= 0 && out <= inn && inn <= 100 ? { length, bottom: 100 - inn, top: 100 - out } : null;
+  const [length, depths] = [Math.round(typed(fields.length) * 1000), depthRange(fields.out, fields.in)];
+  return length > 0 && depths ? { length, bottom: depths.low, top: depths.high } : null;
 }
 
 /** Generate's range fields as numbers, its times in ms from shown seconds, Out and In typed as depths, as positions; null while one is refused: times before 0, To before From, or depths outside 0–100 or Out past In. */
 export function rangeParams(fields: { from: string; to: string; out: string; in: string }, zero: number): Area | null {
   const [from, to] = [Math.round(typed(fields.from) * 1000) + zero, Math.round(typed(fields.to) * 1000) + zero];
-  const [out, inn] = [typed(fields.out), typed(fields.in)];
-  return from >= 0 && to >= from && out >= 0 && out <= inn && inn <= 100 ? { from, to, low: 100 - inn, high: 100 - out } : null;
+  const depths = depthRange(fields.out, fields.in);
+  return from >= 0 && to >= from && depths ? { from, to, ...depths } : null;
 }
 
 /** Generate's range fields for `area`, its times in seconds from `zero`, its positions as depths. */

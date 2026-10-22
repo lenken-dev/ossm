@@ -4,8 +4,7 @@ import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ResetIcon, ShuffleIco
 import { formatScriptTime } from "../funscript/time";
 import { clamp, LINE_COLOR, points, speed, type Action } from "../funscript/model";
 import { markerColor, type Bookmark } from "../funscript/markers";
-import { regionAt, type Region } from "./model";
-import { typed } from "./transforms";
+import { regionAt, typed, type Region } from "./model";
 import { extent, GENERATE_DEFAULTS, newSeed, ownScale, REPEAT_DEFAULTS, reshaped, SHAPES, SPANNED, TOOLS, type Func, type FuncKey, type GenerateSetup, type GenPart, type Shape, type ShapeField } from "./generate";
 import type { Tools } from "./useTool";
 

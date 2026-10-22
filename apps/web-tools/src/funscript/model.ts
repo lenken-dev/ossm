@@ -5,12 +5,15 @@ export interface Action {
   pos: number;
 }
 
+/** The script's line colour, in the player's and the editor's graphs. */
 export const LINE_COLOR = "#ec4899";
 /** The machine line's colour, beside the script's line in the player's graph. */
 export const MACHINE_COLOR = "#22d3ee";
+/** `v` kept within `lo`–`hi`. */
 export const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 /** The speed from `a` to `b`, in depth per second. */
 export const speed = (a: Action, b: Action) => (Math.abs(b.pos - a.pos) / (b.at - a.at)) * 1000;
+/** `n` points, in words: "1 point", "2 points". */
 export const points = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
 
 /** Stats of picked points, sorted; speeds only over moves between picked neighbours, the average their travel over their time. */

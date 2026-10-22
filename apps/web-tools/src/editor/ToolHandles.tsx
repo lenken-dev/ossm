@@ -2,7 +2,7 @@ import type { PointerEvent } from "react";
 import { Box } from "@radix-ui/themes";
 import { clamp, LINE_COLOR } from "../funscript/model";
 import { dragHeight } from "../drag";
-import { typed } from "./transforms";
+import { typed } from "./model";
 import { ownScale, type Func, type FuncKey, type ShapeField } from "./generate";
 import { PAD, type Viewport } from "./viewport";
 import { TIMING_HEIGHT, type Tools } from "./useTool";

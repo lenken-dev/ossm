@@ -1,8 +1,5 @@
 import { clamp, speed, type Action } from "../funscript/model";
-import { movedBy, type Region } from "./model";
-
-/** A typed number; NaN when empty. */
-export const typed = (v: string) => (v.trim() ? Number(v) : NaN);
+import { depthRange, movedBy, typed, type Region } from "./model";
 
 /** A transform's result: the new points, and the indices of the affected ones among them; the regions, when it moves them. */
 interface Transformed {
@@ -45,14 +42,14 @@ export function scaled(actions: Action[], picked: number[], time: number, low: n
 
 /** Scale's fields as numbers, Out and In typed as depths, as positions `high` and `low`; null while one is refused: a time of 0 or less would fold the points onto each other, and the depths are 0–100. */
 export function scaleParams(fields: { time: string; out: string; in: string }) {
-  const [time, out, inn] = [typed(fields.time), typed(fields.out), typed(fields.in)];
-  return time > 0 && out >= 0 && out <= 100 && inn >= 0 && inn <= 100 ? { time, low: 100 - inn, high: 100 - out } : null;
+  const [time, depths] = [typed(fields.time), depthRange(fields.out, fields.in, { flip: true })];
+  return time > 0 && depths ? { time, ...depths } : null;
 }
 
 /** Shift depth's fields as numbers, typed as depths, as positions: the Offset deeper the higher, Out the limit `max`, In `min`; null while one is refused: limits outside the depths, rather than quietly clamped, or Out past In. */
 export function shiftParams(fields: { offset: string; out: string; in: string }) {
-  const [offset, out, inn] = [typed(fields.offset), typed(fields.out), typed(fields.in)];
-  return Number.isFinite(offset) && out >= 0 && inn <= 100 && out <= inn ? { offset: -offset, min: 100 - inn, max: 100 - out } : null;
+  const [offset, depths] = [typed(fields.offset), depthRange(fields.out, fields.in)];
+  return Number.isFinite(offset) && depths ? { offset: -offset, min: depths.low, max: depths.high } : null;
 }
 
 /** Shift the depth of the points `picked` of `actions` by `offset`, then keep it within `min`–`max`. */

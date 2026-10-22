@@ -2,7 +2,7 @@ import { Flex, Text } from "@radix-ui/themes";
 import { formatScriptTime, formatTimeTick, timeTicks } from "../funscript/time";
 import { clamp, LINE_COLOR, type Action } from "../funscript/model";
 import type { Bookmark, Chapter } from "../funscript/markers";
-import { isInstance, regionName, type Region } from "./model";
+import { isInstance, only, regionName, type Region } from "./model";
 
 /** Height of a small graph's time axis, in px. */
 const PREVIEW_AXIS = 12;
@@ -230,13 +230,9 @@ export const regionItem = (r: Region): LaneItem => ({ of: r, kind: isInstance(r)
  * and after; nothing when none changed.
  */
 export function LanePreview({ lists }: { lists: [LaneItem[], LaneItem[]][] }) {
-  // Edits keep the items they leave alone, so the changed ones are those only one side has.
-  const only = (a: LaneItem[], b: LaneItem[]) => {
-    const kept = new Set(b.map((m) => m.of));
-    return a.filter((m) => !kept.has(m.of));
-  };
   const changes = lists.flatMap(([a, b]) => {
-    const [gone, come] = [only(a, b), only(b, a)];
+    // Edits keep the items they leave alone, so the changed ones are those only one side has.
+    const [gone, come] = [only(a, b, (m) => m.of), only(b, a, (m) => m.of)];
     // As many on each side, as a move or rename leaves, they pair up in time order.
     if (gone.length === come.length) return gone.map((old, i) => ({ old, now: come[i] as LaneItem | undefined }));
     return [...gone.map((old) => ({ old, now: undefined })), ...come.map((now) => ({ old: undefined as LaneItem | undefined, now }))];
