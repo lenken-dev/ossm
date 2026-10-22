@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import { Box, Button, Checkbox, Flex, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Switch, Text, TextField } from "@radix-ui/themes";
+import { Box, Button, Checkbox, Flex, IconButton, Popover, SegmentedControl, Select, Separator, Slider, Text, TextField } from "@radix-ui/themes";
 import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, ResetIcon, ShuffleIcon } from "@radix-ui/react-icons";
+import { SwitchRow } from "../widgets";
 import { formatScriptTime } from "../funscript/time";
 import { clamp, LINE_COLOR, points, speed, type Action } from "../funscript/model";
 import { markerColor, type Bookmark } from "../funscript/markers";
@@ -342,11 +343,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
           );
         })()}
         {genPart === "timing" && genSetup.timing !== "markers" && (
-          <Text as="label" size="2">
-            <Flex gap="2" align="center">
-              <Switch checked={timingView} onCheckedChange={setTimingView} /> Show {genSetup.timing === "speed" ? "Speed" : "Interval"} below the graph
-            </Flex>
-          </Text>
+          <SwitchRow label={`Show ${genSetup.timing === "speed" ? "Speed" : "Interval"} below the graph`} checked={timingView} onCheckedChange={setTimingView} />
         )}
         {/* Markers timing has no function. */}
         {funcParts(genSetup.timing === "speed" ? [["speed", "Speed", ""]] : genSetup.timing === "interval" ? [["interval", "Interval", "s"]] : [])}
@@ -406,11 +403,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
         {partHeader("timing", "Time", genPart !== "timing" && SHAPES[repSetup.time.shape].name)}
         {genPart === "timing" && <>
           <Text size="1" color="gray">Each copy's length, in % of the pattern's; a ramp's or spline's from the first copy to the last.</Text>
-          <Text as="label" size="2">
-            <Flex gap="2" align="center">
-              <Switch checked={timingView} onCheckedChange={setTimingView} /> Show Time below the graph
-            </Flex>
-          </Text>
+          <SwitchRow label="Show Time below the graph" checked={timingView} onCheckedChange={setTimingView} />
         </>}
         {funcParts([["time", "Time", "%"]])}
         <Flex gap="2" align="center" justify="between">

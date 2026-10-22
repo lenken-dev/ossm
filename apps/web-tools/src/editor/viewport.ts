@@ -1,6 +1,7 @@
-import { useEffect, useState, type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
+import { type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
 import { clamp } from "../funscript/model";
 import { capturePointer } from "../drag";
+import { useElementSize } from "../hooks/useElementSize";
 
 /** Height of the time axis below the graph and space above and below the points, in px. */
 export const AXIS = 20;
@@ -44,12 +45,7 @@ export function useViewport(
   viewRef: RefObject<{ from: number; span: number }>,
   setView: Dispatch<SetStateAction<{ from: number; span: number }>>,
 ): Viewport {
-  const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
-    observer.observe(boxRef.current!);
-    return () => observer.disconnect();
-  }, []);
+  const { width, height } = useElementSize(boxRef);
   // As rendered: the page puts its view in the ref before calling this.
   const view = viewRef.current;
   const plotHeight = height - AXIS;

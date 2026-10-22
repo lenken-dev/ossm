@@ -22,7 +22,7 @@ export const OVERLAY_MIN_HEIGHT = 60;
 
 /** Resize handles of the graph over the video, by the corner they move. */
 export const RESIZE_HANDLES = ["nw", "ne", "se", "sw"];
-export const CORNER_HANDLE = 24;
+const CORNER_HANDLE = 24;
 
 /** Where a resize handle sits and how it looks: an L in its corner. */
 export function handleStyle(handle: string): CSSProperties {

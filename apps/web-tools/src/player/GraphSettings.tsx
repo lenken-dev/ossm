@@ -1,6 +1,6 @@
-import { Button, Flex, Switch, Text } from "@radix-ui/themes";
+import { Button, Text } from "@radix-ui/themes";
 import { MoveIcon } from "@radix-ui/react-icons";
-import { LabeledSlider } from "../widgets";
+import { LabeledSlider, SwitchRow } from "../widgets";
 import type { OverlayStyle } from "./overlay";
 
 /** Choices for the time after the video time, in s: by the second up to 30 s, then by 10 s. */
@@ -34,18 +34,8 @@ export function GraphSettings({ showGraph, setShowGraph, minimap, setMinimap, ov
 }) {
   return (
     <>
-      <Text as="label" size="2" weight="medium">
-        <Flex align="center" justify="between" gap="2">
-          Show graph
-          <Switch checked={showGraph} onCheckedChange={setShowGraph} />
-        </Flex>
-      </Text>
-      <Text as="label" size="2" weight="medium">
-        <Flex align="center" justify="between" gap="2">
-          Show minimap
-          <Switch checked={minimap} onCheckedChange={setMinimap} />
-        </Flex>
-      </Text>
+      <SwitchRow label="Show graph" checked={showGraph} onCheckedChange={setShowGraph} />
+      <SwitchRow label="Show minimap" checked={minimap} onCheckedChange={setMinimap} />
       {showGraph && (
         <>
           <LabeledSlider
@@ -57,12 +47,7 @@ export function GraphSettings({ showGraph, setShowGraph, minimap, setMinimap, ov
             step={0.5}
             onChange={(lineWidth) => setOverlay({ ...overlay, lineWidth })}
           />
-          <Text as="label" size="2" weight="medium">
-            <Flex align="center" justify="between" gap="2">
-              Show machine line
-              <Switch checked={machineLine} onCheckedChange={setMachineLine} />
-            </Flex>
-          </Text>
+          <SwitchRow label="Show machine line" checked={machineLine} onCheckedChange={setMachineLine} />
           <LabeledSlider
             label="Before playhead"
             value={span.before}

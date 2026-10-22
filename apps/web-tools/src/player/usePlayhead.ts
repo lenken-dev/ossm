@@ -1,4 +1,5 @@
 import { useRef, type RefObject } from "react";
+import { clamp } from "../funscript/model";
 import { advancing, type Playhead } from "./playback";
 
 /**
@@ -36,16 +37,16 @@ export function usePlayhead({ videoRef, synced, scriptSpeed, scriptEnd }: {
     get: () => (videoRef.current?.currentTime ?? 0) * 1000 * scriptSpeed,
     set: (ms) => {
       const media = videoRef.current;
-      if (media) media.currentTime = Math.min(Math.max(ms / scriptSpeed / 1000, 0), media.duration || 0);
+      if (media) media.currentTime = clamp(ms / scriptSpeed / 1000, 0, media.duration || 0);
     },
   } : {
     get: clockTime,
     set: (ms) => {
-      clock.current.at = Math.min(Math.max(ms, 0), scriptEnd);
+      clock.current.at = clamp(ms, 0, scriptEnd);
       if (clock.current.since !== null) clock.current.since = performance.now();
     },
   };
   /** Stop the script's own clock at script time `at` in ms. */
-  const restartClock = (at: number) => void (clock.current = { at, since: null, rate: 1 });
-  return { playhead, retimeClock, restartClock };
+  const stopClockAt = (at: number) => void (clock.current = { at, since: null, rate: 1 });
+  return { playhead, retimeClock, stopClockAt };
 }

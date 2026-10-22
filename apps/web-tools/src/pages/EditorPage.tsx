@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import { AlertDialog, Box, Button, Callout, Flex, Heading, IconButton, SegmentedControl, Separator, Slider, Switch, Text, TextField } from "@radix-ui/themes";
+import { AlertDialog, Box, Button, Callout, Flex, Heading, IconButton, SegmentedControl, Separator, Slider, Text, TextField } from "@radix-ui/themes";
 import { ClipboardIcon, MixerHorizontalIcon, CopyIcon, ResetIcon, DoubleArrowDownIcon, DoubleArrowLeftIcon, DoubleArrowRightIcon, DoubleArrowUpIcon, Cross2Icon, DownloadIcon, ExclamationTriangleIcon, FileIcon, HeightIcon, PlayIcon, ScissorsIcon, UploadIcon, VideoIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
 import { bisectLeft, bisectRight } from "d3";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { useWindowEvent } from "../hooks/useWindowEvent";
 import { PLAYER_WINDOW, SENT_SCRIPT_KEY, readFunscript } from "../funscript/file";
 import { formatScriptTime, formatTimeTick, timeTicks } from "../funscript/time";
-import { LabeledSlider } from "../widgets";
+import { LabeledSlider, SwitchRow } from "../widgets";
 import { clamp, LINE_COLOR, stats, type Action } from "../funscript/model";
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
@@ -33,6 +33,7 @@ import { SpeedCalculator } from "../funscript/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
 import { ClipboardHistory, UndoHistory } from "../editor/HistoryPopovers";
 import { GraphLayout } from "./GraphPage";
+import { dragSeeking } from "../drag";
 
 /** Size of the buttons in the selection box that extend it, in px. */
 const EXTEND = 24;
@@ -411,13 +412,8 @@ export default function EditorPage() {
     if (!element || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    const target = e.currentTarget;
-    const wasPlaying = !element.paused;
-    element.pause();
-    const move = (m: globalThis.PointerEvent) => media.seek(pointerAt(m).at);
-    track(target, e, move, () => {
-      if (wasPlaying) void element.play();
-    });
+    // The graph scrolls at its edges while dragging.
+    dragSeeking(element, e.currentTarget, e.pointerId, (m) => media.seek(pointerAt(m).at), (target, _, move, end) => track(target, e, move, end));
   };
 
   /** The time the minimap shows: the script (the main one too, in the advanced editor), the video and the visible time, whichever is longest. */
@@ -940,29 +936,24 @@ export default function EditorPage() {
         step={spanStep}
         onChange={(s) => setView({ ...view, span: s * 1000 })}
       />
-      <Text as="label" size="2">
-        <Flex gap="2" align="center">
-          <Switch checked={minimap} onCheckedChange={setMinimap} /> Minimap
-        </Flex>
-      </Text>
+      <SwitchRow label="Minimap" checked={minimap} onCheckedChange={setMinimap} />
       {advanced && <>
-      <Text as="label" size="2">
-        <Flex gap="2" align="center">
-          <Switch
-            checked={fromZero}
-            onCheckedChange={(on) => {
-              setFromZero(on);
-              // Generate's From and To follow, so its box stays.
-              if (genBox) setGenRange(rangeFields(genBox, on ? advanced.zero : 0));
-            }}
-          /> Time from 0
-        </Flex>
-      </Text>
-      <Text as="label" size="2" title="New and dragged points go to the nearest bookmark's time">
-        <Flex gap="2" align="center">
-          <Switch checked={onMarkers} disabled={!bookmarks.length} onCheckedChange={setOnMarkers} /> Place points on markers
-        </Flex>
-      </Text>
+      <SwitchRow
+        label="Time from 0"
+        checked={fromZero}
+        onCheckedChange={(on) => {
+          setFromZero(on);
+          // Generate's From and To follow, so its box stays.
+          if (genBox) setGenRange(rangeFields(genBox, on ? advanced.zero : 0));
+        }}
+      />
+      <SwitchRow
+        label="Place points on markers"
+        title="New and dragged points go to the nearest bookmark's time"
+        checked={onMarkers}
+        disabled={!bookmarks.length}
+        onCheckedChange={setOnMarkers}
+      />
       </>}
       {/* The selected region, its points locked until unlocked. */}
       {region && (

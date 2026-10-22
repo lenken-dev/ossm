@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent, type RefObject } from "react";
-import { capturePointer } from "../drag";
+import { useMemo, useRef, type PointerEvent, type RefObject } from "react";
+import { dragSeeking } from "../drag";
+import { useElementSize } from "../hooks/useElementSize";
 import { bandOf, type Region } from "../editor/model";
 import { lightChapters, markerColor, type Bookmark, type Chapter } from "./markers";
 import { LINE_COLOR, type Action } from "./model";
@@ -36,13 +37,7 @@ export function Minimap({ actions, total, chapters, bookmarks, window: { from, s
   selected?: { of: Action[]; indices: Set<number> };
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [width, setWidth] = useState(0);
-
-  useEffect(() => {
-    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
-    observer.observe(svgRef.current!);
-    return () => observer.disconnect();
-  }, []);
+  const { width } = useElementSize(svgRef);
 
   const x = (at: number) => (at / total) * width;
   const y = (pos: number) => 2 + (1 - (reverse ? 100 - pos : pos) / 100) * (MINIMAP_HEIGHT - 4);
@@ -55,14 +50,8 @@ export function Minimap({ actions, total, chapters, bookmarks, window: { from, s
     const at = (m: { clientX: number }) => ((m.clientX - left) / width) * total;
     const pressed = at(e);
     const offset = pressed >= from && pressed <= from + span ? pressed - from : span / 2;
-    const element = media?.current;
-    const wasPlaying = !!element && !element.paused;
-    element?.pause();
-    const move = (m: { clientX: number }) => onDrag(at(m) - offset, wasPlaying);
-    move(e);
-    capturePointer(target, e.pointerId, move, () => {
-      if (wasPlaying) void element?.play();
-    });
+    const playing = dragSeeking(media?.current, target, e.pointerId, (m) => onDrag(at(m) - offset, playing));
+    onDrag(pressed - offset, playing);
   };
 
   // Built only when they change, not on every frame or pointer move.

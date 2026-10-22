@@ -21,6 +21,8 @@ export interface Playhead {
 }
 
 export const isHomed = (state: OssmState | null) => state?.state === "ready" || state?.state === "streaming";
+/** A pattern plays or is paused; the machine homed for it. */
+export const isPatternActive = (state: OssmState | null) => state?.state === "playing" || state?.state === "paused";
 
 /** Why the machine does not follow the funscript, or `null` when it does. */
 export function blockReason(

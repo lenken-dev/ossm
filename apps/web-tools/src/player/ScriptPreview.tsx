@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type PointerEvent, type RefObject } from "react";
+import { useEffect, useRef, type PointerEvent, type RefObject } from "react";
 import { Box, Text, Theme, useThemeContext } from "@radix-ui/themes";
 import { bisectLeft } from "d3";
-import { capturePointer } from "../drag";
+import { dragSeeking } from "../drag";
+import { useElementSize } from "../hooks/useElementSize";
 import { LINE_COLOR, MACHINE_COLOR } from "../funscript/model";
 import type { Funscript } from "../funscript/file";
 import type { Ossm } from "./ble";
@@ -42,13 +43,7 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
   // Redrawn on a theme change, so the canvas picks up its colours. Radix's own context, as the theme's colours change a render after the app's appearance does.
   const theme = useThemeContext();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [{ width, height }, setSize] = useState({ width: 0, height: 0 });
-
-  useEffect(() => {
-    const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
-    observer.observe(canvasRef.current!);
-    return () => observer.disconnect();
-  }, []);
+  const { width, height } = useElementSize(canvasRef);
 
   useEffect(() => {
     if (width === 0 || height === 0) return;
@@ -76,11 +71,20 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
     let drawnAt = performance.now();
     // The notified machine positions, at the video times in ms they arrived, for the machine line.
     const trail: { at: number[]; pos: number[] } = { at: [], pos: [] };
+    /** Seeking back to `now` starts the trail over. */
+    const restartTrail = (now: number) => {
+      if (now < trail.at[trail.at.length - 1]) trail.at.length = trail.pos.length = 0;
+    };
+    /** Over the video, a dark halo keeps lines visible on bright frames, until `shadowBlur` is 0 again. */
+    const halo = () => {
+      if (!overlaid) return;
+      ctx.shadowColor = "black";
+      ctx.shadowBlur = 4;
+    };
     const record = () => {
       const now = playhead.current.get() / speed;
       const pos = ossm?.streamPosition() ?? null;
-      // Seeking back starts the trail over.
-      if (now < trail.at[trail.at.length - 1]) trail.at.length = trail.pos.length = 0;
+      restartTrail(now);
       const last = trail.at.length - 1;
       if (pos === null || now === trail.at[last]) return;
       if (now - POSITION_INTERVAL_MS > trail.at[last]) {
@@ -136,10 +140,7 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
         if (c.start < from * speed || c.start > to * speed) continue;
         const cx = Math.round(x(c.start / speed)) + 0.5;
         ctx.strokeStyle = chapterColor;
-        if (overlaid) {
-          ctx.shadowColor = "black";
-          ctx.shadowBlur = 4;
-        }
+        halo();
         ctx.beginPath();
         ctx.moveTo(cx, 0);
         ctx.lineTo(cx, height);
@@ -158,10 +159,7 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
       const px = Math.round(x(now));
       ctx.strokeStyle = playheadColor;
       ctx.lineWidth = 2;
-      if (overlaid) {
-        ctx.shadowColor = "black";
-        ctx.shadowBlur = 4;
-      }
+      halo();
       ctx.beginPath();
       ctx.moveTo(px, 0);
       ctx.lineTo(px, height);
@@ -170,7 +168,7 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
 
       const target = ossm?.streamPosition() ?? null;
       machine = target === null || machine === null ? target : machine + (target - machine) * (1 - Math.exp(-elapsed / MACHINE_SMOOTHING_MS));
-      if (now < trail.at[trail.at.length - 1]) trail.at.length = trail.pos.length = 0;
+      restartTrail(now);
       // Dropping all but one point before the window bounds the trail.
       while (trail.at.length > 1 && trail.at[1] < from) {
         trail.at.shift();
@@ -210,13 +208,9 @@ export function ScriptPreview({ script, chapters, speed, playhead, reverse, vide
     const media = videoRef.current;
     if (!media) return;
     e.preventDefault();
-    const [startX, startTime, wasPlaying] = [e.clientX, playhead.current.get(), !media.paused];
-    media.pause();
-    const move = (m: globalThis.PointerEvent) =>
-      playhead.current.set(startTime - ((m.clientX - startX) / width) * (before + after) * speed);
-    capturePointer(e.currentTarget, e.pointerId, move, () => {
-      if (wasPlaying) void media.play();
-    });
+    const [startX, startTime] = [e.clientX, playhead.current.get()];
+    dragSeeking(media, e.currentTarget, e.pointerId, (m) =>
+      playhead.current.set(startTime - ((m.clientX - startX) / width) * (before + after) * speed));
   };
 
   const graph = (

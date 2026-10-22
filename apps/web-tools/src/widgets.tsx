@@ -1,5 +1,10 @@
-import type { PointerEvent } from "react";
-import { Box, Flex, Slider, Text } from "@radix-ui/themes";
+import type { PointerEvent, ReactNode } from "react";
+import { Box, Flex, Slider, Switch, Text } from "@radix-ui/themes";
+
+/** Where the machine moves along the depth and stroke sliders, out towards home, and how the sensation feels. */
+export const DEPTH_ENDS: [string, string] = ["Out", "In"];
+export const STROKE_ENDS: [string, string] = ["In", "Out"];
+export const SENSATION_ENDS: [string, string] = ["Smooth", "Hard"];
 
 /** A bar to drag the `edge` of its positioned parent by: below the bottom edge, inside the top one. */
 export function ResizeGrip({ edge, onPointerDown }: { edge: "top" | "bottom"; onPointerDown: (e: PointerEvent<HTMLElement>) => void }) {
@@ -18,6 +23,24 @@ export function ResizeGrip({ edge, onPointerDown }: { edge: "top" | "bottom"; on
       }}
       onPointerDown={onPointerDown}
     />
+  );
+}
+
+/** A switch with its label on the left. */
+export function SwitchRow({ label, title, checked, disabled, onCheckedChange }: {
+  label: ReactNode;
+  title?: string;
+  checked: boolean;
+  disabled?: boolean;
+  onCheckedChange: (on: boolean) => void;
+}) {
+  return (
+    <Text as="label" size="2" weight="medium" title={title}>
+      <Flex align="center" justify="between" gap="2">
+        {label}
+        <Switch checked={checked} disabled={disabled} onCheckedChange={onCheckedChange} />
+      </Flex>
+    </Text>
   );
 }
 

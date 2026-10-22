@@ -2,7 +2,7 @@ import { useContext, useEffect, useMemo } from "react";
 import { DataList, TextField, Tooltip } from "@radix-ui/themes";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { FIRMWARE_RANGE_MM, RANGE_KEY, useFollow } from "../hooks/useFollow";
-import { LabeledSlider } from "../widgets";
+import { LabeledSlider, SENSATION_ENDS } from "../widgets";
 import type { Funscript } from "./file";
 import { PortalContainer, SectionHeader } from "./widgets";
 
@@ -62,7 +62,7 @@ export function SpeedCalculator({ open, setOpen, script, rate = 1, selection = f
         </TextField.Root>
         <LabeledSlider label="Stroke range" value={depth * stroke / 100} display={`${(depth * stroke / 100).toFixed(0)}%`} min={1} max={100} step={1} disabled={!!machine} onChange={setStrokeRange} />
         <LabeledSlider label="Speed" value={speed} display={`${speed.toFixed(0)}%`} min={0} max={100} step={1} disabled={!!machine} onChange={setSpeed} />
-        <LabeledSlider label="Sensation" value={sensation} display={`${sensation.toFixed(0)}%`} min={0} max={100} step={1} ends={["Smooth", "Hard"]} disabled={!!machine} onChange={setSensation} />
+        <LabeledSlider label="Sensation" value={sensation} display={`${sensation.toFixed(0)}%`} min={0} max={100} step={1} ends={SENSATION_ENDS} disabled={!!machine} onChange={setSensation} />
         <DataList.Root size="2">
           <DataList.Item>
             <DataList.Label color="gray">Max funscript speed</DataList.Label>

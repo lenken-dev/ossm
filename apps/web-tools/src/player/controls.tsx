@@ -2,16 +2,13 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { AlertDialog, Box, Button, Dialog, Flex, IconButton, Select, Text } from "@radix-ui/themes";
 import { GearIcon, PauseIcon, StopIcon } from "@radix-ui/react-icons";
 import { usePersistedState } from "../hooks/usePersistedState";
-import { LabeledSlider } from "../widgets";
+import { DEPTH_ENDS, LabeledSlider, STROKE_ENDS } from "../widgets";
 import { PortalContainer } from "../funscript/widgets";
 import { log, type Ossm, type OssmState, type PatternInfo } from "./ble";
+import { isPatternActive } from "./playback";
 
 /** How long a slider shows the user's value before following the device again; the device reports settings at least once a second. */
 const PENDING_MS = 1500;
-
-/** Where the machine moves along the depth and stroke sliders; out is towards home. */
-export const DEPTH_ENDS: [string, string] = ["Out", "In"];
-export const STROKE_ENDS: [string, string] = ["In", "Out"];
 
 /** Pattern mode: play, adjust and stop the device's patterns. */
 export function PatternControls({ ossm, state }: {
@@ -20,8 +17,7 @@ export function PatternControls({ ossm, state }: {
 }) {
   const [patterns, setPatterns] = useState<PatternInfo[]>([]);
   const [description, setDescription] = useState("");
-  const active = state.state === "playing" || state.state === "paused";
-  const selected = active ? state.pattern : null;
+  const selected = isPatternActive(state) ? state.pattern : null;
 
   useEffect(() => {
     let current = true;
@@ -71,16 +67,17 @@ export function PatternControls({ ossm, state }: {
       >
         <PauseIcon /> Pause
       </Button>
-      <Button
-        variant="soft"
-        color="red"
-        size="3"
-        style={{ height: 64 }}
-        onClick={() => void ossm.command("go:menu")}
-      >
-        <StopIcon /> Stop
-      </Button>
+      <StopButton onClick={() => void ossm.command("go:menu")} />
     </>
+  );
+}
+
+/** The big red Stop button of the controls. */
+export function StopButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button variant="soft" color="red" size="3" style={{ height: 64 }} onClick={onClick}>
+      <StopIcon /> Stop
+    </Button>
   );
 }
 

@@ -11,7 +11,6 @@ import {
   OpenInNewWindowIcon,
   PauseIcon,
   PlayIcon,
-  StopIcon,
   UploadIcon,
 } from "@radix-ui/react-icons";
 import { useAppearance } from "../hooks/useAppearance";
@@ -21,7 +20,7 @@ import { usePersistedState } from "../hooks/usePersistedState";
 import { log, useOssm } from "../player/ble";
 import { FunscriptStream, simplify } from "../player/stream";
 import { parseFunscript, readFunscript, PLAYER_WINDOW, SENT_SCRIPT_KEY, type Funscript } from "../funscript/file";
-import { LabeledSlider, ResizeGrip } from "../widgets";
+import { DEPTH_ENDS, LabeledSlider, ResizeGrip, SENSATION_ENDS, STROKE_ENDS } from "../widgets";
 import { GraphLayout } from "./GraphPage";
 import { dragHeight } from "../drag";
 import { stats, type Action } from "../funscript/model";
@@ -30,13 +29,13 @@ import { MarkersList } from "../funscript/MarkersList";
 import { Minimap } from "../funscript/Minimap";
 import { PortalContainer, SectionHeader, Stats } from "../funscript/widgets";
 import { SpeedCalculator } from "../funscript/SpeedCalculator";
-import { DEPTH_ENDS, PatternControls, SettingSlider, SetupDialog, STROKE_ENDS } from "../player/controls";
+import { PatternControls, SettingSlider, SetupDialog, StopButton } from "../player/controls";
 import { GraphSettings } from "../player/GraphSettings";
 import { ScriptPreview } from "../player/ScriptPreview";
 import { ScriptSettings } from "../player/ScriptSettings";
 import { TheaterGraph } from "../player/TheaterGraph";
 import { usePlayhead } from "../player/usePlayhead";
-import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, silence, TICK_MS, type Markers, type Playhead } from "../player/playback";
+import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, isPatternActive, silence, TICK_MS, type Markers, type Playhead } from "../player/playback";
 import { DEFAULT_OVERLAY } from "../player/overlay";
 
 type PlayerMode = "pattern" | "funscript";
@@ -155,7 +154,7 @@ export default function PlayerPage() {
   const [scriptSpeed, setScriptSpeed] = usePersistedState("ossm:playerScriptSpeed", 1);
   /** The script follows the media's playhead; otherwise it keeps its own and only plays and pauses with the media. */
   const [synced, setSynced] = usePersistedState("ossm:playerSynced", true);
-  const { playhead, retimeClock, restartClock } = usePlayhead({ videoRef, synced, scriptSpeed, scriptEnd: played ? played.at[played.at.length - 1] : 0 });
+  const { playhead, retimeClock, stopClockAt } = usePlayhead({ videoRef, synced, scriptSpeed, scriptEnd: played ? played.at[played.at.length - 1] : 0 });
   /** Script time in ms the machine plays at, `offset` ahead of the playhead. */
   const streamTime = () => playhead.current.get() + offset * scriptSpeed;
   /** Script time in ms to put the silent clock back at once it reloads at a new length. */
@@ -173,11 +172,10 @@ export default function PlayerPage() {
    * device refuses the switch too. A video the machine does not follow does
    * not lock it.
    */
+  const patternActive = isPatternActive(state);
   const switchLock = mode === "pattern"
-    ? (state?.state === "playing" || state?.state === "paused") && "Stop the pattern to switch modes"
+    ? patternActive && "Stop the pattern to switch modes"
     : !paused && !blocked && "Pause playback to switch modes";
-  /** A pattern plays or is paused; the machine homed for it. */
-  const patternActive = state?.state === "playing" || state?.state === "paused";
   /** Set up to play; only speed and sensation may change on the fly. */
   const ready = !!ossm && ossm.lookahead > 0 && isHomed(state) && configured;
 
@@ -367,10 +365,16 @@ export default function PlayerPage() {
   const playedAverage = useMemo(() => playedActions.length && stats(playedActions, [...playedActions.keys()]).average, [playedActions]);
   const [calcOpen, setCalcOpen] = useState(false);
   const media = videoUrl || silentUrl;
-  const controls = (inPopout: boolean) => (
+  const playButton = media && (
+    <Button variant="soft" onClick={() => (paused ? void videoRef.current?.play() : videoRef.current?.pause())}>
+      {paused ? <><PlayIcon /> Play</> : <><PauseIcon /> Pause</>}
+    </Button>
+  );
+  /** In the popout window while it is open, else in the sidebar. */
+  const controls = (
     <>
       <Flex p="3" pb="0" gap="2">
-        <Tooltip content={switchLock} open={switchLock ? undefined : false} container={inPopout ? popout?.document.body : undefined}>
+        <Tooltip content={switchLock} open={switchLock ? undefined : false} container={popout?.document.body}>
           <Box flexGrow="1">
             <SegmentedControl.Root
               value={mode}
@@ -384,18 +388,14 @@ export default function PlayerPage() {
             </SegmentedControl.Root>
           </Box>
         </Tooltip>
-        {!inPopout && window.documentPictureInPicture && !isMobile && (
+        {!popout && window.documentPictureInPicture && !isMobile && (
           <IconButton variant="soft" color="gray" aria-label="Pop out controls" title="Pop out controls" onClick={() => void openPopout()}>
             <OpenInNewWindowIcon />
           </IconButton>
         )}
       </Flex>
       <Flex direction="column" gap="3" p="3">
-        {inPopout && media && (
-          <Button variant="soft" onClick={() => (paused ? void videoRef.current?.play() : videoRef.current?.pause())}>
-            {paused ? <><PlayIcon /> Play</> : <><PauseIcon /> Pause</>}
-          </Button>
-        )}
+        {popout && playButton}
         {mode === "funscript" && <Heading size="3">Machine</Heading>}
         {!navigator.bluetooth ? (
           <Text size="2" color="gray">
@@ -455,7 +455,7 @@ export default function PlayerPage() {
                 <Button onClick={openSetup}>Set depth and stroke</Button>
               ) : <>
                 <SettingSlider ossm={ossm} setting="speed" label="Speed" value={state.speed} />
-                <SettingSlider ossm={ossm} setting="sensation" label="Sensation" value={state.sensation} ends={["Smooth", "Hard"]} />
+                <SettingSlider ossm={ossm} setting="sensation" label="Sensation" value={state.sensation} ends={SENSATION_ENDS} />
                 {depthSliders && <>
                   <SettingSlider ossm={ossm} setting="depth" label="Depth" value={state.depth} ends={DEPTH_ENDS} />
                   <SettingSlider ossm={ossm} setting="stroke" label="Stroke" value={state.stroke} ends={STROKE_ENDS} />
@@ -497,25 +497,15 @@ export default function PlayerPage() {
                 }}
               />
             )}
-            {ready && media && (
-              <Button variant="soft" onClick={() => (paused ? void videoRef.current?.play() : videoRef.current?.pause())}>
-                {paused ? <><PlayIcon /> Play</> : <><PauseIcon /> Pause</>}
-              </Button>
-            )}
+            {ready && playButton}
             {ready && (
-              <Button
-                variant="soft"
-                color="red"
-                size="3"
-                style={{ height: 64 }}
+              <StopButton
                 onClick={() => {
                   videoRef.current?.pause();
                   endStream("stop");
                   void ossm.command("go:menu");
                 }}
-              >
-                <StopIcon /> Stop
-              </Button>
+              />
             )}
             <Separator size="4" />
             <SectionHeader title="Funscript" open={funscriptOpen} setOpen={setFunscriptOpen} />
@@ -535,7 +525,7 @@ export default function PlayerPage() {
                 synced={synced}
                 onSynced={(on) => {
                   // The script's own playhead starts where the media's left it.
-                  if (!on) restartClock(playhead.current.get());
+                  if (!on) stopClockAt(playhead.current.get());
                   setSynced(on);
                 }}
                 looped={looped}
@@ -603,12 +593,12 @@ export default function PlayerPage() {
           <Button variant="soft" onClick={() => popout.close()}>Bring back</Button>
           {createPortal(
             <Theme accentColor="purple" radius="large" appearance={appearance} hasBackground style={{ minHeight: "100vh" }}>
-              <PortalContainer.Provider value={popout.document.body}>{controls(true)}</PortalContainer.Provider>
+              <PortalContainer.Provider value={popout.document.body}>{controls}</PortalContainer.Provider>
             </Theme>,
             popout.document.body,
           )}
         </Flex>
-      ) : controls(false)}
+      ) : controls}
     </>
   );
 
