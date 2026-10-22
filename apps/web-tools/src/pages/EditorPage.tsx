@@ -27,7 +27,7 @@ import { ToolPanel } from "../editor/ToolPanel";
 import { LANE_HEIGHT, MarkerLane } from "../editor/MarkerLane";
 import { MarkersPanel } from "../editor/MarkersPanel";
 import { SnippetsPanel } from "../editor/SnippetsPanel";
-import { Minimap } from "../editor/Minimap";
+import { Minimap } from "../funscript/Minimap";
 import { GraphCanvas } from "../editor/GraphCanvas";
 import { SpeedCalculator } from "../editor/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
@@ -1364,18 +1364,22 @@ export default function EditorPage() {
       </Flex>
       {minimap ? (
         <Minimap
-          width={width}
-          total={total}
-          view={view}
-          setView={setView}
           actions={actions}
-          kept={kept}
-          selected={selected}
+          total={total}
           chapters={chapters}
           bookmarks={bookmarks}
-          regions={[...(advanced ? main.regions : []), ...regions]}
-          context={advanced ? context : null}
+          window={view}
+          onDrag={(from, playing) => {
+            const start = clamp(from, 0, total - view.span);
+            setView((v) => ({ ...v, from: start }));
+            // Playing, the view follows the playhead, so the drag seeks.
+            if (playing) media.seek(Math.max(from + view.span * FOLLOW_AT, 0));
+          }}
           playheadAt={media.videoUrl ? media.time : null}
+          media={media.videoRef}
+          regions={[...(advanced ? main.regions : []), ...regions]}
+          context={context}
+          selected={{ of: kept, indices: selected }}
         />
       ) : (
         <Slider

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MediaHTMLAttributes, type PointerEvent, type RefObject, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { Box, Button, Callout, Flex, Heading, IconButton, SegmentedControl, Separator, Text, Theme, Tooltip } from "@radix-ui/themes";
 import {
@@ -26,17 +26,17 @@ import { GraphLayout } from "./GraphPage";
 import { dragHeight } from "../drag";
 import { stats, type Action } from "../funscript/model";
 import { readMarkers } from "../funscript/markers";
+import { Minimap } from "../funscript/Minimap";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { DEPTH_ENDS, PatternControls, PortalContainer, SettingSlider, SetupDialog, STROKE_ENDS } from "../player/controls";
 import { GraphSettings } from "../player/GraphSettings";
 import { MarkersList } from "../player/MarkersList";
 import { PlayerCalculator } from "../player/PlayerCalculator";
-import { ScriptMinimap } from "../player/ScriptMinimap";
 import { ScriptPreview } from "../player/ScriptPreview";
 import { ScriptSettings } from "../player/ScriptSettings";
 import { TheaterGraph } from "../player/TheaterGraph";
 import { usePlayhead } from "../player/usePlayhead";
-import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, silence, TICK_MS, type Markers } from "../player/playback";
+import { advancing, blockReason, DEFAULT_SPEED_LIMIT, isHomed, silence, TICK_MS, type Markers, type Playhead } from "../player/playback";
 import { DEFAULT_OVERLAY } from "../player/overlay";
 
 type PlayerMode = "pattern" | "funscript";
@@ -53,6 +53,44 @@ const PREVIEW_HEIGHT = 140;
 const PREVIEW_MIN_HEIGHT = 60;
 /** Default time the preview graphs show before and after the video time, in ms. */
 const DEFAULT_WINDOW = { before: 2000, after: 8000 };
+
+/**
+ * The minimap with the graph's time, `before` and `after` the playhead at
+ * `speed`; dragging it moves the playhead. It renders on its own every frame
+ * to follow the playhead, without the page.
+ */
+function PlayerMinimap({ actions, markers, speed, playhead, reverse, videoRef, span: { before, after } }: {
+  actions: Action[];
+  markers: Markers;
+  speed: number;
+  playhead: RefObject<Playhead>;
+  reverse: boolean;
+  videoRef: RefObject<HTMLMediaElement | null>;
+  span: { before: number; after: number };
+}) {
+  const [now, setNow] = useState(() => playhead.current.get());
+  useEffect(() => {
+    let frame = requestAnimationFrame(function tick() {
+      setNow(playhead.current.get());
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [playhead]);
+  return (
+    <Minimap
+      actions={actions}
+      total={actions[actions.length - 1]?.at || 1}
+      chapters={markers.chapters}
+      bookmarks={markers.bookmarks}
+      window={{ from: now - before * speed, span: (before + after) * speed }}
+      onDrag={(from) => playhead.current.set(from + before * speed)}
+      playheadAt={now}
+      media={videoRef}
+      reverse={reverse}
+    />
+  );
+}
+
 export default function PlayerPage() {
   const [mode, setMode] = usePersistedState<PlayerMode>("ossm:playerMode", "pattern");
   const { ossm, state, connecting, error, connect, disconnect } = useOssm();
@@ -686,7 +724,7 @@ export default function PlayerPage() {
             </Box>
           )}
           {inTheater && mode === "funscript" && played && theaterMinimap && (
-            <ScriptMinimap script={played} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />
+            <PlayerMinimap actions={playedActions} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />
           )}
         </>
       ) : (
@@ -757,7 +795,7 @@ export default function PlayerPage() {
                 onPointerDown={dragGraphHeight}
               />
             </Box>}
-            {minimap && <ScriptMinimap script={played} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />}
+            {minimap && <PlayerMinimap actions={playedActions} markers={markers} speed={scriptSpeed} playhead={playhead} reverse={reverse} videoRef={videoRef} span={graphWindow} />}
           </>
         ) : (
           <Flex align="center" justify="center" flexShrink="0" height={`${graphHeight}px`} style={{ borderRadius: 6, background: "var(--gray-a2)" }}>
