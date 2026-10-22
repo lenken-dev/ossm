@@ -92,6 +92,8 @@ export function diffPieces(before: Action[], after: Action[]): Piece[] {
   }
   const key = (a: Action, i: number, all: Action[]) => `${a.at - (all[i - 1]?.at ?? 0)},${a.pos}`;
   const [kb, ka] = [before.map(key), after.map(key)];
+  /** The time from the point at `k` to the next; the script's last point, its own time. */
+  const past = (all: Action[], k: number) => (k + 1 < all.length ? all[k + 1].at - all[k].at : all[k].at);
   let start = 0;
   while (start < kb.length && start < ka.length && kb[start] === ka[start]) start++;
   let end = 0;
@@ -102,9 +104,9 @@ export function diffPieces(before: Action[], after: Action[]): Piece[] {
   let [i, j] = [start, start];
   for (const [pi, pj] of [...pairs.map(([a, b]) => [a + start, b + start]), [kb.length - end, ka.length - end]]) {
     let [i1, j1] = [pi, pj];
-    // The point after an insert or delete only changed its time since the point before; it stays unchanged.
-    // ponytail: also takes a replaced last point at the same depth as unchanged; compare the times past it if that misleads.
-    while (i1 > i && j1 > j && before[i1 - 1].pos === after[j1 - 1].pos) [i1, j1] = [i1 - 1, j1 - 1];
+    // The point after an insert or delete only changed its time since the point before; it stays unchanged
+    // when it keeps its depth and its time to the next point.
+    while (i1 > i && j1 > j && before[i1 - 1].pos === after[j1 - 1].pos && past(before, i1 - 1) === past(after, j1 - 1)) [i1, j1] = [i1 - 1, j1 - 1];
     if (i1 > i || j1 > j) hunks.push({ i0: i, i1, j0: j, j1 });
     [i, j] = [pi + 1, pj + 1];
   }
