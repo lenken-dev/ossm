@@ -39,8 +39,8 @@ const gripLine = (key: string, left: number, right: number, ly: number, down: (e
 );
 
 /** Out's and In's curves dashed across the open tool's box, `depth` placing their values, the part shown's bolder. */
-const outInCurves = ({ genCurve, genPart }: Tools, depth: (v: number) => number) => (["out", "in"] as const).map((key) => (
-  <polyline key={key} points={genCurve(key, (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={genPart === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
+const outInCurves = ({ functions: { curve, part } }: Tools, depth: (v: number) => number) => (["out", "in"] as const).map((key) => (
+  <polyline key={key} points={curve(key, (v) => depth(clamp(v, 0, 100)))} fill="none" strokeWidth={part === key ? 2 : 1} strokeDasharray="4 3" style={{ stroke: "var(--accent-9)", pointerEvents: "none" }} />
 ));
 
 /**
@@ -50,23 +50,24 @@ const outInCurves = ({ genCurve, genPart }: Tools, depth: (v: number) => number)
  * moves its Phase, and its Min and Max together; its first peak in the box
  * moves its Max, the trough after it its Min, and either the Period, the
  * other staying; a pulse's falling edge its Width, around the peak, as does
- * the end of a trapezoid's hold on Max; a spline's knots and line as dragKnot's and
- * addKnot's. Values in whole steps: Out's and In's depths within 0–100,
+ * the end of a trapezoid's hold on Max; a spline's knots and line as drag.knot's and
+ * drag.addKnot's. Values in whole steps: Out's and In's depths within 0–100,
  * Interval's (ms), Speed's and Time's from 1; none while a field they move is refused.
  */
 const funcHandles = (tools: Tools, { x }: Viewport, key: FuncKey, yOf: (v: number) => number) => {
-  const { fnSetup, fnBox, genCurve, timingY, timingLow, timingHigh, timingHeight, setFunc, dragHandle, rangeTime, addKnot, dragKnot } = tools;
-  const func = fnSetup[key]!;
-  const { from, to, low, high } = fnBox!;
+  const { functions, timing } = tools;
+  const { y: timingY, low: timingLow, high: timingHigh } = timing;
+  const func = functions.setup[key]!;
+  const { from, to, low, high } = tools.boxes.fn!;
   const own = ownScale(key);
   const f = (field: ShapeField) => typed(func[field] ?? "");
-  const curve = genCurve(key, own ? timingY : (v) => yOf(clamp(v, 0, 100)));
+  const curve = functions.curve(key, own ? timingY : (v) => yOf(clamp(v, 0, 100)));
   const fit = (v: number) => String(own ? Math.max(Math.round(v), 1) : clamp(Math.round(v), 0, 100));
   /** Drag a handle; `move` gets how far the pointer has gone in ms and in the function's value, and gives the fields it changes. */
   const drag = (e: PointerEvent<SVGElement>, move: (dt: number, dv: number) => Partial<Func>) => {
     // Out's and In's are depths, deeper down.
     const scale = own ? (timingHigh - timingLow) / 100 : high > low ? -100 / (high - low) : 0;
-    dragHandle(e, (dt, dp) => setFunc(key, (s) => ({ ...s, ...move(dt, dp * scale) })), own ? timingHeight - 2 * PAD : undefined);
+    tools.drag.handle(e, (dt, dp) => functions.set(key, (s) => ({ ...s, ...move(dt, dp * scale) })), own ? timing.height - 2 * PAD : undefined);
   };
   /** A value's line across the box, dragged by it or its grip at the right end; drawn unless it is a constant's, which its curve shows. */
   const line = (field: ShapeField) => {
@@ -84,19 +85,19 @@ const funcHandles = (tools: Tools, { x }: Viewport, key: FuncKey, yOf: (v: numbe
     case "ramp":
       return <>
         {point("start", 0, f("start"), "ns-resize", (e) => drag(e, (_, dv) => ({ start: fit(f("start") + dv) })))}
-        {point("end", rangeTime(100) - from, f("end"), "ns-resize", (e) => drag(e, (_, dv) => ({ end: fit(f("end") + dv) })))}
+        {point("end", functions.rangeTime(100) - from, f("end"), "ns-resize", (e) => drag(e, (_, dv) => ({ end: fit(f("end") + dv) })))}
       </>;
     case "spline": {
       // An Interval or Speed spline's knots on its scale, the timing view's.
       const knotY = (v: number) => yOf(own ? timingLow + (v / 100) * (timingHigh - timingLow) : v);
       return <>
         {/* Its line, wider and unseen, adds a knot where clicked. */}
-        <polyline points={curve} fill="none" strokeWidth={GRIP} stroke="transparent" style={{ cursor: "copy" }} onPointerDown={(e) => addKnot(e, key)} />
+        <polyline points={curve} fill="none" strokeWidth={GRIP} stroke="transparent" style={{ cursor: "copy" }} onPointerDown={(e) => tools.drag.addKnot(e, key)} />
         {func.knots!.map(([t, v], i, knots) => grip(
           `${key}-${i}`,
-          [x(rangeTime(t)) - GRIP / 2, knotY(v) - GRIP / 2, GRIP, GRIP],
+          [x(functions.rangeTime(t)) - GRIP / 2, knotY(v) - GRIP / 2, GRIP, GRIP],
           i === 0 || i === knots.length - 1 ? "ns-resize" : "move",
-          (e) => dragKnot(e, key, knots, i),
+          (e) => tools.drag.knot(e, key, knots, i),
           true,
         ))}
       </>;
@@ -142,7 +143,7 @@ const funcHandles = (tools: Tools, { x }: Viewport, key: FuncKey, yOf: (v: numbe
 
 /** The open tool's boxes and handles in the graph, `viewport`'s, as SVG: Scale's, Shift depth's, Generate's and Repeat's. */
 export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewport }) {
-  const { tool, scaleBox, shiftBox, toolSpan, genBox, genPart, repParams, repBox, fnBox, dragScale, dragShift, dragGenerate, dragRepeat, addPattern, dragPattern } = tools;
+  const { tool, boxes: { scale: scaleBox, shift: shiftBox, span: toolSpan, generate: genBox, repeat: repParams, fn: fnBox }, functions: { part: genPart }, drag } = tools;
   const { x, y, plotHeight } = viewport;
   return <>
     {/* Scale's box, like the selection box: its right edge stretches time, its top and bottom set the depths, the right corners both, its body moves the depths together; all at one time, it only has the depths. */}
@@ -153,11 +154,11 @@ export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewp
       const w = Math.max(right - left, 2 * GRIP);
       return (
         <g>
-          <rect x={left} y={top} width={right - left} height={bottom - top} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "ns-resize" }} onPointerDown={(e) => dragScale(e, ["low", "high"])} />
-          {(["low", "high"] as const).map((v) => grip(v, [(left + right - w) / 2, y(scaleBox[v]) - GRIP / 2, w, GRIP], "ns-resize", (e) => dragScale(e, [v])))}
-          {stretches && grip("to", [right - GRIP / 2, top, GRIP, bottom - top], "ew-resize", (e) => dragScale(e, ["to"]))}
+          <rect x={left} y={top} width={right - left} height={bottom - top} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "ns-resize" }} onPointerDown={(e) => drag.scale(e, ["low", "high"])} />
+          {(["low", "high"] as const).map((v) => grip(v, [(left + right - w) / 2, y(scaleBox[v]) - GRIP / 2, w, GRIP], "ns-resize", (e) => drag.scale(e, [v])))}
+          {stretches && grip("to", [right - GRIP / 2, top, GRIP, bottom - top], "ew-resize", (e) => drag.scale(e, ["to"]))}
           {stretches && (["low", "high"] as const).map((v) => (
-            grip(`to-${v}`, [right - GRIP / 2, y(scaleBox[v]) - GRIP / 2, GRIP, GRIP], y(scaleBox[v]) === top ? "nesw-resize" : "nwse-resize", (e) => dragScale(e, ["to", v]), true)
+            grip(`to-${v}`, [right - GRIP / 2, y(scaleBox[v]) - GRIP / 2, GRIP, GRIP], y(scaleBox[v]) === top ? "nesw-resize" : "nwse-resize", (e) => drag.scale(e, ["to", v]), true)
           ))}
         </g>
       );
@@ -171,8 +172,8 @@ export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewp
       const h = Math.max(bottom - top, GRIP);
       return (
         <g>
-          <rect x={left} y={(top + bottom - h) / 2} width={w} height={h} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "ns-resize" }} onPointerDown={(e) => dragShift(e, "offset")} />
-          {(["min", "max"] as const).map((v) => gripLine(v, left, left + w, y(shiftBox[v]), (e) => dragShift(e, v)))}
+          <rect x={left} y={(top + bottom - h) / 2} width={w} height={h} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "ns-resize" }} onPointerDown={(e) => drag.shift(e, "offset")} />
+          {(["min", "max"] as const).map((v) => gripLine(v, left, left + w, y(shiftBox[v]), (e) => drag.shift(e, v)))}
         </g>
       );
     })()}
@@ -183,13 +184,13 @@ export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewp
       const position = genPart === "position";
       return (
         <g>
-          <rect x={b.from} y={b.high} width={b.to - b.from} height={b.low - b.high} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "move", pointerEvents: position ? undefined : "none" }} onPointerDown={(e) => dragGenerate(e, ["from", "to", "low", "high"])} />
+          <rect x={b.from} y={b.high} width={b.to - b.from} height={b.low - b.high} strokeDasharray="4 2" style={{ ...TOOL_BOX, cursor: "move", pointerEvents: position ? undefined : "none" }} onPointerDown={(e) => drag.generate(e, ["from", "to", "low", "high"])} />
           {outInCurves(tools, depth)}
           {position && GRIPS.map(([h, v]) => grip(
             `${h}-${v}`,
             [h ? b[h] - GRIP / 2 : b.from, v ? b[v] - GRIP / 2 : b.high, h ? GRIP : b.to - b.from, v ? GRIP : b.low - b.high],
             h && v ? ((h === "from") === (v === "high") ? "nwse-resize" : "nesw-resize") : h ? "ew-resize" : "ns-resize",
-            (e) => dragGenerate(e, [h, v].filter((s) => s !== null)),
+            (e) => drag.generate(e, [h, v].filter((s) => s !== null)),
             !!(h && v),
           ))}
           {(genPart === "out" || genPart === "in") && funcHandles(tools, viewport, genPart, depth)}
@@ -201,20 +202,21 @@ export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewp
       The pattern box, a click in its time adding a point, its right edge setting Length, its top and bottom its depths; its points over it, joined by a solid line, dragged.
     */}
     {tool?.kind === "repeat" && repParams && (() => {
+      const repBox = tool.fields.box;
       const [left, right, top, bottom] = [x(repBox.from), x(repBox.from + repParams.length), y(repParams.top), y(repParams.bottom)];
       const depth = (v: number) => y(repParams.top - (v * (repParams.top - repParams.bottom)) / 100);
       return (
         <g>
           {fnBox && <rect x={left} y={top} width={x(fnBox.to) - left} height={bottom - top} style={{ fill: TOOL_BOX.fill, pointerEvents: "none" }} />}
           {fnBox && outInCurves(tools, depth)}
-          <rect x={left} width={right - left} height={plotHeight} fill="transparent" style={{ cursor: "copy" }} onPointerDown={addPattern} />
+          <rect x={left} width={right - left} height={plotHeight} fill="transparent" style={{ cursor: "copy" }} onPointerDown={drag.addPattern} />
           <rect x={left} y={top} width={right - left} height={bottom - top} strokeDasharray="4 2" style={{ fill: "none", stroke: TOOL_BOX.stroke, pointerEvents: "none" }} />
-          {(["low", "high"] as const).map((v) => grip(v, [left, y(repParams[v === "low" ? "bottom" : "top"]) - GRIP / 2, right - left, GRIP], "ns-resize", (e) => dragRepeat(e, [v])))}
-          {grip("to", [right - GRIP / 2, top, GRIP, Math.max(bottom - top, GRIP)], "ew-resize", (e) => dragRepeat(e, ["to"]))}
-          {(["low", "high"] as const).map((v) => grip(`to-${v}`, [right - GRIP / 2, (v === "low" ? bottom : top) - GRIP / 2, GRIP, GRIP], v === "high" ? "nesw-resize" : "nwse-resize", (e) => dragRepeat(e, ["to", v]), true))}
+          {(["low", "high"] as const).map((v) => grip(v, [left, y(repParams[v === "low" ? "bottom" : "top"]) - GRIP / 2, right - left, GRIP], "ns-resize", (e) => drag.repeat(e, [v])))}
+          {grip("to", [right - GRIP / 2, top, GRIP, Math.max(bottom - top, GRIP)], "ew-resize", (e) => drag.repeat(e, ["to"]))}
+          {(["low", "high"] as const).map((v) => grip(`to-${v}`, [right - GRIP / 2, (v === "low" ? bottom : top) - GRIP / 2, GRIP, GRIP], v === "high" ? "nesw-resize" : "nwse-resize", (e) => drag.repeat(e, ["to", v]), true))}
           <polyline points={repBox.pattern.filter((a) => a.at <= repBox.from + repParams.length).map((a) => `${x(a.at)},${y(a.pos)}`).join(" ")} fill="none" strokeWidth={2} strokeLinejoin="round" style={{ stroke: "var(--gray-12)", pointerEvents: "none" }} />
           {repBox.pattern.map((a, i) => a.at <= repBox.from + repParams.length && (
-            <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={5} style={{ fill: LINE_COLOR, stroke: "var(--gray-12)", cursor: "move" }} onPointerDown={(e) => dragPattern(e, i)} />
+            <circle key={i} cx={x(a.at)} cy={y(a.pos)} r={5} style={{ fill: LINE_COLOR, stroke: "var(--gray-12)", cursor: "move" }} onPointerDown={(e) => drag.pattern(e, i)} />
           ))}
           {fnBox && (genPart === "out" || genPart === "in") && funcHandles(tools, viewport, genPart, depth)}
         </g>
@@ -225,7 +227,7 @@ export function ToolHandles({ tools, viewport }: { tools: Tools; viewport: Viewp
 
 /** The timing function, Generate's Interval or Speed or Repeat's Time, in the graph's time, over the box's, on a scale of its own from 0 at the bottom; with Timing shown, its handles as Out's and In's in the box. */
 export function TimingView({ tools, viewport }: { tools: Tools; viewport: Viewport }) {
-  const { timingShown, timingKey, timingHeight, fnBox, timingLow, timingHigh, genCurve, timingY, genPart, timingTall, setTimingTall } = tools;
+  const { timing: { shown: timingShown, key: timingKey, height: timingHeight, low: timingLow, high: timingHigh, y: timingY, tall: timingTall, setTall: setTimingTall }, boxes: { fn: fnBox }, functions: { curve, part: genPart } } = tools;
   const { width, x } = viewport;
   if (!timingShown || !fnBox) return null;
   const key = timingKey!;
@@ -243,7 +245,7 @@ export function TimingView({ tools, viewport }: { tools: Tools; viewport: Viewpo
               </text>
             </g>
           ))}
-          <polyline points={genCurve(key, timingY)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--blue-9)", pointerEvents: "none" }} />
+          <polyline points={curve(key, timingY)} fill="none" strokeWidth={1.5} style={{ stroke: "var(--blue-9)", pointerEvents: "none" }} />
           {genPart === "timing" && funcHandles(tools, viewport, key, timingY)}
         </>}
       </svg>

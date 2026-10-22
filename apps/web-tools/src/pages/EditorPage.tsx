@@ -12,13 +12,14 @@ import { lightChapters, markerColor, readMarkers, writeMarkers, type Marker } fr
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { NamePopover, SnippetIcon } from "../editor/NamePopover";
 import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, items, markersRegions, movedBy, regionAt, regionName, regionNoun, sameContent, spanned, stretchOf, type Advanced, type Clip, type Content, type Instance, type Region, type Script } from "../editor/model";
-import { rangeFields, refilled, withBookmarks } from "../editor/generate";
+import { refilled, withBookmarks } from "../editor/generate";
 import { download, readClip, readRegions } from "../editor/file";
 import { changedSpan, HISTORY_SIZE, startedAt, UNDO_SIZE, withLibraryChanges, type Timeline } from "../editor/history";
 import { AXIS, bringIntoView, FOLLOW_AT, useViewport } from "../editor/viewport";
 import { MediaPlayer, useMediaPlayer } from "../editor/MediaPlayer";
 import { useMarkers } from "../editor/useMarkers";
 import { useTool } from "../editor/useTool";
+import { useGrid } from "../editor/useGrid";
 import { useLibrary } from "../editor/useLibrary";
 import { usePlacing } from "../editor/usePlacing";
 import { useSelection } from "../editor/useSelection";
@@ -158,8 +159,10 @@ export default function EditorPage() {
   useEffect(() => {
     if (markers.marked.size) setRegionsOn(new Set());
   }, [markers.marked]);
-  const tools = useTool({ actions, regions, bookmarks, zero, selected, view, viewport, advanced: !!advanced, placing: () => !!placing, edit, select, setSelected, setBox, dragging, setDragging, onEditInstance: (instance) => openAdvanced(undefined, instance) });
-  const { tool, setTool, gridOpen, setGridOpen, grid, gridAt, gridPos, setGenRange, timingSpace, repBox, editRegion, repParams, preview, genBox, fnBox } = tools;
+  const tools = useTool({ actions, regions, bookmarks, zero, selected, view, viewport, placing: () => !!placing, edit, select, setSelected, setBox, dragging, setDragging, onEditInstance: (instance) => openAdvanced(undefined, instance) });
+  const { tool, editRegion, preview } = tools;
+  const gridTool = useGrid(!!advanced && !tool, zero);
+  const { grid } = gridTool;
   const snippetLibrary = useLibrary({ advanced: !!advanced, tool: !!tool, editLabel, insert: (clip) => {
     cancelPlacing();
     setPlacing(clip);
@@ -180,7 +183,7 @@ export default function EditorPage() {
       return { states, index: states.length - 1 };
     });
   }, [actions, chapters, bookmarks, regions, library, dragging]);
-  const placement = usePlacing({ script, view, viewport, selected, regionsOn, onMarkers: snapToMarkers, gridAt, gridPos, preview, apartGrip: apart?.grip, edit, select, setBox, fitBox });
+  const placement = usePlacing({ script, view, viewport, selected, regionsOn, onMarkers: snapToMarkers, grid: gridTool, preview, apartGrip: apart?.grip, edit, select, setBox, fitBox });
   const { placing, setPlacing, lifted, setLifted, setPlaceAt, carrying, setSettle, held, setHeld, kept, carry, cancelPlacing, putAt, place, ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed, dragged } = placement;
 
   // The selection goes with the current entry, to come back with it; not while dragging or placing, so an entry keeps the one from before them.
@@ -196,7 +199,7 @@ export default function EditorPage() {
     const { points, regions: rs, markers: ms } = step.selection ?? { points: new Set<number>(), regions: new Set<Region>(), markers: new Set<Marker>() };
     const span = changedSpan(script, step);
     setTimeline((tl) => ({ ...tl, index }));
-    setTool(null);
+    tools.close();
     setScript((s) => ({ ...s, actions, chapters, bookmarks, regions }));
     setLibraryFile({ ossmRsWebTools: { version: 1, snippets: library } });
     setSelected(points);
@@ -379,8 +382,8 @@ export default function EditorPage() {
       const up = Math.abs(y(p.pos) - y(origin.pos)) > Math.abs(x(p.at) - x(origin.at));
       // The point dragged by, or the first region's start, goes on the grid.
       const lead = actions[grabbed] ?? { at: rs[0].from, pos: 0 };
-      const dt = lock && up ? 0 : clamp(gridAt(lead.at + p.at - origin.at) - lead.at, dtMin, dtMax);
-      const dp = rs.length || (lock && !up) ? 0 : clamp(gridPos(lead.pos + p.pos - origin.pos) - lead.pos, dpMin, dpMax);
+      const dt = lock && up ? 0 : clamp(gridTool.at(lead.at + p.at - origin.at) - lead.at, dtMin, dtMax);
+      const dp = rs.length || (lock && !up) ? 0 : clamp(gridTool.pos(lead.pos + p.pos - origin.pos) - lead.pos, dpMin, dpMax);
       last = shifted(dt, dp);
       if (actions[grabbed]) setApart((a) => a && { ...a, now: { at: lead.at + dt, pos: lead.pos + dp } });
     };
@@ -441,12 +444,12 @@ export default function EditorPage() {
   };
   // With a tool open, undo and redo go through its own history; undo past its start discards it.
   const canUndo = !dragging && (!!tool || timeline.index > 0);
-  const canRedo = !dragging && (tool ? tools.canRedo : timeline.index < timeline.states.length - 1);
+  const canRedo = !dragging && (tool ? tools.history.canRedo : timeline.index < timeline.states.length - 1);
   // Else what is pending goes first, as with Escape: a drag in place, or what is being placed.
-  const undo = () => (tool ? tools.undo() : discard() || (canUndo && jump(timeline.index - 1)));
-  const redo = () => (tool ? canRedo && tools.redo() : discard() || (canRedo && jump(timeline.index + 1)));
+  const undo = () => (tool ? tools.history.undo() : discard() || (canUndo && jump(timeline.index - 1)));
+  const redo = () => (tool ? canRedo && tools.history.redo() : discard() || (canRedo && jump(timeline.index + 1)));
 
-  const maxSpan = Math.max(longest, fnBox?.to ?? 0, MAX_SPAN_FLOOR);
+  const maxSpan = Math.max(longest, tools.boxes.fn?.to ?? 0, MAX_SPAN_FLOOR);
   const spanStep = SPAN_STEPS.find((s) => s * SPAN_STEP_COUNT >= maxSpan / 1000) ?? SPAN_STEPS[SPAN_STEPS.length - 1];
 
   // The wheel scrolls through time, with Ctrl it zooms around the pointer. Not passive, to keep the page from scrolling.
@@ -478,7 +481,7 @@ export default function EditorPage() {
   // further. Not while typing in a field.
   // With a tool open, Escape (also in its fields) discards it, and undo and redo go through its changes; other keys do nothing.
   useWindowEvent("keydown", (e) => {
-    if (tool && e.key === "Escape") return setTool(null);
+    if (tool && e.key === "Escape") return tools.close();
     if (e.target instanceof HTMLInputElement) return;
     const key = e.key.toLowerCase();
     if (key === "p" && !e.ctrlKey && !e.metaKey && media.videoUrl) return media.togglePlayer();
@@ -494,7 +497,7 @@ export default function EditorPage() {
     } else if (e.key === "Escape") {
       // What is pending goes first, then the grid, then the selection.
       if (discard()) return;
-      if (gridOpen) setGridOpen(false);
+      if (gridTool.open) gridTool.setOpen(false);
       else {
         select([]);
         markers.clearMarked();
@@ -553,7 +556,7 @@ export default function EditorPage() {
 
   /** Drop what is pending: the open tool, unapplied, else put back what is dragged in place, else stop placing; returns whether there was any. */
   const discard = () => {
-    if (tool) setTool(null);
+    if (tool) tools.close();
     else if (cancelApart.current) cancelApart.current();
     else if (placing) cancelPlacing();
     else return false;
@@ -604,8 +607,8 @@ export default function EditorPage() {
     mainTimeline.current = null;
     setAdvanced(null);
     // Cancelled, an open tool goes too, unapplied, and the grid.
-    setTool(null);
-    setGridOpen(false);
+    tools.close();
+    gridTool.setOpen(false);
     setBox(null);
     if (snippet) {
       if (done) saveSnippet(snippet.path ?? [name!], { actions: result, regions: made });
@@ -769,7 +772,7 @@ export default function EditorPage() {
   const dashed = tool || lifted ? (() => {
     const all = tool?.actions ?? actions;
     const a = !tool ? all.slice(byTime(all, lifted!.from), afterTime(all, lifted!.to))
-      : tool.kind !== "repeat" ? all : repParams ? all.slice(byTime(all, repBox.from), afterTime(all, repBox.from + repParams.length)) : [];
+      : tool.kind !== "repeat" ? all : tools.boxes.repeat ? all.slice(byTime(all, tool.fields.box.from), afterTime(all, tool.fields.box.from + tools.boxes.repeat.length)) : [];
     const moved = tool ? [] : regions.filter((r) => r.from >= lifted!.from && r.to <= lifted!.to);
     return { points: a, movedRegions: moved, ring: !tool && a.length === 1 && !regionAt(regions, a[0].at) };
   })() : null;
@@ -910,7 +913,7 @@ export default function EditorPage() {
         </Callout.Root>
       )}
       {/* With a tool open, the grid's too, the panel only has the tool. */}
-      {!tool && !gridOpen && <>
+      {!tool && !gridTool.open && <>
       <Text size="2" color="gray">
         {actions.length} points{selected.size > 1 && ` · ${selected.size} selected`} · {formatScriptTime((actions.length ? end - zero : 0) / 1000)}
       </Text>
@@ -928,11 +931,7 @@ export default function EditorPage() {
       <SwitchRow
         label="Time from 0"
         checked={fromZero}
-        onCheckedChange={(on) => {
-          setFromZero(on);
-          // Generate's From and To follow, so its box stays.
-          if (genBox) setGenRange(rangeFields(genBox, on ? advanced.zero : 0));
-        }}
+        onCheckedChange={setFromZero}
       />
       <SwitchRow
         label="Place points on markers"
@@ -972,9 +971,9 @@ export default function EditorPage() {
       <Separator size="4" />
       <SpeedCalculator open={calcShown} setOpen={setCalcShown} script={calcScript} selection={selected.size > 0 || chosen.length > 0} />
       </>}
-      <ToolPanel tools={tools} advanced={!!advanced} actions={actions} regions={regions} bookmarks={bookmarks} zero={zero} selectedCount={selected.size} placing={!!placing} />
+      <ToolPanel tools={tools} grid={gridTool} advanced={!!advanced} actions={actions} regions={regions} bookmarks={bookmarks} zero={zero} selectedCount={selected.size} placing={!!placing} />
       {/* At the panel's bottom as a tool's Apply, which takes its place while a tool is open, or the grid. */}
-      {!tool && !gridOpen && (
+      {!tool && !gridTool.open && (
         <Flex direction="column" gap="2" py="3" mb="-3" style={{ marginTop: "auto", position: "sticky", bottom: 0, background: "var(--color-background)" }}>
           {/* The sent stamp makes every send a change, which other tabs hear of. */}
           <Button variant="soft" disabled={actions.length < 2} title="Play these points in the player" onClick={sendToPlayer}>
@@ -1117,7 +1116,7 @@ export default function EditorPage() {
         gap="3"
         flexGrow="1"
         // Its own least height, so it shrinks with the graph instead of keeping the graph's measured one.
-        minHeight={`${120 + 12 + LANE_HEIGHT + timingSpace}px`}
+        minHeight={`${120 + 12 + LANE_HEIGHT + tools.timing.space}px`}
         onPointerMove={(e) => void (hoverAt.current = Math.max(pointerAt(e).at, 0))}
         onPointerLeave={() => void (hoverAt.current = null)}
       >

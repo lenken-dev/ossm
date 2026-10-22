@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type PointerEvent,
 import { clamp, type Action } from "../funscript/model";
 import { afterTime, byTime, items, markersRegions, movedBy, regionAt, stretchOf, type Area, type Placing, type Region, type Script } from "./model";
 import { refilled } from "./generate";
+import type { Grid } from "./useGrid";
 import type { Tools } from "./useTool";
 import type { View, Viewport } from "./viewport";
 
@@ -83,21 +84,20 @@ export interface Placement {
  * What is being placed, on the `viewport`'s time and depth, and the
  * `script`'s stretch lifted to move it: lifting `select`s nothing and drops
  * the box with `setBox`; put in as an `edit`, the picked ones are selected,
- * with `fitBox` around them. It snaps to the grid by `gridAt` and `gridPos`,
- * or `onMarkers` to the nearest bookmark, and keeps off the regions it would
- * cut into while their edges are in `view`. Drawn as it would go in, else as
- * the tool's `preview` or the script, with the `selected` points and
+ * with `fitBox` around them. It snaps to the `grid`, or `onMarkers` to the
+ * nearest bookmark, and keeps off the regions it would cut into while their
+ * edges are in `view`. Drawn as it would go in, else as the tool's
+ * `preview` or the script, with the `selected` points and
  * `regionsOn`. A selection dragged apart is dragged by `apartGrip`.
  */
-export function usePlacing({ script, view, viewport, selected, regionsOn, onMarkers, gridAt, gridPos, preview, apartGrip, edit, select, setBox, fitBox }: {
+export function usePlacing({ script, view, viewport, selected, regionsOn, onMarkers, grid, preview, apartGrip, edit, select, setBox, fitBox }: {
   script: Script;
   view: View;
   viewport: Viewport;
   selected: Set<number>;
   regionsOn: Set<Region>;
   onMarkers: boolean;
-  gridAt: (at: number) => number;
-  gridPos: (pos: number) => number;
+  grid: Grid;
   preview: Tools["preview"];
   apartGrip: Action | undefined;
   edit: (label: string, next: SetStateAction<Script>) => void;
@@ -197,7 +197,7 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, onMark
     const follows = (j: number) => !picked || picked.actions[j];
     const depths = shape.filter((_, j) => follows(j)).map((a) => a.pos);
     const lead = shape[grip ?? 0].pos;
-    const dp = keepDepth || regions.length || !depths.length ? 0 : clamp(gridPos(lead + pos - shape[0].pos) - lead, -Math.min(...depths), 100 - Math.max(...depths));
+    const dp = keepDepth || regions.length || !depths.length ? 0 : clamp(grid.pos(lead + pos - shape[0].pos) - lead, -Math.min(...depths), 100 - Math.max(...depths));
     const first = Math.max(at, 0, ...regions.map((r) => -r.from));
     return shape.map((a, j) => ({ at: first + a.at, pos: follows(j) ? a.pos + dp : a.pos }));
   };
@@ -217,7 +217,7 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, onMark
     const free = onMarkers ? bookmarks.filter((b) => !regionAt(keptRegions, b.time)) : [];
     if (free.length) return free.reduce((a, b) => (Math.abs(b.time - at) < Math.abs(a.time - at) ? b : a)).time;
     const lead = placing!.actions[placing!.grip ?? 0].at;
-    return gridAt(at + lead) - lead;
+    return grid.at(at + lead) - lead;
   };
 
   /** The regions the points being placed carry, with the first point at `pasted`'s. */

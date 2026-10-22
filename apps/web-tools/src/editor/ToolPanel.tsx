@@ -7,17 +7,19 @@ import { clamp, LINE_COLOR, points, speed, type Action } from "../funscript/mode
 import { markerColor, type Bookmark } from "../funscript/markers";
 import { regionAt, typed, type Region } from "./model";
 import { extent, GENERATE_DEFAULTS, newSeed, ownScale, REPEAT_DEFAULTS, reshaped, SHAPES, SPANNED, TOOLS, type Func, type FuncKey, type GenerateSetup, type GenPart, type Shape, type ShapeField } from "./generate";
+import type { Grid } from "./useGrid";
 import type { Tools } from "./useTool";
 
 /**
  * The sidebar's tools, on `actions` but the `regions`' points, times shown
  * from `zero`: in the `advanced` editor the list of tools, Repeat needing
- * `selectedCount` of two or more and none while `placing`, or the grid's
+ * `selectedCount` of two or more and none while `placing`, or the `grid`'s
  * fields; the open tool's fields, Generate's Markers timing with the
  * `bookmarks`' names, and its Apply and Discard docked at the panel's bottom.
  */
-export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, selectedCount, placing }: {
+export function ToolPanel({ tools, grid, advanced, actions, regions, bookmarks, zero, selectedCount, placing }: {
   tools: Tools;
+  grid: Grid;
   advanced: boolean;
   actions: Action[];
   regions: Region[];
@@ -26,7 +28,8 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
   selectedCount: number;
   placing: boolean;
 }) {
-  const { tool, setTool, gridOpen, setGridOpen, gridFields, setGridFields, scale, setScale, shift, setShift, maxSpeed, setMaxSpeed, speedAnchor, setSpeedAnchor, genSetup, setGenSetup, timingView, setTimingView, genRange, setGenRange, genPart, setGenPart, repSetup, setRepSetup, repBox, setRepBox, openTool, repParams, repRun, preview, fnSetup, fnDefaults, setFunc, toolBlocked, genMarked, applyTool, invert } = tools;
+  const { tool, open, close, apply, invert, setFields, preview, blocked, boxes, functions, timing } = tools;
+  const { part: genPart, setPart: setGenPart, setup: fnSetup, defaults: fnDefaults, set: setFunc, marked: genMarked } = functions;
 
   /** A part's header in Generate's list, pressed to expand it: its name, then `right`, the part's controls while it is expanded, else a summary. */
   const partHeader = (part: GenPart, label: string, right?: ReactNode) => (
@@ -144,8 +147,8 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
   // In the main script, only a region's Generate.
   if (!advanced && !tool) return null;
   return <>
-    {advanced && !tool && !gridOpen && <Separator size="4" />}
-    {!tool && !gridOpen ? <>
+    {advanced && !tool && !grid.open && <Separator size="4" />}
+    {!tool && !grid.open ? <>
       {/* The tools, on the selected points or all but the regions', each with a small graph of what it does; Generate needs none, Repeat a pattern of two selected. */}
       <Text size="2" weight="medium">Tools</Text>
       {TOOLS.map(({ kind, name, before, after }) => (
@@ -155,7 +158,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
           color="gray"
           disabled={(kind === "repeat" ? selectedCount < 2 : kind !== "generate" && kind !== "grid" && actions.every((a) => regionAt(regions, a.at))) || placing}
           title={kind === "repeat" ? "Repeat the selected points, two or more" : kind === "grid" ? "Snap points to a grid while it is open" : undefined}
-          onClick={() => (kind === "invert" ? invert() : kind === "grid" ? setGridOpen(true) : openTool(kind))}
+          onClick={() => (kind === "invert" ? invert() : kind === "grid" ? grid.setOpen(true) : open(kind))}
           style={{ justifyContent: "flex-start" }}
         >
           <svg width="56" height="24" viewBox="0 0 56 24" fill="none" strokeWidth={1.5} strokeLinejoin="round">
@@ -167,7 +170,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
       ))}
     </> : tool ? <>
       <Flex gap="2" align="center">
-        <IconButton size="1" variant="ghost" color="gray" aria-label="Back to the tools" title="Back to the tools (Escape)" onClick={() => setTool(null)}>
+        <IconButton size="1" variant="ghost" color="gray" aria-label="Back to the tools" title="Back to the tools (Escape)" onClick={close}>
           <ArrowLeftIcon />
         </IconButton>
         <Text size="2" weight="medium">{tool.region ? "Edit region" : TOOLS.find((t) => t.kind === tool.kind)!.name}</Text>
@@ -180,8 +183,8 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
               type="number"
               step="any"
               aria-label={{ time: "Time scale", out: "Out depth", in: "In depth" }[field]}
-              value={scale[field]}
-              onChange={(e) => setScale({ ...scale, [field]: e.target.value })}
+              value={tool.fields[field]}
+              onChange={(e) => setFields({ [field]: e.target.value })}
               style={{ flex: 1, minWidth: 0 }}
             >
               <TextField.Slot side="left">{{ time: "Time", out: "Out", in: "In" }[field]}</TextField.Slot>
@@ -198,8 +201,8 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
               type="number"
               step="any"
               aria-label={{ offset: "Depth offset", out: "Out limit", in: "In limit" }[field]}
-              value={shift[field]}
-              onChange={(e) => setShift({ ...shift, [field]: e.target.value })}
+              value={tool.fields[field]}
+              onChange={(e) => setFields({ [field]: e.target.value })}
               style={{ flex: 1, minWidth: 0 }}
             >
               <TextField.Slot side="left">{{ offset: "Offset", out: "Out", in: "In" }[field]}</TextField.Slot>
@@ -213,10 +216,10 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
         {(() => {
           const top = Math.ceil(tool.fastest ?? 0);
           if (top < 1) return <Text size="1" color="gray">Fastest: {tool.fastest === null ? "—" : 0}</Text>;
-          const typedLimit = typed(maxSpeed);
+          const typedLimit = typed(tool.fields.max);
           return (
             <Box>
-              <Slider aria-label="Max speed" min={1} max={top} step={1} value={[Number.isFinite(typedLimit) ? clamp(typedLimit, 1, top) : top]} onValueChange={([v]) => setMaxSpeed(String(v))} />
+              <Slider aria-label="Max speed" min={1} max={top} step={1} value={[Number.isFinite(typedLimit) ? clamp(typedLimit, 1, top) : top]} onValueChange={([v]) => setFields({ max: String(v) })} />
               <Flex justify="between" mt="1">
                 <Text size="1" color="gray">1</Text>
                 <Text size="1" color="gray">Fastest: {top}</Text>
@@ -225,10 +228,10 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
           );
         })()}
         <Flex gap="2" align="center">
-          <TextField.Root type="number" min={0} step="any" aria-label="Max speed" value={maxSpeed} onChange={(e) => setMaxSpeed(e.target.value)} style={{ flex: 1, minWidth: 0 }}>
+          <TextField.Root type="number" min={0} step="any" aria-label="Max speed" value={tool.fields.max} onChange={(e) => setFields({ max: e.target.value })} style={{ flex: 1, minWidth: 0 }}>
             <TextField.Slot side="left">Max</TextField.Slot>
           </TextField.Root>
-          <SegmentedControl.Root size="1" value={speedAnchor} onValueChange={(v) => setSpeedAnchor(v as "in" | "out")} title="Keep the In or the Out reversals">
+          <SegmentedControl.Root size="1" value={tool.fields.anchor} onValueChange={(v) => setFields({ anchor: v as "in" | "out" })} title="Keep the In or the Out reversals">
             <SegmentedControl.Item value="in">In</SegmentedControl.Item>
             <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
           </SegmentedControl.Root>
@@ -236,7 +239,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
       </>}
       {/* The setup's parts as a list, one expanded at a time: Layout the range box's fields, First and the runs on Out and In, Timing the timing and its function, Out and In theirs. */}
       {tool.kind === "generate" && <>
-        {partHeader("position", "Layout", genPart !== "position" && `${genRange.from}–${genRange.to} s`)}
+        {partHeader("position", "Layout", genPart !== "position" && `${tool.fields.range.from}–${tool.fields.range.to} s`)}
         {genPart === "position" && ([["from", "to"], ["out", "in"]] as const).map((row) => (
           <Flex key={row[0]} gap="2">
             {row.map((field) => (
@@ -245,8 +248,8 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
                 type="number"
                 step="any"
                 aria-label={{ from: "Range start", to: "Range end", out: "Range out depth", in: "Range in depth" }[field]}
-                value={genRange[field]}
-                onChange={(e) => setGenRange({ ...genRange, [field]: e.target.value })}
+                value={tool.fields.range[field]}
+                onChange={(e) => setFields({ range: { ...tool.fields.range, [field]: e.target.value } })}
                 style={{ flex: 1, minWidth: 0 }}
               >
                 <TextField.Slot side="left">{{ from: "From", to: "To", out: "Out", in: "In" }[field]}</TextField.Slot>
@@ -257,7 +260,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
         ))}
         {genPart === "position" && <Flex gap="2" align="center" justify="between">
           <Text size="2">First</Text>
-          <SegmentedControl.Root size="1" value={genSetup.first} onValueChange={(v) => setGenSetup({ ...genSetup, first: v as "in" | "out" })} title="Start In or Out">
+          <SegmentedControl.Root size="1" value={tool.fields.setup.first} onValueChange={(v) => setFields({ setup: { ...tool.fields.setup, first: v as "in" | "out" } })} title="Start In or Out">
             <SegmentedControl.Item value="in">In</SegmentedControl.Item>
             <SegmentedControl.Item value="out">Out</SegmentedControl.Item>
           </SegmentedControl.Root>
@@ -271,8 +274,8 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
                 min="1"
                 step="1"
                 aria-label={field === "outs" ? "Points in a row on Out" : "Points in a row on In"}
-                value={genSetup[field] ?? "1"}
-                onChange={(e) => setGenSetup({ ...genSetup, [field]: e.target.value })}
+                value={tool.fields.setup[field] ?? "1"}
+                onChange={(e) => setFields({ setup: { ...tool.fields.setup, [field]: e.target.value } })}
                 style={{ flex: 1, minWidth: 0 }}
               >
                 <TextField.Slot side="left">{field === "outs" ? "Out" : "In"}</TextField.Slot>
@@ -281,15 +284,15 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
             ))}
           </Flex>
         )}
-        {partHeader("timing", "Timing", genPart !== "timing" && { interval: "Interval", speed: "Speed", markers: "Markers" }[genSetup.timing])}
+        {partHeader("timing", "Timing", genPart !== "timing" && { interval: "Interval", speed: "Speed", markers: "Markers" }[tool.fields.setup.timing])}
         {/* In a row of its own, across the panel. */}
         {genPart === "timing" && (
           <SegmentedControl.Root
             size="1"
             style={{ width: "100%" }}
-            value={genSetup.timing}
+            value={tool.fields.setup.timing}
             // Markers only while the box holds a bookmark.
-            onValueChange={(v) => (v !== "markers" || genMarked) && setGenSetup({ ...genSetup, timing: v as GenerateSetup["timing"] })}
+            onValueChange={(v) => (v !== "markers" || genMarked) && setFields({ setup: { ...tool.fields.setup, timing: v as GenerateSetup["timing"] } })}
             title="Space the points by a time or a speed, or put them at the bookmarks in the box"
           >
             <SegmentedControl.Item value="interval">Interval</SegmentedControl.Item>
@@ -305,9 +308,9 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
           </SegmentedControl.Root>
         )}
         {/* Markers timing: which bookmark names it puts points at, all at first; in a popover, as there can be many. */}
-        {genPart === "timing" && genSetup.timing === "markers" && (() => {
+        {genPart === "timing" && tool.fields.setup.timing === "markers" && (() => {
           const names = [...new Set(bookmarks.map((b) => b.name))].sort((a, b) => a.localeCompare(b));
-          const skip = genSetup.skip ?? [];
+          const skip = tool.fields.setup.skip ?? [];
           const used = names.filter((n) => !skip.includes(n)).length;
           return (
             <Flex gap="2" align="center" justify="between">
@@ -328,7 +331,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
                             checked={!skip.includes(n)}
                             onCheckedChange={(on) => {
                               const next = on ? skip.filter((o) => o !== n) : [...skip, n];
-                              setGenSetup({ ...genSetup, skip: next.length ? next : undefined });
+                              setFields({ setup: { ...tool.fields.setup, skip: next.length ? next : undefined } });
                             }}
                           />
                           <Box flexShrink="0" width="8px" height="8px" style={{ borderRadius: "50%", background: `var(--${markerColor(n)}-9)` }} />
@@ -342,11 +345,11 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
             </Flex>
           );
         })()}
-        {genPart === "timing" && genSetup.timing !== "markers" && (
-          <SwitchRow label={`Show ${genSetup.timing === "speed" ? "Speed" : "Interval"} below the graph`} checked={timingView} onCheckedChange={setTimingView} />
+        {genPart === "timing" && tool.fields.setup.timing !== "markers" && (
+          <SwitchRow label={`Show ${tool.fields.setup.timing === "speed" ? "Speed" : "Interval"} below the graph`} checked={timing.view} onCheckedChange={timing.setView} />
         )}
         {/* Markers timing has no function. */}
-        {funcParts(genSetup.timing === "speed" ? [["speed", "Speed", ""]] : genSetup.timing === "interval" ? [["interval", "Interval", "s"]] : [])}
+        {funcParts(tool.fields.setup.timing === "speed" ? [["speed", "Speed", ""]] : tool.fields.setup.timing === "interval" ? [["interval", "Interval", "s"]] : [])}
         <Flex gap="2" align="center" justify="between">
           {/* Of the generated points: their fastest segment and the shortest time between two. */}
           {(() => {
@@ -358,7 +361,7 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
               </Text>
             );
           })()}
-          <Button size="1" variant="soft" color="gray" onClick={() => setGenSetup(GENERATE_DEFAULTS)}>
+          <Button size="1" variant="soft" color="gray" onClick={() => setFields({ setup: GENERATE_DEFAULTS })}>
             <ResetIcon /> Reset
           </Button>
         </Flex>
@@ -370,14 +373,14 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
           min={1}
           step={1}
           aria-label="Count"
-          value={repSetup.count}
-          onChange={(e) => setRepSetup({ ...repSetup, count: e.target.value })}
+          value={tool.fields.setup.count}
+          onChange={(e) => setFields({ setup: { ...tool.fields.setup, count: e.target.value } })}
           onKeyDown={(e) => e.key === "-" && e.preventDefault()}
         >
           <TextField.Slot side="left">Count</TextField.Slot>
         </TextField.Root>
-        {!repRun && repParams && <Text size="1" color="red">Count must be a whole number, at least 1.</Text>}
-        {partHeader("position", "Pattern", genPart !== "position" && `${points(repBox.pattern.length)} · ${repBox.length} s`)}
+        {!boxes.copies && boxes.repeat && <Text size="1" color="red">Count must be a whole number, at least 1.</Text>}
+        {partHeader("position", "Pattern", genPart !== "position" && `${points(tool.fields.box.pattern.length)} · ${tool.fields.box.length} s`)}
         {genPart === "position" && <>
           <Text size="1" color="gray">Drag its points in the graph; click in its box to add one, double-click one to remove it. The box's right edge sets its Length.</Text>
           {([["length"], ["out", "in"]] as const).map((row) => (
@@ -389,8 +392,8 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
                   step={field === "length" ? 0.1 : "any"}
                   min={field === "length" ? 0.1 : undefined}
                   aria-label={{ length: "Pattern length", out: "Pattern out depth", in: "Pattern in depth" }[field]}
-                  value={repBox[field]}
-                  onChange={(e) => setRepBox({ ...repBox, [field]: e.target.value })}
+                  value={tool.fields.box[field]}
+                  onChange={(e) => setFields({ box: { ...tool.fields.box, [field]: e.target.value } })}
                   style={{ flex: 1, minWidth: 0 }}
                 >
                   <TextField.Slot side="left">{{ length: "Length", out: "Out", in: "In" }[field]}</TextField.Slot>
@@ -400,47 +403,47 @@ export function ToolPanel({ tools, advanced, actions, regions, bookmarks, zero, 
             </Flex>
           ))}
         </>}
-        {partHeader("timing", "Time", genPart !== "timing" && SHAPES[repSetup.time.shape].name)}
+        {partHeader("timing", "Time", genPart !== "timing" && SHAPES[tool.fields.setup.time.shape].name)}
         {genPart === "timing" && <>
           <Text size="1" color="gray">Each copy's length, in % of the pattern's; a ramp's or spline's from the first copy to the last.</Text>
-          <SwitchRow label="Show Time below the graph" checked={timingView} onCheckedChange={setTimingView} />
+          <SwitchRow label="Show Time below the graph" checked={timing.view} onCheckedChange={timing.setView} />
         </>}
         {funcParts([["time", "Time", "%"]])}
         <Flex gap="2" align="center" justify="between">
           <Text size="1" color="gray">
-            Copies: {repRun ? repRun.starts.length - 1 : "—"} · Ends at: {repRun ? formatScriptTime((repRun.end - zero) / 1000) : "—"}
+            Copies: {boxes.copies ? boxes.copies.starts.length - 1 : "—"} · Ends at: {boxes.copies ? formatScriptTime((boxes.copies.end - zero) / 1000) : "—"}
           </Text>
-          <Button size="1" variant="soft" color="gray" onClick={() => setRepSetup(REPEAT_DEFAULTS)}>
+          <Button size="1" variant="soft" color="gray" onClick={() => setFields({ setup: REPEAT_DEFAULTS })}>
             <ResetIcon /> Reset
           </Button>
         </Flex>
       </>}
       {/* At the panel's bottom, docked there while it scrolls, covering what passes under; the padding takes the place of the gap and the panel's own. */}
       <Flex direction="column" gap="2" py="3" mb="-3" style={{ marginTop: "auto", position: "sticky", bottom: 0, background: "var(--color-background)" }}>
-        {toolBlocked && <Text size="1" color="red">{toolBlocked}.</Text>}
+        {blocked && <Text size="1" color="red">{blocked}.</Text>}
         <Flex gap="2">
-          <Button disabled={!preview || !!toolBlocked} onClick={applyTool} style={{ flex: 1 }}>Apply</Button>
-          <Button variant="soft" color="gray" onClick={() => setTool(null)} style={{ flex: 1 }}>Discard</Button>
+          <Button disabled={!preview || !!blocked} onClick={apply} style={{ flex: 1 }}>Apply</Button>
+          <Button variant="soft" color="gray" onClick={close} style={{ flex: 1 }}>Discard</Button>
         </Flex>
       </Flex>
     </> : <>
       {/* The grid, without Apply: editing goes on while it is open. Escape in its fields closes it too, as a tool's. */}
       <Flex gap="2" align="center">
-        <IconButton size="1" variant="ghost" color="gray" aria-label="Back to the tools" title="Back to the tools (Escape)" onClick={() => setGridOpen(false)}>
+        <IconButton size="1" variant="ghost" color="gray" aria-label="Back to the tools" title="Back to the tools (Escape)" onClick={() => grid.setOpen(false)}>
           <ArrowLeftIcon />
         </IconButton>
         <Text size="2" weight="medium">Grid</Text>
       </Flex>
       <Text size="1" color="gray">Points added, dragged and placed go to the nearest line. Leave a field empty to not snap that way.</Text>
-      <Flex direction="column" gap="2" onKeyDown={(e) => e.key === "Escape" && setGridOpen(false)}>
-        <TextField.Root type="number" min={0} step="any" aria-label="Time interval" value={gridFields.time} onChange={(e) => setGridFields({ ...gridFields, time: e.target.value })}>
+      <Flex direction="column" gap="2" onKeyDown={(e) => e.key === "Escape" && grid.setOpen(false)}>
+        <TextField.Root type="number" min={0} step="any" aria-label="Time interval" value={grid.fields.time} onChange={(e) => grid.setFields({ ...grid.fields, time: e.target.value })}>
           <TextField.Slot side="left">Time every</TextField.Slot>
           <TextField.Slot side="right">s</TextField.Slot>
         </TextField.Root>
-        <TextField.Root type="number" min={0} step="any" aria-label="Depth interval" value={gridFields.depth} onChange={(e) => setGridFields({ ...gridFields, depth: e.target.value })}>
+        <TextField.Root type="number" min={0} step="any" aria-label="Depth interval" value={grid.fields.depth} onChange={(e) => grid.setFields({ ...grid.fields, depth: e.target.value })}>
           <TextField.Slot side="left">Depth every</TextField.Slot>
         </TextField.Root>
-        <TextField.Root aria-label="Depths" placeholder="33, 66" title="Depths of their own, apart by commas" value={gridFields.depths} onChange={(e) => setGridFields({ ...gridFields, depths: e.target.value })}>
+        <TextField.Root aria-label="Depths" placeholder="33, 66" title="Depths of their own, apart by commas" value={grid.fields.depths} onChange={(e) => grid.setFields({ ...grid.fields, depths: e.target.value })}>
           <TextField.Slot side="left">Depths</TextField.Slot>
         </TextField.Root>
       </Flex>
