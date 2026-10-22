@@ -9,16 +9,20 @@ const DOT_SPACING = 6;
 /** A run of up to this many neighbouring selected points in view also shows rings on the points. */
 const RING_LIMIT = 50;
 
+/** The points of `arr` in `view` and one beyond each edge, so their line reaches the edges. */
+const visibleSlice = (arr: Action[], view: View) => arr.slice(Math.max(byTime(arr, view.from) - 1, 0), byTime(arr, view.from + view.span) + 1);
+
 /**
  * The graph's line and points, in the `viewport` over the time `view`: the
  * `context` runs faintly; the `dashed` line behind, its `movedRegions`' points
  * left out, with a lone point's `ring`; `apart`'s line as it was and the
  * `removed` line; the `visible` points, from index `first` of those shown,
  * the `marks` and the `lit` regions' line drawn over, `muted` thin and faded
- * between them, their dots only with `dotsAllowed` and none in the
- * `shownRegions`; and the `astray` points red, but the `carried` regions'.
+ * between them, no dots in the `shownRegions`; and the `astray` points red,
+ * but the `carried` regions'. With a tool open, `toolOpen`, no region is lit
+ * and no dots show.
  */
-export function GraphCanvas({ viewport, view, context, visible, first, marks, shownRegions, lit, dashed, apart, removed, muted, dotsAllowed, astray }: {
+export function GraphCanvas({ viewport, view, context, visible, first, marks, shownRegions, lit, dashed, apart, removed, muted, toolOpen, astray }: {
   viewport: Viewport;
   view: View;
   context: Action[][];
@@ -31,7 +35,7 @@ export function GraphCanvas({ viewport, view, context, visible, first, marks, sh
   apart: { actions: Action[]; moving: Set<number>; regions: Region[] } | null;
   removed: Action[] | null;
   muted: boolean;
-  dotsAllowed: boolean;
+  toolOpen: boolean;
   astray: { points: Action[]; carried: Region[] } | null;
 }) {
   const { width, height, x, y } = viewport;
@@ -53,7 +57,7 @@ export function GraphCanvas({ viewport, view, context, visible, first, marks, sh
     Object.assign(ctx, { lineWidth: 2, lineJoin: "round", strokeStyle: css.getPropertyValue("--gray-a7") });
     for (const run of context) {
       ctx.beginPath();
-      for (const a of run.slice(Math.max(byTime(run, view.from) - 1, 0), byTime(run, view.from + view.span) + 1)) ctx.lineTo(x(a.at), y(a.pos));
+      for (const a of visibleSlice(run, view)) ctx.lineTo(x(a.at), y(a.pos));
       ctx.stroke();
     }
     // With a tool open, the points it was opened on, faint and dashed behind its result; Repeat's only in its pattern box. Moving, the lifted points where they were, alike.
@@ -65,7 +69,7 @@ export function GraphCanvas({ viewport, view, context, visible, first, marks, sh
       // A moved region shows only its dashed outline, not its points' line.
       const { points: a, movedRegions: moved, ring } = dashed;
       let prev: Action | undefined;
-      for (const p of a.slice(Math.max(byTime(a, view.from) - 1, 0), byTime(a, view.from + view.span) + 1)) {
+      for (const p of visibleSlice(a, view)) {
         const r = regionAt(moved, p.at);
         if (r && prev && regionAt(moved, prev.at) === r) ctx.moveTo(x(p.at), y(p.pos));
         else ctx.lineTo(x(p.at), y(p.pos));
@@ -98,13 +102,13 @@ export function GraphCanvas({ viewport, view, context, visible, first, marks, sh
       Object.assign(ctx, { globalAlpha: 0.35, lineWidth: 2, strokeStyle: css.getPropertyValue("--red-9") });
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
-      for (const a of removed.slice(Math.max(byTime(removed, view.from) - 1, 0), byTime(removed, view.from + view.span) + 1)) ctx.lineTo(x(a.at), y(a.pos));
+      for (const a of visibleSlice(removed, view)) ctx.lineTo(x(a.at), y(a.pos));
       ctx.stroke();
       ctx.restore();
     }
     Object.assign(ctx, { strokeStyle: LINE_COLOR, fillStyle: LINE_COLOR });
     // A selected region's line shows as the selected points', as does the line joining it to a selected point or region next to it.
-    const on = (j: number) => j >= 0 && (marks.has(first + j) || !!regionAt(lit, visible[j].at));
+    const on = (j: number) => j >= 0 && (marks.has(first + j) || (!toolOpen && !!regionAt(lit, visible[j].at)));
     const between = (j: number) => on(j - 1) && on(j);
     ctx.beginPath();
     visible.forEach((a, j) => (muted && between(j) ? ctx.moveTo(x(a.at), y(a.pos)) : ctx.lineTo(x(a.at), y(a.pos))));
@@ -130,12 +134,12 @@ export function GraphCanvas({ viewport, view, context, visible, first, marks, sh
     ctx.stroke(line);
     ctx.restore();
     // Packed this close, the points would only blur the line; a tool's result only shows its line, as its points can't be dragged.
-    const showDots = dotsAllowed && visible.length * DOT_SPACING < width;
+    const showDots = !toolOpen && visible.length * DOT_SPACING < width;
     // One path per look, so drawing stays fast however many points there are.
     const [dots, ringed] = [new Path2D(), new Path2D()];
     visible.forEach((a, j) => {
       const [cx, cy] = [x(a.at), y(a.pos)];
-      const ring = dotsAllowed && marks.has(first + j) && !long[j];
+      const ring = !toolOpen && marks.has(first + j) && !long[j];
       // The regions' points only show their line.
       if ((!ring && !showDots) || regionAt(shownRegions, a.at)) return;
       const path = ring ? ringed : dots;
@@ -154,11 +158,11 @@ export function GraphCanvas({ viewport, view, context, visible, first, marks, sh
       ctx.save();
       Object.assign(ctx, { globalAlpha: 0.6, lineWidth: 2, strokeStyle: red, fillStyle: red });
       ctx.beginPath();
-      const [l0, l1] = [Math.max(byTime(points, view.from) - 1, 0), Math.min(byTime(points, view.from + view.span) + 1, points.length)];
-      for (let j = l0; j < l1; j++) ctx.lineTo(x(points[j].at), y(points[j].pos));
+      const inView = visibleSlice(points, view);
+      for (const a of inView) ctx.lineTo(x(a.at), y(a.pos));
       ctx.stroke();
       const redDots = new Path2D();
-      for (const a of points.slice(l0, l1)) {
+      for (const a of inView) {
         if (regionAt(carried, a.at)) continue;
         redDots.moveTo(x(a.at) + 5, y(a.pos));
         redDots.arc(x(a.at), y(a.pos), 5, 0, 2 * Math.PI);

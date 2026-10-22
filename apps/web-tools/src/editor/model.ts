@@ -29,13 +29,6 @@ export interface Selection {
 /** `list` with the markers in `to` swapped for what they map to. */
 export const swapped = <T extends Marker>(list: T[], to: Map<Marker, Marker>) => list.map((m) => (to.get(m) as T | undefined) ?? m);
 
-/** `set` with `item` in it if it wasn't, else without it. */
-export const toggled = <T,>(item: T) => (set: Set<T>) => {
-  const next = new Set(set);
-  if (!next.delete(item)) next.add(item);
-  return next;
-};
-
 /** The items of `a` that `b` doesn't have, compared by `key`, else as they are. */
 export const only = <T,>(a: T[], b: T[], key: (m: T) => unknown = (m) => m) => {
   const kept = new Set(b.map(key));

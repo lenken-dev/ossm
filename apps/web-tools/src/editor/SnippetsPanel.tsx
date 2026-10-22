@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { useRef, type ReactElement } from "react";
 import { Button, Flex, HoverCard, IconButton, Text, TextField } from "@radix-ui/themes";
 import { ChevronRightIcon, DownloadIcon, MagnifyingGlassIcon, MixerHorizontalIcon, Pencil1Icon, PlusIcon, TrashIcon, UploadIcon } from "@radix-ui/react-icons";
 import { Stats } from "../funscript/widgets";
@@ -11,17 +11,16 @@ import type { Library } from "./useLibrary";
 /**
  * The Snippets panel, beside the graph: the library as a tree; in the main script, its top area takes rows dropped to the top level.
  * Out of the `advanced` editor, it edits the `library`, but not while
- * `placing`; an open `tool` keeps a double-click from inserting. A snippet's
- * Edit, or New snippet with null, opens it with `onOpenSnippet`.
+ * `placing`. A snippet's Edit, or New snippet with null, opens it with
+ * `onOpenSnippet`.
  */
-export function SnippetsPanel({ library: lib, advanced, placing, tool, onOpenSnippet }: {
+export function SnippetsPanel({ library: lib, advanced, placing, onOpenSnippet }: {
   library: Library;
   advanced: boolean;
   placing: boolean;
-  tool: boolean;
   onOpenSnippet: (path: string[] | null) => void;
 }) {
-  const { library, shelf, openFolders, setOpenFolders, snippetQuery, setSnippetQuery, rowDrag, dropOn, rowsPicked, libraryInput, nameTaken, insertSnippet, addFolder, renameEntry, deleteEntry, dropInto, dragRow, exportLibrary, importLibrary } = lib;
+  const { library, shelf, openFolders, setOpenFolders, snippetQuery, setSnippetQuery, rowDrag, dropOn, rowsPicked, nameTaken, insertSnippet, addFolder, renameEntry, deleteEntry, dropInto, dragRow, exportLibrary, importLibrary } = lib;
   /**
    * The library's rows in the folder at `path`, `depth` deep, an open
    * folder's rows after it, each added to `shownRows`. In the main script
@@ -30,6 +29,7 @@ export function SnippetsPanel({ library: lib, advanced, placing, tool, onOpenSni
    * Everywhere a snippet's row is dragged onto the graph to insert it.
    */
   const shownRows: string[] = [];
+  const libraryInput = useRef<HTMLInputElement>(null);
   const libraryRows = (items: Entry[], path: string[], depth: number): ReactElement[] => sortedEntries(items).flatMap((e) => {
     const [name, at] = [entryName(e), [...path, entryName(e)]];
     const key = JSON.stringify(at);
@@ -55,7 +55,7 @@ export function SnippetsPanel({ library: lib, advanced, placing, tool, onOpenSni
               flexGrow="1"
               minWidth="0"
               onClick={isFolder(e) ? toggle : undefined}
-              onDoubleClick={() => !isFolder(e) && !tool && insertSnippet(e)}
+              onDoubleClick={() => !isFolder(e) && insertSnippet(e)}
               style={{ cursor: isFolder(e) ? "pointer" : undefined, userSelect: "none" }}
             >
               {isFolder(e) ? <ChevronRightIcon style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : undefined }} /> : <SnippetIcon style={{ flexShrink: 0 }} />}

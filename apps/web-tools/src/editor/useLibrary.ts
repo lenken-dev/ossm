@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
 import { usePersistedState } from "../hooks/usePersistedState";
+import { toggled } from "../funscript/model";
 import { download } from "./file";
-import { clipBy, generators, instanceOf, toggled, type Clip, type Placing } from "./model";
+import { clipBy, generators, instanceOf, type Clip } from "./model";
 import { entryAt, entryName, isFolder, isPreset, itemsAt, merged, PRESETS, readEntries, under, updatedAt, type Entry, type LibraryFile, type Snippet } from "./library";
 
 /** The snippet library, its edits, and the Snippets panel's open folders, search, row selection and drags. */
 export interface Library {
-  /** The snippet library, shared by all scripts, as its file holds it. */
-  libraryFile: LibraryFile;
+  /** Set the snippet library, shared by all scripts, as its file holds it. */
   setLibraryFile: Dispatch<SetStateAction<LibraryFile>>;
   library: Entry[];
   /** The library as it shows: the presets, then the user's entries. */
@@ -28,7 +28,6 @@ export interface Library {
   dropOn: string | null;
   /** The library's selected rows, by their paths as JSON, to move together. */
   rowsPicked: Set<string>;
-  libraryInput: RefObject<HTMLInputElement | null>;
   /** The library snippet at `path` as the advanced editor opens it: from `zero`, in whole ms; empty when it is gone. */
   snippetFrom(path: string[] | null, zero: number): Clip;
   /** Whether the folder at `folder` has an entry named `name`. */
@@ -36,10 +35,10 @@ export interface Library {
   /** Save `clip` to the library as the snippet at `path`, timed from its first point, in place of one there. */
   saveSnippet(path: string[], clip: Clip): void;
   /**
-   * Insert the library snippet `s`: it follows the pointer until placed, as
-   * a paste, or while its row is dragged until dropped on the graph; in the
-   * main script as an instance, in the advanced editor as its points and
-   * regions.
+   * Insert the library snippet `s` in place of what is being placed: it
+   * follows the pointer until placed, as a paste, or while its row is dragged
+   * until dropped on the graph; in the main script as an instance, in the
+   * advanced editor as its points and regions. Not while a tool is open.
    */
   insertSnippet(s: Snippet): void;
   /** Add an empty folder `name` at the top level. */
@@ -67,17 +66,20 @@ export interface Library {
 /**
  * The snippet library and its edits, each named in the undo history through
  * `editLabel`; in the `advanced` editor, rows are not selected nor moved,
- * and an open `tool` keeps a dragged row from inserting. Inserting places
- * with `setPlacing`, after `cancelPlacing`; an import's error goes to `setError`.
+ * and an open `tool` keeps a snippet from inserting. Inserting places with
+ * `insert`, in place of what is being placed, null placing nothing; a dragged
+ * snippet dropped where nothing takes it goes with `stopPlacing`. An import's
+ * error goes to `setError`.
  */
-export function useLibrary({ advanced, tool, editLabel, cancelPlacing, setPlacing, setError }: {
+export function useLibrary({ advanced, tool, editLabel, insert, stopPlacing, setError }: {
   advanced: boolean;
   tool: boolean;
   editLabel: RefObject<string | null>;
-  cancelPlacing: () => void;
-  setPlacing: (placing: Placing | null) => void;
+  insert: (clip: Clip | null) => void;
+  stopPlacing: () => void;
   setError: (error: string | null) => void;
 }): Library {
+  /** The snippet library, shared by all scripts, as its file holds it. */
   const [libraryFile, setLibraryFile] = usePersistedState<LibraryFile>("ossm:editorSnippets", { ossmRsWebTools: { version: 1, snippets: [] } }, localStorage);
   const library = libraryFile.ossmRsWebTools.snippets;
   const shelf = [...PRESETS, ...library];
@@ -101,8 +103,6 @@ export function useLibrary({ advanced, tool, editLabel, cancelPlacing, setPlacin
     window.addEventListener("pointerdown", down, true);
     return () => window.removeEventListener("pointerdown", down, true);
   }, [rowsPicked]);
-  const libraryInput = useRef<HTMLInputElement>(null);
-
   const snippetFrom = (path: string[] | null, zero: number) => {
     const s = path && entryAt(library, path);
     return s && !isFolder(s) ? clipBy(s, zero) : { actions: [], regions: [] };
@@ -122,10 +122,7 @@ export function useLibrary({ advanced, tool, editLabel, cancelPlacing, setPlacin
     setLibrary(`Save snippet "${name}"`, (lib) => updatedAt(lib, path.slice(0, -1), (items) => [...items.filter((e) => entryName(e) !== name), snippet]));
   };
 
-  const insertSnippet = (s: Snippet) => {
-    cancelPlacing();
-    setPlacing({ actions: s.actions, regions: advanced ? generators(s.regions) : [instanceOf(s.name, s)] });
-  };
+  const insertSnippet = (s: Snippet) => insert(tool ? null : { actions: s.actions, regions: advanced ? generators(s.regions) : [instanceOf(s.name, s)] });
 
   /** The open folders at `from` and in it, now at `to`. */
   const reopened = (from: string[], to: string[]) => setOpenFolders((keys) => keys.map((k) => {
@@ -201,8 +198,8 @@ export function useLibrary({ advanced, tool, editLabel, cancelPlacing, setPlacin
     const move = (m: globalThis.PointerEvent) => {
       if (!started && Math.hypot(m.clientX - x, m.clientY - y) < 4) return;
       if (!started) {
-        cancelPlacing();
-        if (paths.length === 1 && !isFolder(entry) && !tool) insertSnippet(entry);
+        if (paths.length === 1 && !isFolder(entry)) insertSnippet(entry);
+        else insert(null);
       }
       started = true;
       setRowDrag({ paths, x: m.clientX, y: m.clientY, inPanel: !!(m.target as Element).closest?.("[data-aside]") });
@@ -218,7 +215,7 @@ export function useLibrary({ advanced, tool, editLabel, cancelPlacing, setPlacin
       }
       setRowDrag(null);
       setDropOn(null);
-      setPlacing(null);
+      stopPlacing();
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -239,5 +236,5 @@ export function useLibrary({ advanced, tool, editLabel, cancelPlacing, setPlacin
     }
   };
 
-  return { libraryFile, setLibraryFile, library, shelf, openFolders, setOpenFolders, snippetQuery, setSnippetQuery, rowDrag, dropOn, rowsPicked, libraryInput, snippetFrom, nameTaken, saveSnippet, insertSnippet, addFolder, renameEntry, deleteEntry, dropInto, dragRow, exportLibrary, importLibrary };
+  return { setLibraryFile, library, shelf, openFolders, setOpenFolders, snippetQuery, setSnippetQuery, rowDrag, dropOn, rowsPicked, snippetFrom, nameTaken, saveSnippet, insertSnippet, addFolder, renameEntry, deleteEntry, dropInto, dragRow, exportLibrary, importLibrary };
 }

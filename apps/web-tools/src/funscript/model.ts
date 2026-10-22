@@ -11,6 +11,12 @@ export const LINE_COLOR = "#ec4899";
 export const MACHINE_COLOR = "#22d3ee";
 /** `v` kept within `lo`–`hi`. */
 export const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+/** `set` with `item` in it if it wasn't, else without it. */
+export const toggled = <T,>(item: T) => (set: Set<T>) => {
+  const next = new Set(set);
+  if (!next.delete(item)) next.add(item);
+  return next;
+};
 /** The speed from `a` to `b`, in depth per second. */
 export const speed = (a: Action, b: Action) => (Math.abs(b.pos - a.pos) / (b.at - a.at)) * 1000;
 /** `n` points, in words: "1 point", "2 points". */

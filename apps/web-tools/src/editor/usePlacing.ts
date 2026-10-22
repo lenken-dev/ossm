@@ -36,8 +36,6 @@ export interface Placement {
    * region's points go on the bookmarks in its new box.
    */
   kept: Action[];
-  /** The regions the points being placed carry, with the first point at `pasted`'s. */
-  carriedBy(pasted: Action[]): Region[];
   /**
    * Follow a drag from `e` with what is being placed, its first point at
    * `start` as pressed; without one, once it has gone 3 px, with the
@@ -69,8 +67,8 @@ export interface Placement {
   marks: Set<number>;
   /** Whether the region `r` is drawn selected: a selected one, or a picked one being placed. */
   outlined(r: Region): boolean;
-  /** Where they can't go in, their points and the time they cover there, drawn red over the rest. */
-  astray: { points: Action[]; span: number[] } | null;
+  /** Where they can't go in, their points, the time they cover there and the regions they carry, drawn red over the rest. */
+  astray: { points: Action[]; span: number[]; carried: Region[] } | null;
   /** Replacing, the line through the points they would take out, from the point before to the one after, drawn faint red and dashed, as removed points in the undo history. */
   removed: Action[] | null;
 }
@@ -218,6 +216,7 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
     return gridAt(at + lead) - lead;
   };
 
+  /** The regions the points being placed carry, with the first point at `pasted`'s. */
   const carriedBy = (pasted: Action[]) => placing!.regions.map((r) => movedBy(r, pasted[0].at));
   /**
    * `pasted` with the Markers regions they carry, also in instances, put
@@ -359,7 +358,7 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
   const shownRegions = going && dropped ? [...dropped.regions, ...going.carried] : preview?.regions ?? keptRegions;
   const marks = going && dropped ? new Set(going.points.map((j) => dropped.before.length + j)) : preview?.selected ?? selected;
   const outlined = (r: Region) => regionsOn.has(r) || !!going?.regions.includes(r);
-  const astray = refused ? { points: filledIn(ghost), span: spanOf(ghost) } : null;
+  const astray = refused ? { points: filledIn(ghost), span: spanOf(ghost), carried: carriedBy(ghost) } : null;
   const removed = landed && !inserting ? (() => {
     const [start, end] = spanOf(landed);
     const [lo, hi] = [byTime(kept, start), afterTime(kept, end)];
@@ -374,5 +373,5 @@ export function usePlacing({ script, view, viewport, selected, regionsOn, boxMod
     else if (settle === "drop") cancelPlacing();
   }, [settle]);
 
-  return { lifted, setLifted, placeAt, setPlaceAt, carrying, setSettle, held, setHeld, kept, carriedBy, carry, cancelPlacing, put, place, landedAt, ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed };
+  return { lifted, setLifted, placeAt, setPlaceAt, carrying, setSettle, held, setHeld, kept, carry, cancelPlacing, put, place, landedAt, ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed };
 }

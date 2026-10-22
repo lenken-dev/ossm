@@ -7,11 +7,11 @@ import { useWindowEvent } from "../hooks/useWindowEvent";
 import { PLAYER_WINDOW, SENT_SCRIPT_KEY, readFunscript } from "../funscript/file";
 import { formatScriptTime, formatTimeTick, timeTicks } from "../funscript/time";
 import { LabeledSlider, SwitchRow } from "../widgets";
-import { clamp, LINE_COLOR, stats, type Action } from "../funscript/model";
+import { clamp, LINE_COLOR, stats, toggled, type Action } from "../funscript/model";
 import { lightChapters, markerColor, readMarkers, writeMarkers, type Marker } from "../funscript/markers";
 import { SectionHeader, Stats } from "../funscript/widgets";
 import { NamePopover, SnippetIcon } from "../editor/NamePopover";
-import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, items, markersRegions, movedBy, regionAt, regionName, regionNoun, sameContent, spanned, toggled, type Advanced, type Clip, type Content, type Instance, type Placing, type Region, type Script } from "../editor/model";
+import { afterTime, bandOf, byTime, clipBy, EMPTY, extended, generators, instanceOf, isInstance, items, markersRegions, movedBy, regionAt, regionName, regionNoun, sameContent, spanned, type Advanced, type Clip, type Content, type Instance, type Placing, type Region, type Script } from "../editor/model";
 import { rangeFields, refilled, withBookmarks } from "../editor/generate";
 import { download, readClip, readRegions } from "../editor/file";
 import { changedSpan, HISTORY_SIZE, startedAt, UNDO_SIZE, withLibraryChanges, type Timeline } from "../editor/history";
@@ -166,7 +166,10 @@ export default function EditorPage() {
   }, [markers.marked]);
   const tools = useTool({ actions, regions, bookmarks, zero, selected, view, viewport, advanced: !!advanced, placing: !!placing, edit, select, setSelected, setBox, dragging, setDragging, onEditInstance: (instance) => openAdvanced(undefined, instance) });
   const { tool, setTool, gridOpen, setGridOpen, grid, gridAt, gridPos, setGenRange, timingSpace, repBox, editRegion, repParams, preview, genBox, fnBox } = tools;
-  const snippetLibrary = useLibrary({ advanced: !!advanced, tool: !!tool, editLabel, cancelPlacing: () => cancelPlacing(), setPlacing, setError });
+  const snippetLibrary = useLibrary({ advanced: !!advanced, tool: !!tool, editLabel, insert: (clip) => {
+    cancelPlacing();
+    setPlacing(clip);
+  }, stopPlacing: () => setPlacing(null), setError });
   const { library, setLibraryFile, rowDrag, snippetFrom, nameTaken, saveSnippet } = snippetLibrary;
   /** Undo history: the points, markers, regions and snippet library after each edit, the first as loaded; `index` is the current one. */
   const [timeline, setTimeline] = useState(() => startedAt(script, library, advanced ? "Open" : "Start"));
@@ -190,7 +193,7 @@ export default function EditorPage() {
     setTimeline((tl) => ({ ...tl, states: tl.states.map((st, k) => (k === tl.index ? { ...st, selection: { points: selected, regions: regionsOn, markers: markers.marked } } : st)) }));
   }, [selected, regionsOn, markers.marked, timeline.index, dragging, placing]);
   const placement = usePlacing({ script, view, viewport, selected, regionsOn, boxMode, onMarkers: !!advanced && onMarkers, gridAt, gridPos, preview, placing, setPlacing, edit, select, setBox, fitBox: (ps, rs, on) => setBox(boxed(boxAround(ps, rs)), on) });
-  const { lifted, setLifted, placeAt, setPlaceAt, carrying, setSettle, held, setHeld, kept, carriedBy, carry, cancelPlacing, put, place, landedAt, ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed } = placement;
+  const { lifted, setLifted, placeAt, setPlaceAt, carrying, setSettle, held, setHeld, kept, carry, cancelPlacing, put, place, landedAt, ghost, landed, refused, shown, shownRegions, marks, outlined, astray, removed } = placement;
 
   /** Go to the content and snippet library after edit `index` of the undo history, with the selection last made there, in selection mode with the box around it, and bring the change into view. */
   const jump = (index: number) => {
@@ -1234,14 +1237,14 @@ export default function EditorPage() {
               first={first}
               marks={marks}
               shownRegions={shownRegions}
-              lit={tool ? [] : shownRegions.filter(outlined)}
+              lit={shownRegions.filter(outlined)}
               dashed={dashed}
               apart={apart}
               removed={removed}
               // Repeat's copies show thin and faded, so its pattern's line stands out; the line breaks between them, to be drawn over.
               muted={tool?.kind === "repeat" && !ghost}
-              dotsAllowed={!tool}
-              astray={astray && { points: astray.points, carried: carriedBy(ghost!) }}
+              toolOpen={!!tool}
+              astray={astray}
             />
             {/* Holding Ctrl, the axes through where the point dragged by came from, along which it keeps them. */}
             {dragged && held.ctrl && (
@@ -1389,7 +1392,7 @@ export default function EditorPage() {
         <SegmentedControl.Item value="snippets">Snippets</SegmentedControl.Item>
       </SegmentedControl.Root>
     </Box>
-    {asideTab === "markers" ? <MarkersPanel markers={markers} chapters={chapters} bookmarks={bookmarks} locked={markersLocked} onGoTo={goTo} /> : <SnippetsPanel library={snippetLibrary} advanced={!!advanced} placing={!!placing} tool={!!tool} onOpenSnippet={(path) => openAdvanced({ path })} />}
+    {asideTab === "markers" ? <MarkersPanel markers={markers} chapters={chapters} bookmarks={bookmarks} locked={markersLocked} onGoTo={goTo} /> : <SnippetsPanel library={snippetLibrary} advanced={!!advanced} placing={!!placing} onOpenSnippet={(path) => openAdvanced({ path })} />}
   </Flex>;
 
   return <GraphLayout sidebar={sidebar} content={content} aside={asideShown && asidePanel} />;
