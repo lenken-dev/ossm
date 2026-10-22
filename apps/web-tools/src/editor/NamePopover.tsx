@@ -6,12 +6,15 @@ import { CheckIcon } from "@radix-ui/react-icons";
  * Every name field: a small modal popup for a name, `initial` at first,
  * opened by `children`, a button, or else open at `anchor` from the start.
  * Enter or its OK button gives the name, trimmed, to `onName`, unless it is
- * empty or `taken`; Escape or a press outside closes it with `onCancel`, the
- * press going no further. It suggests `suggestions`; with `onRemove`, it has
+ * empty or `taken`; empty, it gives `fallback` instead, if any, which the
+ * empty field shows, as it does a `placeholder`. Escape or a press outside
+ * closes it with `onCancel`, the press going no further. It suggests `suggestions`; with `onRemove`, it has
  * a Delete button.
  */
-export function NamePopover({ initial = "", taken = () => false, onName, onCancel, onRemove, suggestions, anchor, children }: {
+export function NamePopover({ initial = "", placeholder, fallback = "", taken = () => false, onName, onCancel, onRemove, suggestions, anchor, children }: {
   initial?: string;
+  placeholder?: string;
+  fallback?: string;
   taken?: (name: string) => boolean;
   onName: (name: string) => void;
   onCancel?: () => void;
@@ -22,11 +25,12 @@ export function NamePopover({ initial = "", taken = () => false, onName, onCance
 }) {
   const [name, setName] = useState<string | null>(anchor ? initial : null);
   const list = useId();
-  const refused = name === null || !name.trim() || taken(name.trim());
+  const given = name?.trim() || fallback;
+  const refused = name === null || !given || taken(given);
   const accept = () => {
     if (refused) return;
     setName(null);
-    onName(name.trim());
+    onName(given);
   };
   return (
     <Popover.Root modal open={name !== null} onOpenChange={(open) => {
@@ -48,6 +52,7 @@ export function NamePopover({ initial = "", taken = () => false, onName, onCance
               aria-label="Name"
               list={suggestions && list}
               value={name ?? ""}
+              placeholder={fallback || placeholder}
               onFocus={(e) => e.target.select()}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && accept()}
@@ -68,7 +73,7 @@ export function NamePopover({ initial = "", taken = () => false, onName, onCance
               </Button>
             )}
           </Flex>
-          {name?.trim() && refused && <Text size="1" color="red">That name is taken.</Text>}
+          {given && refused && <Text size="1" color="red">That name is taken.</Text>}
         </Flex>
         {suggestions && <datalist id={list}>{suggestions.map((s) => <option key={s} value={s} />)}</datalist>}
       </Popover.Content>

@@ -1,14 +1,16 @@
 import { Button, Flex, Heading, IconButton, Separator, Text } from "@radix-ui/themes";
 import { LockOpen1Icon, MixerHorizontalIcon, Pencil1Icon, TrashIcon } from "@radix-ui/react-icons";
 import { points } from "../funscript/model";
-import { isInstance, isRepeat, regionKind, regionName, type Region } from "./model";
+import { isInstance, isRepeat, regionKind, regionName, regionTitle, type Region } from "./model";
 import { NamePopover, SnippetIcon } from "./NamePopover";
 
 /**
  * The sidebar's section on the selected region, its points locked until
  * unlocked: what made it, its name to rename, its `pointCount` points, Edit
  * (`disabled` while placing), Unlock and Delete, and Save as snippet under a
- * name not `nameTaken` at the library's top level.
+ * name not `nameTaken` at the library's top level. Both name fields open on
+ * its own name and show its label while empty; Save as snippet saves under
+ * the label then.
  */
 export function RegionPanel({ region, pointCount, disabled, onEdit, onUnlock, onDelete, onRename, onSave, nameTaken }: {
   region: Region;
@@ -21,14 +23,15 @@ export function RegionPanel({ region, pointCount, disabled, onEdit, onUnlock, on
   onSave: (name: string) => void;
   nameTaken: (name: string) => boolean;
 }) {
+  /** Its own name: an instance's, a region's only once given. */
+  const name = isInstance(region) ? region.snippet.name : region.name;
   return (
     <>
       <Separator size="4" />
       <Heading size="3">{regionKind(region)}</Heading>
-      {/* Its own name, a region's only once given. */}
       <Flex align="center" gap="2">
-        {isInstance(region) || region.name ? <Text size="2" weight="medium" truncate>{isInstance(region) ? region.snippet.name : region.name}</Text> : <Text size="2" color="gray">Unnamed</Text>}
-        <NamePopover initial={isInstance(region) ? region.snippet.name : regionName(region)} onName={(n) => n !== (isInstance(region) ? region.snippet.name : regionName(region)) && onRename(n)}>
+        {name ? <Text size="2" weight="medium" truncate>{name}</Text> : <Text size="2" color="gray">Unnamed</Text>}
+        <NamePopover initial={name} placeholder={regionName(region)} onName={(n) => n !== regionTitle(region) && onRename(n)}>
           <IconButton size="1" variant="ghost" color="gray" aria-label="Rename" title="Rename"><Pencil1Icon /></IconButton>
         </NamePopover>
       </Flex>
@@ -45,7 +48,7 @@ export function RegionPanel({ region, pointCount, disabled, onEdit, onUnlock, on
         </IconButton>
       </Flex>
       {/* Its points and generator regions, at the top level of the library. */}
-      <NamePopover initial={isInstance(region) ? region.snippet.name : region.name} taken={nameTaken} onName={onSave}>
+      <NamePopover initial={name} fallback={regionName(region)} taken={nameTaken} onName={onSave}>
         <Button variant="soft" color="gray" disabled={pointCount < 2} title="Save its points and regions to the snippet library">
           <SnippetIcon /> Save as snippet
         </Button>

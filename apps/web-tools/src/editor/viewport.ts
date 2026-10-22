@@ -1,4 +1,4 @@
-import { type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
+import { useRef, type Dispatch, type PointerEvent, type RefObject, type SetStateAction } from "react";
 import { clamp } from "../funscript/model";
 import { capturePointer } from "../drag";
 import { useElementSize } from "../hooks/useElementSize";
@@ -21,7 +21,7 @@ export interface Viewport {
   plotHeight: number;
   x(at: number): number;
   y(pos: number): number;
-  /** The script time and position under the pointer. */
+  /** The script time and position under the pointer, in the latest view. */
   pointerAt(e: { clientX: number; clientY: number }): { at: number; pos: number };
   /**
    * Follow a drag from `e` on `target` with `move`, then `end`. Held at the
@@ -39,15 +39,16 @@ export interface Viewport {
   ): void;
 }
 
-/** The graph's viewport: `boxRef`'s measured size, the visible time `viewRef` holds, which a drag at an edge scrolls with `setView`. */
+/** The graph's viewport: `boxRef`'s measured size and the visible time, `view`, which a drag at an edge scrolls with `setView`. */
 export function useViewport(
   boxRef: RefObject<HTMLDivElement | null>,
-  viewRef: RefObject<{ from: number; span: number }>,
+  view: { from: number; span: number },
   setView: Dispatch<SetStateAction<{ from: number; span: number }>>,
 ): Viewport {
   const { width, height } = useElementSize(boxRef);
-  // As rendered: the page puts its view in the ref before calling this.
-  const view = viewRef.current;
+  /** The latest view, for drags, which read it between renders as they scroll it; `x` and `y` draw the view as rendered. */
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const plotHeight = height - AXIS;
   const x = (at: number) => ((at - view.from) / view.span) * width;
   const y = (pos: number) => PAD + (1 - pos / 100) * (plotHeight - 2 * PAD);

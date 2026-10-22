@@ -1,3 +1,4 @@
+import type { ReactElement, ReactNode } from "react";
 import { Button, Flex, HoverCard, IconButton, Popover, Text } from "@radix-ui/themes";
 import { CounterClockwiseClockIcon } from "@radix-ui/react-icons";
 import { formatScriptTime } from "../funscript/time";
@@ -5,6 +6,26 @@ import { points } from "../funscript/model";
 import type { Clip } from "./model";
 import type { Timeline } from "./history";
 import { bookmarkItem, chapterItem, diffPieces, LanePreview, PreviewGraph, regionItem } from "./previews";
+
+/** A toolbox button and the history button docked to its right: its right corners square, and the history button's left ones, behind a line. */
+export const DOCKED = {
+  button: { borderTopRightRadius: 0, borderBottomRightRadius: 0 },
+  history: { borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeft: "1px solid var(--gray-a5)" },
+};
+
+/** An entry of a history list: its `children`, a button that closes the list, with `preview` beside it on hover, at most `maxWidth` wide. */
+function HistoryRow({ preview, maxWidth, children }: { preview: ReactNode; maxWidth?: string; children: ReactElement }) {
+  return (
+    <HoverCard.Root openDelay={100} closeDelay={0}>
+      <HoverCard.Trigger>
+        <Popover.Close>{children}</Popover.Close>
+      </HoverCard.Trigger>
+      <HoverCard.Content side="right" size="1" maxWidth={maxWidth}>
+        {preview}
+      </HoverCard.Content>
+    </HoverCard.Root>
+  );
+}
 
 /**
  * The toolbox's undo history button, docked to the Undo button, and its list
@@ -21,7 +42,7 @@ export function UndoHistory({ timeline, onJump }: { timeline: Timeline; onJump: 
           disabled={timeline.states.length < 2}
           aria-label="Undo history"
           title="Undo history"
-          style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeft: "1px solid var(--gray-a5)" }}
+          style={DOCKED.history}
         >
           <CounterClockwiseClockIcon />
         </IconButton>
@@ -30,37 +51,32 @@ export function UndoHistory({ timeline, onJump }: { timeline: Timeline; onJump: 
         <Flex direction="column" gap="1">
           {/* Newest first; undone edits are dimmed until redone or replaced. */}
           {timeline.states.map((state, k) => (
-            <HoverCard.Root key={k} openDelay={100} closeDelay={0}>
-              <HoverCard.Trigger>
-                <Popover.Close>
-                  <Button
-                    variant={k === timeline.index ? "soft" : "ghost"}
-                    color="gray"
-                    style={{ justifyContent: "flex-start", opacity: k > timeline.index ? 0.5 : 1 }}
-                    onClick={() => onJump(k)}
-                  >
-                    <Text truncate>{state.label}</Text>
-                  </Button>
-                </Popover.Close>
-              </HoverCard.Trigger>
-              <HoverCard.Content side="right" size="1" maxWidth="232px">
-                <Flex direction="column" gap="1">
-                  <Text size="1">{state.label}</Text>
-                  {k > 0 && (() => {
-                    const before = timeline.states[k - 1];
-                    const markersChanged = before.chapters !== state.chapters || before.bookmarks !== state.bookmarks;
-                    const regionsChanged = before.regions !== state.regions;
-                    // A change only to the snippet library has nothing to show but its label.
-                    const others = markersChanged || regionsChanged || before.library !== state.library;
-                    return <>
-                      {(before.actions !== state.actions || !others) && <PreviewGraph pieces={diffPieces(before.actions, state.actions)} />}
-                      {markersChanged && <LanePreview lists={[[before.chapters.map(chapterItem), state.chapters.map(chapterItem)], [before.bookmarks.map(bookmarkItem), state.bookmarks.map(bookmarkItem)]]} />}
-                      {regionsChanged && <LanePreview lists={[[before.regions.map(regionItem), state.regions.map(regionItem)]]} />}
-                    </>;
-                  })()}
-                </Flex>
-              </HoverCard.Content>
-            </HoverCard.Root>
+            <HistoryRow key={k} maxWidth="232px" preview={
+              <Flex direction="column" gap="1">
+                <Text size="1">{state.label}</Text>
+                {k > 0 && (() => {
+                  const before = timeline.states[k - 1];
+                  const markersChanged = before.chapters !== state.chapters || before.bookmarks !== state.bookmarks;
+                  const regionsChanged = before.regions !== state.regions;
+                  // A change only to the snippet library has nothing to show but its label.
+                  const others = markersChanged || regionsChanged || before.library !== state.library;
+                  return <>
+                    {(before.actions !== state.actions || !others) && <PreviewGraph pieces={diffPieces(before.actions, state.actions)} />}
+                    {markersChanged && <LanePreview lists={[[before.chapters.map(chapterItem), state.chapters.map(chapterItem)], [before.bookmarks.map(bookmarkItem), state.bookmarks.map(bookmarkItem)]]} />}
+                    {regionsChanged && <LanePreview lists={[[before.regions.map(regionItem), state.regions.map(regionItem)]]} />}
+                  </>;
+                })()}
+              </Flex>
+            }>
+              <Button
+                variant={k === timeline.index ? "soft" : "ghost"}
+                color="gray"
+                style={{ justifyContent: "flex-start", opacity: k > timeline.index ? 0.5 : 1 }}
+                onClick={() => onJump(k)}
+              >
+                <Text truncate>{state.label}</Text>
+              </Button>
+            </HistoryRow>
           )).reverse()}
           <Text size="1" color="gray" mt="1">Click an entry to go back or forward to it.</Text>
         </Flex>
@@ -84,7 +100,7 @@ export function ClipboardHistory({ history, onPaste, disabled }: { history: Clip
           disabled={disabled}
           aria-label="Clipboard history"
           title="Clipboard history"
-          style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeft: "1px solid var(--gray-a5)" }}
+          style={DOCKED.history}
         >
           <CounterClockwiseClockIcon />
         </IconButton>
@@ -92,18 +108,11 @@ export function ClipboardHistory({ history, onPaste, disabled }: { history: Clip
       <Popover.Content width="220px">
         <Flex direction="column" gap="1">
           {history.map((copied, i) => (
-            <HoverCard.Root key={i} openDelay={100} closeDelay={0}>
-              <HoverCard.Trigger>
-                <Popover.Close>
-                  <Button variant="ghost" color="gray" style={{ justifyContent: "flex-start" }} onClick={() => onPaste(copied)}>
-                    {points(copied.actions.length)}{copied.regions.length > 0 && ` · ${copied.regions.length === 1 ? "region" : `${copied.regions.length} regions`}`} · {formatScriptTime(copied.actions[copied.actions.length - 1].at / 1000)}
-                  </Button>
-                </Popover.Close>
-              </HoverCard.Trigger>
-              <HoverCard.Content side="right" size="1">
-                <PreviewGraph pieces={[{ kind: "plain", points: copied.actions }]} />
-              </HoverCard.Content>
-            </HoverCard.Root>
+            <HistoryRow key={i} preview={<PreviewGraph pieces={[{ kind: "plain", points: copied.actions }]} />}>
+              <Button variant="ghost" color="gray" style={{ justifyContent: "flex-start" }} onClick={() => onPaste(copied)}>
+                {points(copied.actions.length)}{copied.regions.length > 0 && ` · ${copied.regions.length === 1 ? "region" : `${copied.regions.length} regions`}`} · {formatScriptTime(copied.actions[copied.actions.length - 1].at / 1000)}
+              </Button>
+            </HistoryRow>
           ))}
           <Text size="1" color="gray" mt="1">Click an entry to paste it and make it the clipboard again.</Text>
         </Flex>

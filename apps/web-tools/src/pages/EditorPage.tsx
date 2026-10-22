@@ -31,7 +31,7 @@ import { Minimap } from "../funscript/Minimap";
 import { GraphCanvas } from "../editor/GraphCanvas";
 import { SpeedCalculator } from "../funscript/SpeedCalculator";
 import { RegionPanel } from "../editor/RegionPanel";
-import { ClipboardHistory, UndoHistory } from "../editor/HistoryPopovers";
+import { ClipboardHistory, DOCKED, UndoHistory } from "../editor/HistoryPopovers";
 import { GraphLayout } from "./GraphPage";
 import { dragSeeking } from "../drag";
 
@@ -70,16 +70,12 @@ export default function EditorPage() {
       return { ...d, actions, regions };
     });
   };
-  /** The Snippets panel shows beside the graph, in the main script and the advanced editor alike. */
   /** The panel beside the graph, on its other side from the sidebar, and which it shows: the markers list or the snippet library. */
   const [asideShown, setAsideShown] = usePersistedState("ossm:editorAsideShown", true, localStorage);
   const [asideTab, setAsideTab] = usePersistedState<"markers" | "snippets">("ossm:editorAsideTab", "snippets", localStorage);
   /** What the next edit is called in the undo history. */
   const editLabel = useRef<string | null>(null);
   const [view, setView] = usePersistedState("ossm:editorView", { from: 0, span: 10_000 });
-  /** The view for drags, which read it between renders as they scroll it. */
-  const viewRef = useRef(view);
-  viewRef.current = view;
   /** The points for drags, which read them between renders. */
   const actionsRef = useRef(script.actions);
   actionsRef.current = script.actions;
@@ -106,7 +102,7 @@ export default function EditorPage() {
   const boxRef = useRef<HTMLDivElement>(null);
   /** The graph and the marker lane, which scroll and zoom alike. */
   const timeRef = useRef<HTMLDivElement>(null);
-  const viewport = useViewport(boxRef, viewRef, setView);
+  const viewport = useViewport(boxRef, view, setView);
   const { width, height, plotHeight, x, y, pointerAt, track } = viewport;
   const media = useMediaPlayer(setView);
   /** A minimap of the whole script to scroll with, instead of the slider. */
@@ -416,8 +412,10 @@ export default function EditorPage() {
     dragSeeking(element, e.currentTarget, e.pointerId, (m) => media.seek(pointerAt(m).at), (target, _, move, end) => track(target, e, move, end));
   };
 
-  /** The time the minimap shows: the script (the main one too, in the advanced editor), the video and the visible time, whichever is longest. */
-  const total = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, media.videoDuration, view.span);
+  /** The script (the main one too, in the advanced editor) or the video, whichever is longer. */
+  const longest = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, media.videoDuration);
+  /** The time the minimap and the scroll slider show: that or the visible time, whichever is longer. */
+  const total = Math.max(longest, view.span);
 
   /** Unlock the region `r`: it goes, and its points become ordinary points, selected; an instance's regions become regions of their own, their points staying theirs. */
   const unlockRegion = (r: Region) => {
@@ -431,8 +429,7 @@ export default function EditorPage() {
   /** The selected points and regions' points, or all points, as the stats take them. */
   const statsPicked = useMemo(
     () => (selected.size || chosen.length ? [...new Set([...selected, ...chosen.flatMap(pointsOf)])].sort((a, b) => a - b) : [...actions.keys()]),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the picked points follow from these
-    [selected, regionsOn, regions, actions],
+    [selected, chosen, actions],
   );
   /** The stats' points, at least two, as the Speed Calculator follows them while open. */
   const calcScript = useMemo(() => {
@@ -454,7 +451,7 @@ export default function EditorPage() {
   const undo = () => (tool ? tools.undo() : discard() || (canUndo && jump(timeline.index - 1)));
   const redo = () => (tool ? canRedo && tools.redo() : discard() || (canRedo && jump(timeline.index + 1)));
 
-  const maxSpan = Math.max(end, main.actions[main.actions.length - 1]?.at ?? 0, media.videoDuration, fnBox?.to ?? 0, MAX_SPAN_FLOOR);
+  const maxSpan = Math.max(longest, fnBox?.to ?? 0, MAX_SPAN_FLOOR);
   const spanStep = SPAN_STEPS.find((s) => s * SPAN_STEP_COUNT >= maxSpan / 1000) ?? SPAN_STEPS[SPAN_STEPS.length - 1];
 
   // The wheel scrolls through time, with Ctrl it zooms around the pointer. Not passive, to keep the page from scrolling.
@@ -533,8 +530,7 @@ export default function EditorPage() {
     }
   });
 
-  /** The selected points and regions, with the regions' points, as funscript JSON, timed from the first point. */
-  /** Also adds them to the clipboard history. */
+  /** The selected points and regions, with the regions' points, as funscript JSON, timed from the first point; also adds them to the clipboard history. */
   const selectionJson = () => {
     const picked = actions.filter((a, i) => selected.has(i) || regionAt(chosen, a.at));
     const t0 = picked[0].at;
@@ -768,7 +764,7 @@ export default function EditorPage() {
   const pointUnder = (e: { clientX: number; clientY: number }) => {
     const rect = boxRef.current!.getBoundingClientRect();
     const [px, py] = [e.clientX - rect.left, e.clientY - rect.top];
-    const near = (dx: number) => byTime(visible, view.from + ((px + dx) / width) * view.span);
+    const near = (dx: number) => byTime(visible, pointerAt({ clientX: e.clientX + dx, clientY: e.clientY }).at);
     // Selected points are drawn last, on top.
     let hit = null;
     for (let j = near(-8); j < near(8); j++) {
@@ -1031,7 +1027,7 @@ export default function EditorPage() {
             aria-label="Undo"
             title="Undo (Ctrl+Z)"
             onClick={undo}
-            style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+            style={DOCKED.button}
           >
             <ResetIcon />
           </IconButton>
@@ -1056,7 +1052,7 @@ export default function EditorPage() {
             aria-label="Paste"
             title="Paste (Ctrl+V)"
             onClick={() => void pasteButton()}
-            style={history.length ? { borderTopRightRadius: 0, borderBottomRightRadius: 0 } : undefined}
+            style={history.length ? DOCKED.button : undefined}
           >
             <ClipboardIcon />
           </IconButton>
@@ -1376,7 +1372,7 @@ export default function EditorPage() {
           }}
           playheadAt={media.videoUrl ? media.time : null}
           media={media.videoRef}
-          regions={[...(advanced ? main.regions : []), ...regions]}
+          regions={[...(advanced ? main.regions.filter((_, i) => i !== advanced.instance) : []), ...regions]}
           context={context}
           selected={{ of: kept, indices: selected }}
         />
@@ -1384,7 +1380,7 @@ export default function EditorPage() {
         <Slider
           aria-label="Scroll through time"
           min={0}
-          max={Math.max(end, view.span)}
+          max={total}
           step={10}
           value={[view.from]}
           onValueChange={([from]) => setView({ ...view, from })}

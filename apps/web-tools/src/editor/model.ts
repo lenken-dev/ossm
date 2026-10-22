@@ -155,6 +155,8 @@ export const clipBy = (clip: Clip, dt: number): Clip => ({ actions: clip.actions
 export const regionKind = (r: Region) => (isInstance(r) ? "Snippet" : isRepeat(r) ? `Repeat · ×${r.repeat.count}` : `Generate · ${r.generate.timing[0].toUpperCase()}${r.generate.timing.slice(1)}`);
 /** A region's label: an instance's by its name, another's its name or else what made it. */
 export const regionName = (r: Region) => (isInstance(r) ? `Snippet · ${r.snippet.name}` : r.name ?? regionKind(r));
+/** A region's title in the sidebar and the undo history's previews: an instance's name, another's label. */
+export const regionTitle = (r: Region) => (isInstance(r) ? r.snippet.name : regionName(r));
 
 /** How a region's band behind the graph fills and outlines, and its label's colour: cyan, an instance's violet, a Repeat one's orange; selected, it fills stronger and outlines as the selected markers. */
 export const bandOf = (r: Region) => {

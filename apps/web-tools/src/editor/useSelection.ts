@@ -1,4 +1,4 @@
-import { useRef, useState, type Dispatch, type PointerEvent, type SetStateAction } from "react";
+import { useMemo, useRef, useState, type Dispatch, type PointerEvent, type SetStateAction } from "react";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { clamp, type Action } from "../funscript/model";
 import { afterTime, byTime, extended, regionAt, spanned, type Area, type Region } from "./model";
@@ -88,7 +88,7 @@ export function useSelection({ actions, regions, viewport, placing }: {
   const setBox = (area: Area | null, on = actions) => setBoxOn(area && { area, actions: on });
   /** The point or region last clicked without Shift, by its time, where a Shift+click range starts. */
   const anchor = useRef<{ from: number; to: number } | null>(null);
-  const chosen = regions.filter((r) => regionsOn.has(r));
+  const chosen = useMemo(() => regions.filter((r) => regionsOn.has(r)), [regions, regionsOn]);
   const region = !selected.size && chosen.length === 1 ? chosen[0] : null;
   const copyable = selected.size > 0 || chosen.some((r) => afterTime(actions, r.to) > byTime(actions, r.from));
   const edges = box && { from: x(box.from), to: x(box.to), low: y(box.low), high: y(box.high) };

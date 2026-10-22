@@ -2,7 +2,7 @@ import { Flex, Text } from "@radix-ui/themes";
 import { formatScriptTime, formatTimeTick, timeTicks } from "../funscript/time";
 import { clamp, LINE_COLOR, type Action } from "../funscript/model";
 import type { Bookmark, Chapter } from "../funscript/markers";
-import { isInstance, only, regionName, type Region } from "./model";
+import { isInstance, only, regionTitle, type Region } from "./model";
 
 /** Height of a small graph's time axis, in px. */
 const PREVIEW_AXIS = 12;
@@ -220,7 +220,7 @@ interface LaneItem {
 }
 export const chapterItem = (c: Chapter): LaneItem => ({ of: c, kind: "chapter", name: c.name, span: [c.start, c.end] });
 export const bookmarkItem = (b: Bookmark): LaneItem => ({ of: b, kind: "bookmark", name: b.name, span: [b.time] });
-export const regionItem = (r: Region): LaneItem => ({ of: r, kind: isInstance(r) ? "snippet" : "region", name: isInstance(r) ? r.snippet.name : regionName(r), span: [r.from, r.to] });
+export const regionItem = (r: Region): LaneItem => ({ of: r, kind: isInstance(r) ? "snippet" : "region", name: regionTitle(r), span: [r.from, r.to] });
 
 /**
  * A diff of two scripts' markers or regions, like the points' one: a small
