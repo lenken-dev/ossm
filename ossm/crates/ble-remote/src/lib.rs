@@ -37,11 +37,11 @@ const PRIMARY_COMMAND_UUID: Uuid = uuid!("522b443a-4f53-534d-1000-420badbabe69")
 const SPEED_KNOB_UUID: Uuid = uuid!("522b443a-4f53-534d-1010-420badbabe69");
 const LATENCY_COMPENSATION_UUID: Uuid = uuid!("522b443a-4f53-534d-1030-420badbabe69");
 const CURRENT_STATE_UUID: Uuid = uuid!("522b443a-4f53-534d-2000-420badbabe69");
-const CURRENT_POSITION_UUID: Uuid = uuid!("522b443a-4f53-534d-2010-420badbabe69");
 const PATTERN_LIST_UUID: Uuid = uuid!("522b443a-4f53-534d-3000-420badbabe69");
 const PATTERN_DESCRIPTION_UUID: Uuid = uuid!("522b443a-4f53-534d-3010-420badbabe69");
-const USABLE_TRAVEL_UUID: Uuid = uuid!("522b443a-4f53-534d-4000-420badbabe69");
-const STREAM_LOOKAHEAD_UUID: Uuid = uuid!("522b443a-4f53-534d-5000-420badbabe69");
+const CURRENT_POSITION_UUID: Uuid = uuid!("522b443a-4f53-534d-c010-420badbabe69");
+const USABLE_TRAVEL_UUID: Uuid = uuid!("522b443a-4f53-534d-c020-420badbabe69");
+const STREAM_LOOKAHEAD_UUID: Uuid = uuid!("522b443a-4f53-534d-c030-420badbabe69");
 
 /// AD type of an incomplete list of 128-bit service UUIDs. The advertisement
 /// and the scan response each list one of the two services.

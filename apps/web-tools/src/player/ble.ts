@@ -5,11 +5,11 @@ const uuid = (id: string) => `522b443a-4f53-534d-${id}-420badbabe69`;
 const SERVICE = uuid("0001");
 const COMMAND = uuid("1000");
 const STATE = uuid("2000");
-const POSITION = uuid("2010");
 const PATTERN_LIST = uuid("3000");
 const PATTERN_DESCRIPTION = uuid("3010");
-const USABLE_TRAVEL = uuid("4000");
-const STREAM_LOOKAHEAD = uuid("5000");
+const POSITION = uuid("c010");
+const USABLE_TRAVEL = uuid("c020");
+const STREAM_LOOKAHEAD = uuid("c030");
 
 /** Pending writes above which the queue warns. */
 const QUEUE_WARN = 10;
