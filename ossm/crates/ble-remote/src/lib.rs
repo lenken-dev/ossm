@@ -148,7 +148,8 @@ fn get_pattern_description(index: usize) -> String<MAX_PATTERN_LENGTH> {
 ///
 /// Two funscript players can stream: the OSSM-Lite one through its own
 /// service, and the official OSSM one through `go:streaming` and
-/// `stream:<position>:<duration ms>` commands. Neither mode can be entered
+/// `stream:<position>:<duration ms>` commands (or timed points, see
+/// [`stream`]). Neither mode can be entered
 /// while the other plays: `go:streaming` fails while a pattern is playing or
 /// paused, and playing a pattern fails while streaming. Without a `stream`, the
 /// OSSM-Lite service is not advertised, streamed points are ignored,
@@ -578,8 +579,14 @@ fn process_command(
 
     // Points arrive many times a second; the session counts them instead of
     // logging each.
-    if let Some(point) = command.strip_prefix("stream:") {
-        let streamed = session.push_command(point.as_bytes());
+    if let Some(rest) = command.strip_prefix("stream:") {
+        let streamed = if let Some(time) = rest.strip_prefix("sync:") {
+            session.sync(time.as_bytes())
+        } else if let Some(point) = rest.strip_prefix("at:") {
+            session.push_timed(point.as_bytes())
+        } else {
+            session.push_command(rest.as_bytes())
+        };
         respond(server, command, !streamed);
         return;
     }

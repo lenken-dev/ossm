@@ -25,18 +25,40 @@ pub struct Point {
     pub duration_ms: u32,
 }
 
+/// A timed stream point: a position and the remote's time to reach it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimedPoint {
+    /// As [`Point::position`].
+    pub position: f64,
+    /// When to reach the position, on the remote's clock (see
+    /// [`ClockOffset`](crate::ClockOffset)).
+    pub at_ms: u64,
+}
+
 /// Parse a streamed point, `<position>:<duration ms>`.
 ///
 /// The position is a decimal number clamped to `0.0..=100.0`; the duration
 /// is an unsigned whole number.
 pub fn parse_point(bytes: &[u8]) -> Option<Point> {
-    let (position, duration) = text(bytes)?.split_once(':')?;
-    let position = number(position)?;
-    let duration_ms = duration.trim().parse::<u32>().ok()?;
+    let (position, duration_ms) = position_and(bytes)?;
     Some(Point {
-        position: position.clamp(0.0, 100.0),
+        position,
         duration_ms,
     })
+}
+
+/// Parse a timed stream point, `<position>:<time ms>`, as
+/// [`parse_point`] does.
+pub fn parse_timed_point(bytes: &[u8]) -> Option<TimedPoint> {
+    let (position, at_ms) = position_and(bytes)?;
+    Some(TimedPoint { position, at_ms })
+}
+
+fn position_and<T: core::str::FromStr>(bytes: &[u8]) -> Option<(f64, T)> {
+    let (position, value) = text(bytes)?.split_once(':')?;
+    let position = number(position)?;
+    let value = value.trim().parse::<T>().ok()?;
+    Some((position.clamp(0.0, 100.0), value))
 }
 
 /// Parse a setting written as decimal percent text, returned as a fraction

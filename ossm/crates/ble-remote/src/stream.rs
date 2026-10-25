@@ -17,12 +17,20 @@
 //! its segment starts and never ends a stream, so its points are streamed
 //! latest-only (see [`StreamSender::push_latest`]): nothing queued can make
 //! the machine run behind or keep moving after the player stopped.
+//!
+//! A player may instead send timed points, `stream:at:<position>:<time ms>`,
+//! due at a time on its own clock, which it stamps with
+//! `stream:sync:<time ms>`. The session keeps the offset between the two
+//! clocks (see [`ClockOffset`]) and pushes each timed point at its time on
+//! the firmware's clock, so a point delayed past it is skipped instead of
+//! delaying the rest.
 
 use core::fmt::Write;
 
+use embassy_time::Instant;
 use heapless::String;
 use log::{info, warn};
-use stream_engine::{PushError, StreamPlanner, StreamSender, lite};
+use stream_engine::{ClockOffset, PushError, StreamPlanner, StreamSender, lite};
 
 /// Longest point text accepted.
 pub const MAX_POINT_LENGTH: usize = 32;
@@ -52,6 +60,9 @@ pub struct StreamSession {
     unsupported: u32,
     /// The player read the look-ahead, so it may send points ahead.
     sends_ahead: bool,
+    /// The firmware's clock minus the player's, for timed points.
+    clock: ClockOffset,
+    syncs: u32,
 }
 
 impl StreamSession {
@@ -63,6 +74,8 @@ impl StreamSession {
             dropped: 0,
             unsupported: 0,
             sends_ahead: false,
+            clock: ClockOffset::default(),
+            syncs: 0,
         }
     }
 
@@ -81,6 +94,53 @@ impl StreamSession {
     /// Parse a point and stream it, latest-only if `latest` (see
     /// [`StreamSender::push_latest`]). Returns whether it was streamed.
     pub fn push(&mut self, data: &[u8], latest: bool) -> bool {
+        self.stream_point(data, |stream, data| {
+            let point = lite::parse_point(data)?;
+            Some(if latest {
+                stream.push_latest(point.position, point.duration_ms)
+            } else {
+                stream.push(point.position, point.duration_ms)
+            })
+        })
+    }
+
+    /// Parse a `stream:at:` timed point and stream it at its time on the
+    /// firmware's clock. Invalid before the first sync or when that time
+    /// falls before zero. Returns whether it was streamed.
+    pub fn push_timed(&mut self, data: &[u8]) -> bool {
+        let clock = self.clock;
+        self.stream_point(data, |stream, data| {
+            let point = lite::parse_timed_point(data)?;
+            Some(stream.push_at(point.position, clock.to_local(point.at_ms)?))
+        })
+    }
+
+    /// Take a `stream:sync:` stamp of the player's clock. Returns whether it
+    /// was taken: streaming is available and the stamp is a whole number.
+    pub fn sync(&mut self, data: &[u8]) -> bool {
+        let now_ms = Instant::now().as_millis();
+        if self.stream.is_none() {
+            return false;
+        }
+        let Some(remote_ms) = core::str::from_utf8(data)
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok())
+        else {
+            self.invalid_write(data);
+            return false;
+        };
+        self.clock.sync(now_ms, remote_ms);
+        self.syncs = self.syncs.saturating_add(1);
+        true
+    }
+
+    /// Stream a point with `push`, which parses it and returns `None` if it
+    /// is invalid. Returns whether it was streamed.
+    fn stream_point(
+        &mut self,
+        data: &[u8],
+        push: impl FnOnce(&StreamSender, &[u8]) -> Option<Result<(), PushError>>,
+    ) -> bool {
         let Some(stream) = self.stream else {
             if count(&mut self.unsupported) {
                 warn!(
@@ -94,14 +154,9 @@ impl StreamSession {
             self.invalid_write(data);
             return false;
         }
-        let Some(point) = lite::parse_point(data) else {
+        let Some(pushed) = push(stream, data) else {
             self.invalid_write(data);
             return false;
-        };
-        let pushed = if latest {
-            stream.push_latest(point.position, point.duration_ms)
-        } else {
-            stream.push(point.position, point.duration_ms)
         };
         match pushed {
             Ok(()) => {
@@ -140,10 +195,22 @@ impl StreamSession {
     /// Dropped points are those the command queue refused; the stream
     /// engine logs its own planner-queue drops.
     pub fn log_summary(&self) {
-        if [self.points, self.invalid, self.dropped, self.unsupported] != [0; 4] {
+        let counts = [
+            self.points,
+            self.invalid,
+            self.dropped,
+            self.unsupported,
+            self.syncs,
+        ];
+        if counts != [0; 5] {
             info!(
-                "[stream] session: {} points streamed, {} invalid writes, {} points dropped (queue full), {} points ignored (no streaming)",
-                self.points, self.invalid, self.dropped, self.unsupported
+                "[stream] session: {} points streamed, {} invalid writes, {} points dropped, {} points ignored (no streaming), {} syncs (offset {:?} ms)",
+                self.points,
+                self.invalid,
+                self.dropped,
+                self.unsupported,
+                self.syncs,
+                self.clock.offset_ms()
             );
         }
     }

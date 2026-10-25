@@ -24,8 +24,10 @@
 //! passes the current time in milliseconds to every call.
 //!
 //! [`lite`] parses the OSSM-Lite streaming protocol and maps its settings
-//! onto depth and stroke, for remotes that speak it.
+//! onto depth and stroke, for remotes that speak it. [`ClockOffset`] maps
+//! a remote's clock onto the engine's, for points with a due time.
 
+mod clock;
 mod engine;
 mod input;
 pub mod lite;
@@ -35,6 +37,7 @@ mod runner;
 mod sender;
 mod sequencer;
 
+pub use clock::ClockOffset;
 pub use engine::StreamEngine;
 pub use input::StreamInput;
 pub use planner::{MoveRequest, PlannerStats, PushError, StreamPlanner};
