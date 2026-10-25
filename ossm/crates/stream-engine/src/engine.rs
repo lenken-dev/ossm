@@ -7,14 +7,26 @@ use crate::StreamPlanner;
 use crate::runner::StreamRunner;
 use crate::sender::StreamSender;
 
+/// When a streamed point is due.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Due {
+    /// This many ms after the previous point (see
+    /// [`StreamPlanner::push`](crate::StreamPlanner::push)).
+    After(u32),
+    /// At this time on the engine's clock (see
+    /// [`StreamPlanner::push_at`](crate::StreamPlanner::push_at)).
+    At(u64),
+}
+
 /// A streamed point, stamped with its reception time.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Point {
     pub(crate) received_ms: u64,
     pub(crate) position: f64,
-    pub(crate) duration_ms: u32,
+    pub(crate) due: Due,
     /// Replaces queued points (see
     /// [`StreamPlanner::push_latest`](crate::StreamPlanner::push_latest)).
+    /// Applies to [`Due::After`] only.
     pub(crate) latest: bool,
 }
 

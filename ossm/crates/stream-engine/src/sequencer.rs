@@ -96,6 +96,11 @@ impl StreamSequencer {
         self.planner.push(now_ms, position, duration_ms)
     }
 
+    /// Queue a point due at `at_ms` (see [`StreamPlanner::push_at`]).
+    pub fn push_at(&mut self, position: f64, at_ms: u64) -> Result<(), PushError> {
+        self.planner.push_at(position, at_ms)
+    }
+
     /// Make a point the only one (see [`StreamPlanner::push_latest`]).
     pub fn push_latest(
         &mut self,

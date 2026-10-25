@@ -108,10 +108,10 @@ impl StreamSession {
                 self.points = self.points.saturating_add(1);
                 true
             }
-            Err(PushError::QueueFull) => {
+            Err(error @ (PushError::QueueFull | PushError::OutOfOrder)) => {
                 if count(&mut self.dropped) {
                     warn!(
-                        "[stream] stream queue full, point dropped ({} so far)",
+                        "[stream] point dropped: {error:?} ({} so far)",
                         self.dropped
                     );
                 }

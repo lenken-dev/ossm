@@ -5,7 +5,7 @@ use log::{info, warn};
 use ossm::MotionSender;
 
 use crate::PushError;
-use crate::engine::{EngineCommand, Point, StreamEngine};
+use crate::engine::{Due, EngineCommand, Point, StreamEngine};
 use crate::input::StreamInput;
 use crate::sequencer::StreamSequencer;
 
@@ -156,10 +156,14 @@ impl StreamRunner {
     /// Queue a point. Drops for a full queue are logged at 1, 2, 4, 8, ...
     /// per stream.
     fn push(&self, sequencer: &mut StreamSequencer, point: Point) {
-        let pushed = if point.latest {
-            sequencer.push_latest(point.received_ms, point.position, point.duration_ms)
-        } else {
-            sequencer.push(point.received_ms, point.position, point.duration_ms)
+        let pushed = match point.due {
+            Due::After(duration_ms) if point.latest => {
+                sequencer.push_latest(point.received_ms, point.position, duration_ms)
+            }
+            Due::After(duration_ms) => {
+                sequencer.push(point.received_ms, point.position, duration_ms)
+            }
+            Due::At(at_ms) => sequencer.push_at(point.position, at_ms),
         };
         match pushed {
             Ok(()) => {}
@@ -220,7 +224,7 @@ mod tests {
         let point = Point {
             received_ms: 0,
             position: 50.0,
-            duration_ms: 100,
+            due: Due::After(100),
             latest: false,
         };
         for _ in 0..=StreamPlanner::CAPACITY {

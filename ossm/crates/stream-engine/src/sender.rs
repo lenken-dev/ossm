@@ -3,7 +3,7 @@ use core::sync::atomic::Ordering;
 use embassy_time::Instant;
 
 use crate::PushError;
-use crate::engine::{EngineCommand, Point, StreamEngine};
+use crate::engine::{Due, EngineCommand, Point, StreamEngine};
 
 /// Sender half of the stream engine.
 ///
@@ -30,7 +30,7 @@ impl StreamSender {
     /// unlike a point dropped by the planner, does not advance the stream
     /// timeline.
     pub fn push(&self, position: f64, duration_ms: u32) -> Result<(), PushError> {
-        self.send_point(position, duration_ms, false)
+        self.send_point(position, Due::After(duration_ms), false)
     }
 
     /// Stream a point that replaces all queued points and the current move,
@@ -39,10 +39,18 @@ impl StreamSender {
     /// for a client that sends nothing ahead. Fails as [`push`](Self::push)
     /// does.
     pub fn push_latest(&self, position: f64, duration_ms: u32) -> Result<(), PushError> {
-        self.send_point(position, duration_ms, true)
+        self.send_point(position, Due::After(duration_ms), true)
     }
 
-    fn send_point(&self, position: f64, duration_ms: u32, latest: bool) -> Result<(), PushError> {
+    /// Stream a point due at `at_ms` on the engine's clock
+    /// ([`Instant::now`]), whenever it is received (see
+    /// [`StreamPlanner::push_at`](crate::StreamPlanner::push_at)). Fails as
+    /// [`push`](Self::push) does.
+    pub fn push_at(&self, position: f64, at_ms: u64) -> Result<(), PushError> {
+        self.send_point(position, Due::At(at_ms), false)
+    }
+
+    fn send_point(&self, position: f64, due: Due, latest: bool) -> Result<(), PushError> {
         if !position.is_finite() {
             return Err(PushError::InvalidPosition);
         }
@@ -51,7 +59,7 @@ impl StreamSender {
             .try_send(EngineCommand::Point(Point {
                 received_ms: Instant::now().as_millis(),
                 position,
-                duration_ms,
+                due,
                 latest,
             }))
             .map_err(|_| PushError::QueueFull)

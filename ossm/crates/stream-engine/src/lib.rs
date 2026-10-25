@@ -3,7 +3,8 @@
 //! Streamed motion.
 //!
 //! A streaming client sends timed points (`<position 0-100>:<duration ms>`,
-//! as the OSSM-Lite funscript player does). [`StreamPlanner`] queues them on
+//! as the OSSM-Lite funscript player does), or points with an absolute due
+//! time ([`StreamSender::push_at`]). [`StreamPlanner`] queues them on
 //! its own clock and turns them into [`MoveRequest`]s: a target machine
 //! position, an arrival time, and an arrival velocity. Executing a request
 //! (as a Ruckig move with a target velocity and a minimum duration) is the

@@ -37,9 +37,11 @@ impl MoveRequest {
 pub enum PushError {
     /// The point was not finite.
     InvalidPosition,
-    /// The queue is full; the point was dropped, but its duration still
-    /// advances the stream timeline.
+    /// The queue is full; the point was dropped, but a duration point's
+    /// duration still advances the stream timeline.
     QueueFull,
+    /// The point was due before the previously queued point.
+    OutOfOrder,
 }
 
 /// Counters for diagnostics.
@@ -135,6 +137,31 @@ impl StreamPlanner {
             self.stats.dropped += 1;
             PushError::QueueFull
         })
+    }
+
+    /// Queue a point due at `at_ms` on the planner's clock.
+    ///
+    /// Unlike [`push`](Self::push), its due time does not depend on when it
+    /// arrives: a point delayed past it is skipped as late (see
+    /// [`poll`](Self::poll)) instead of delaying the points after it. A
+    /// dropped point leaves no trace on the timeline.
+    pub fn push_at(&mut self, position: f64, at_ms: u64) -> Result<(), PushError> {
+        if !position.is_finite() {
+            return Err(PushError::InvalidPosition);
+        }
+        if self.last_at_ms.is_some_and(|last| at_ms < last) {
+            return Err(PushError::OutOfOrder);
+        }
+        let point = Point {
+            at_ms,
+            position: position.clamp(0.0, 100.0),
+        };
+        self.queue.push_back(point).map_err(|_| {
+            self.stats.dropped += 1;
+            PushError::QueueFull
+        })?;
+        self.last_at_ms = Some(at_ms);
+        Ok(())
     }
 
     /// Make a point the only one: reach `position` `duration_ms` from now,
@@ -289,6 +316,22 @@ mod tests {
         let request = p.poll(500, 1.0).unwrap();
         assert_eq!(request.arrival_ms, 500);
         assert_eq!(p.stats().skipped, 0);
+    }
+
+    #[test]
+    fn timed_points_skip_a_stall_instead_of_lagging() {
+        let mut p = planner();
+        p.push_at(0.0, 1000).unwrap();
+        assert_eq!(p.poll(900, 1.0).unwrap().arrival_ms, 1000);
+        // A burst received after a stall: the first two are overdue.
+        for (i, position) in [100.0, 0.0, 100.0, 0.0].into_iter().enumerate() {
+            p.push_at(position, 1200 + 200 * i as u64).unwrap();
+        }
+        let request = p.poll(1550, 0.0).unwrap();
+        assert_eq!(request.arrival_ms, 1600);
+        assert!(close(request.position, 0.0)); // stream 100 = shallow end
+        assert_eq!(p.stats().skipped, 2);
+        assert_eq!(p.poll(1600, 0.0).unwrap().arrival_ms, 1800);
     }
 
     #[test]
