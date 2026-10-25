@@ -128,8 +128,16 @@ The mode in which a remote client drives motion with timed stream points instead
 _Avoid_: Pattern playback
 
 **Stream point**:
-A streamed target: a position from zero (deepest) to one hundred (shallowest) within the stroke range, and a duration. It is due that duration after the later of its reception and the previous point's scheduled arrival.
+A streamed target: a position from zero (deepest) to one hundred (shallowest) within the stroke range, and a duration. It is due that duration after the later of its reception and the previous point's scheduled arrival. A timed stream point is instead due at a time on the remote's clock.
 _Avoid_: Stroke position, move
+
+**Timed stream point**:
+A stream point carrying its due time on the remote's clock instead of a duration, mapped onto the firmware's clock through the stream clock offset. It is never latest-only, and a late one is skipped like any late point, so a delay in transport never leaves the machine behind.
+_Avoid_: Absolute point
+
+**Stream sync**:
+A command stamping the remote's clock, from which the firmware keeps the stream clock offset for the connection: the fastest sample (the one with the least transport delay), creeping up slowly between syncs to follow a faster firmware clock.
+_Avoid_: Clock sync
 
 **Latest-only point**:
 A stream point from a remote that does not use look-ahead (the OSSM-Lite and official OSSM funscript players). It replaces all queued points and the current move, and is due its duration after its reception, so the machine never runs behind or keeps moving after the remote stops sending.
