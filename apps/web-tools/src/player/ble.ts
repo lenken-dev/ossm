@@ -50,6 +50,12 @@ interface Job {
   reject: (reason: unknown) => void;
 }
 
+/** Stamp a `stream:sync:` job with the player's clock as its write runs, so that time spent queued does not count as transport delay. */
+const stampSync = (job: Job) => {
+  job.text = `stream:sync:${Math.round(performance.now())}`;
+  return job;
+};
+
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const decode = (value: DataView) => decoder.decode(value);
@@ -73,6 +79,8 @@ export class Ossm extends EventTarget {
   state: OssmState | null = null;
   /** Last planned machine position notified, 0 (home) to 100 (deepest); `null` until known or on firmware without it. */
   position: number | null = null;
+  /** Whether the firmware takes timed points (`stream:at:`) against `stream:sync:` stamps of `performance.now()`. */
+  timebase = false;
   private stateText = "";
   private queue: Job[] = [];
   private busy = false;
@@ -143,6 +151,12 @@ export class Ossm extends EventTarget {
       log(`connected to ${device.name ?? device.id}`);
       log(`look-ahead ${lookahead}`);
       log(`travel ${ossm.travelMm ?? "unknown"} mm`);
+      if (lookahead > 0) {
+        // Older firmware answers `fail:`, parsing it as a malformed point.
+        const reply = await ossm.enqueue({ text: "stream:sync" }, (job) => ossm.request(stampSync(job))).catch(() => undefined);
+        ossm.timebase = !!reply?.startsWith("ok:");
+        log(`timebase ${ossm.timebase}`);
+      }
       ossm.handleState(decode(await ossm.stateChar.readValue()));
       await subscribe(ossm.stateChar);
       if (ossm.positionChar) {
@@ -190,12 +204,7 @@ export class Ossm extends EventTarget {
       pending.text = text;
       return pending.promise as Promise<string | undefined>;
     }
-    return this.enqueue({ text, key, note }, async (job) => {
-      if (!(await this.write(job, true))) return undefined;
-      const reply = decode(await this.commandChar.readValue());
-      log(`← ${reply}`, reply.startsWith("fail:") ? "warn" : "log");
-      return reply;
-    }).catch(() => undefined);
+    return this.enqueue({ text, key, note }, (job) => this.request(job)).catch(() => undefined);
   }
 
   /**
@@ -204,7 +213,25 @@ export class Ossm extends EventTarget {
    * `note` is appended to the write's log line.
    */
   streamPoint(position: number, durationMs: number, note?: string): Promise<boolean> {
-    const text = `stream:${Math.round(position * 10) / 10}:${Math.round(durationMs)}`;
+    return this.send(`stream:${Math.round(position * 10) / 10}:${Math.round(durationMs)}`, note);
+  }
+
+  /**
+   * Stream a timed point (`stream:at:<position>:<time>`) due at `at`, a
+   * `performance.now()` time, with {@link timebase}. Otherwise as
+   * {@link streamPoint}.
+   */
+  streamPointAt(position: number, at: number, note?: string): Promise<boolean> {
+    return this.send(`stream:at:${Math.round(position * 10) / 10}:${Math.round(at)}`, note);
+  }
+
+  /** Stamp the player's clock for timed points without response. Resolves to whether it was written. */
+  streamSync(): Promise<boolean> {
+    return this.enqueue({ text: "stream:sync" }, (job) => this.write(stampSync(job), false)).catch(() => false);
+  }
+
+  /** Write without response; resolves to whether it was written. */
+  private send(text: string, note?: string): Promise<boolean> {
     return this.enqueue({ text, note }, (job) => this.write(job, false)).catch(() => false);
   }
 
@@ -248,6 +275,14 @@ export class Ossm extends EventTarget {
       }
     }
     this.busy = false;
+  }
+
+  /** Write a command with response, then read and log the reply; `undefined` when the write failed. */
+  private async request(job: Job) {
+    if (!(await this.write(job, true))) return undefined;
+    const reply = decode(await this.commandChar.readValue());
+    log(`← ${reply}`, reply.startsWith("fail:") ? "warn" : "log");
+    return reply;
   }
 
   /** Write a command and log it; returns whether it went out. */

@@ -7,6 +7,8 @@ export interface OutgoingPoint {
   position: number;
   /** ms */
   duration: number;
+  /** When it is due, in the `wall` clock's ms (see {@link FunscriptStream.tick}). */
+  at: number;
 }
 
 /**
@@ -33,15 +35,18 @@ export class FunscriptStream {
    * offset`): without an open stream, the target (first action after
    * `media`) timed from `media`, which opens one; then every unsent action up
    * to `lookahead` beyond the target, timed from its predecessor. Durations
-   * are script times divided by `rate`.
+   * are script times divided by `rate`. Each point is also due at the time
+   * `wall` (ms, taken with `media`) plus its script time from `media`
+   * divided by `rate`.
    */
-  tick(script: Funscript, media: number, rate: number, reverse: boolean, lookahead: number): OutgoingPoint[] {
+  tick(script: Funscript, media: number, wall: number, rate: number, reverse: boolean, lookahead: number): OutgoingPoint[] {
     const { at, pos } = script;
     const last = at.length - 1;
     const target = bisectRight(at, media);
     const point = (i: number, duration: number): OutgoingPoint => ({
       position: reverse ? 100 - pos[i] : pos[i],
       duration: Math.round(duration / rate),
+      at: wall + (at[i] - media) / rate,
     });
 
     const points: OutgoingPoint[] = [];

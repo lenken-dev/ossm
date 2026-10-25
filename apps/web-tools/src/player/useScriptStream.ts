@@ -4,6 +4,9 @@ import type { Ossm, OssmState } from "./ble";
 import { advancing, blockReason, TICK_MS, type Playhead } from "./playback";
 import { FunscriptStream } from "./stream";
 
+/** Longest time between `stream:sync:` stamps while a timed stream is open, in ms. */
+const SYNC_INTERVAL_MS = 1000;
+
 /**
  * Streams `script` to `ossm` in funscript mode (`active`) while the video
  * plays, `offset` ms ahead of the `playhead` at script speed `speed`, once
@@ -76,12 +79,24 @@ export function useScriptStream({ active, ossm, state, videoRef, paused, script,
   // right away.
   useEffect(() => {
     if (!active || paused || blocked || !ossm || !script) return;
+    /** When the last `stream:sync:` was queued (`performance.now()`). */
+    let synced = -Infinity;
     const id = setInterval(() => {
       const video = videoRef.current;
       if (!video || !advancing(video)) return;
-      for (const p of stream.current.tick(script, streamTime(), video.playbackRate * speed, reverse, ossm.lookahead)) {
-        void ossm.streamPoint(p.position, p.duration);
+      const opening = !stream.current.open;
+      const wall = performance.now();
+      const points = stream.current.tick(script, streamTime(), wall, video.playbackRate * speed, reverse, ossm.lookahead);
+      if (!ossm.timebase) {
+        for (const p of points) void ossm.streamPoint(p.position, p.duration);
+        return;
       }
+      // Before each stream's first point, then while it is open.
+      if (stream.current.open && (opening || wall - synced >= SYNC_INTERVAL_MS)) {
+        void ossm.streamSync();
+        synced = wall;
+      }
+      for (const p of points) void ossm.streamPointAt(p.position, p.at);
     }, TICK_MS);
     return () => clearInterval(id);
   }, [active, paused, blocked, ossm, script, offset, speed, reverse]);
