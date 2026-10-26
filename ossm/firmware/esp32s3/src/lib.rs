@@ -14,7 +14,6 @@ compile_error!(
 
 mod board;
 mod indicator;
-mod mode;
 mod motor;
 mod radio;
 
@@ -162,7 +161,7 @@ pub async fn run(spawner: Spawner, config: Config) {
         motion_observer,
     );
 
-    mode::Modes {
+    mode_switch::Modes {
         motion: &motion,
         patterns,
         pattern_runner: runner,

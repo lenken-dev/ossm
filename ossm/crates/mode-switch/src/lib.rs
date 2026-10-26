@@ -1,3 +1,5 @@
+#![no_std]
+
 //! Switching between pattern and streamed motion.
 //!
 //! The pattern engine drives the machine until a streamed point starts

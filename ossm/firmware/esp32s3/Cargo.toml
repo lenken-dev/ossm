@@ -38,6 +38,7 @@ ossm = { path = "../../core" }
 ossm-esp = { path = "../../esp", features = ["esp32s3"] }
 pattern-engine = { path = "../../crates/pattern-engine" }
 stream-engine = { path = "../../crates/stream-engine" }
+mode-switch = { path = "../../crates/mode-switch" }
 ossm-m5-remote = { path = "../../crates/ossm-m5-remote", features = [
     "esp32s3",
 ] }
@@ -77,7 +78,6 @@ esp-backtrace = { version = "0.18.1", features = [
 ] }
 esp-println = { version = "0.16.1", features = ["esp32s3", "log-04"] }
 
-embassy-futures = "0.1"
 embassy-sync = "0.7"
 
 critical-section = "1.2.0"
