@@ -7,7 +7,7 @@
 
 /// A streamed point as written by a remote.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Point {
+pub struct DurationPoint {
     /// Stream position, 0 = deep end, 100 = shallow end. Clamped to
     /// `0.0..=100.0`.
     pub position: f64,
@@ -18,7 +18,7 @@ pub struct Point {
 /// A timed stream point: a position and the remote's time to reach it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TimedPoint {
-    /// As [`Point::position`].
+    /// As [`DurationPoint::position`].
     pub position: f64,
     /// When to reach the position, on the remote's clock (see
     /// [`ClockOffset`](stream_engine::ClockOffset)).
@@ -29,16 +29,16 @@ pub struct TimedPoint {
 ///
 /// The position is a decimal number clamped to `0.0..=100.0`; the duration
 /// is an unsigned whole number.
-pub fn parse_point(bytes: &[u8]) -> Option<Point> {
+pub fn parse_duration_point(bytes: &[u8]) -> Option<DurationPoint> {
     let (position, duration_ms) = position_and(bytes)?;
-    Some(Point {
+    Some(DurationPoint {
         position,
         duration_ms,
     })
 }
 
 /// Parse a timed stream point, `<position>:<time ms>`, as
-/// [`parse_point`] does.
+/// [`parse_duration_point`] does.
 pub fn parse_timed_point(bytes: &[u8]) -> Option<TimedPoint> {
     let (position, at_ms) = position_and(bytes)?;
     Some(TimedPoint { position, at_ms })
@@ -89,15 +89,15 @@ mod tests {
     #[test]
     fn parses_points() {
         assert_eq!(
-            parse_point(b"50:1000"),
-            Some(Point {
+            parse_duration_point(b"50:1000"),
+            Some(DurationPoint {
                 position: 50.0,
                 duration_ms: 1000
             })
         );
         assert_eq!(
-            parse_point(b"33.5:250"),
-            Some(Point {
+            parse_duration_point(b"33.5:250"),
+            Some(DurationPoint {
                 position: 33.5,
                 duration_ms: 250
             })
@@ -106,35 +106,41 @@ mod tests {
 
     #[test]
     fn point_parsing_tolerates_whitespace_and_trailing_nul() {
-        let expected = Some(Point {
+        let expected = Some(DurationPoint {
             position: 100.0,
             duration_ms: 2000,
         });
-        assert_eq!(parse_point(b" 100 : 2000 \n"), expected);
-        assert_eq!(parse_point(b"100:2000\0"), expected);
-        assert_eq!(parse_point(b"100:2000\r\n\0\0"), expected);
+        assert_eq!(parse_duration_point(b" 100 : 2000 \n"), expected);
+        assert_eq!(parse_duration_point(b"100:2000\0"), expected);
+        assert_eq!(parse_duration_point(b"100:2000\r\n\0\0"), expected);
     }
 
     #[test]
     fn point_positions_are_clamped() {
-        assert_eq!(parse_point(b"150:10").map(|p| p.position), Some(100.0));
-        assert_eq!(parse_point(b"-5:10").map(|p| p.position), Some(0.0));
+        assert_eq!(
+            parse_duration_point(b"150:10").map(|p| p.position),
+            Some(100.0)
+        );
+        assert_eq!(
+            parse_duration_point(b"-5:10").map(|p| p.position),
+            Some(0.0)
+        );
     }
 
     #[test]
     fn rejects_malformed_points() {
-        assert!(parse_point(b"").is_none());
-        assert!(parse_point(b"50").is_none());
-        assert!(parse_point(b":100").is_none());
-        assert!(parse_point(b"abc:100").is_none());
-        assert!(parse_point(b"NaN:100").is_none());
-        assert!(parse_point(b"inf:100").is_none());
-        assert!(parse_point(b"50:").is_none());
-        assert!(parse_point(b"50:-1").is_none());
-        assert!(parse_point(b"50:1.5").is_none());
-        assert!(parse_point(b"50:100:3").is_none());
-        assert!(parse_point(b"50:99999999999").is_none());
-        assert!(parse_point(&[0xff, b':', b'1']).is_none());
+        assert!(parse_duration_point(b"").is_none());
+        assert!(parse_duration_point(b"50").is_none());
+        assert!(parse_duration_point(b":100").is_none());
+        assert!(parse_duration_point(b"abc:100").is_none());
+        assert!(parse_duration_point(b"NaN:100").is_none());
+        assert!(parse_duration_point(b"inf:100").is_none());
+        assert!(parse_duration_point(b"50:").is_none());
+        assert!(parse_duration_point(b"50:-1").is_none());
+        assert!(parse_duration_point(b"50:1.5").is_none());
+        assert!(parse_duration_point(b"50:100:3").is_none());
+        assert!(parse_duration_point(b"50:99999999999").is_none());
+        assert!(parse_duration_point(&[0xff, b':', b'1']).is_none());
     }
 
     #[test]

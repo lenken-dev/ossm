@@ -1,7 +1,7 @@
 //! Streamed points of one connection, from any of the streaming protocols.
 //!
 //! Remotes write points as `<position>:<duration ms>` text (see
-//! [`payload::parse_point`]).
+//! [`payload::parse_duration_point`]).
 //! The session hands them to the stream engine and counts those it had to
 //! ignore, for a summary when the connection ends.
 //!
@@ -97,7 +97,7 @@ impl StreamSession {
     /// [`StreamSender::push_latest`]). Returns whether it was streamed.
     pub fn push(&mut self, data: &[u8], latest: bool) -> bool {
         self.stream_point(data, |stream, data| {
-            let point = payload::parse_point(data)?;
+            let point = payload::parse_duration_point(data)?;
             Some(if latest {
                 stream.push_latest(point.position, point.duration_ms)
             } else {
