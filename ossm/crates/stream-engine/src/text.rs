@@ -1,21 +1,11 @@
-//! The OSSM-Lite streaming protocol, as spoken by its funscript player.
+//! Text encoding of stream points and settings, as remotes write them.
 //!
-//! The player writes streamed points as `<position>:<duration ms>` text and
-//! its settings as decimal percent text (0-100). It expresses the stroke
-//! range as a minimum and a maximum depth, both as percent of the machine
-//! range; these map onto the depth and stroke settings:
-//!
-//! - maximum depth = depth
-//! - minimum depth = depth × (1 − stroke)
-//!
-//! Changing one of the two depths keeps the other in place. The written
-//! depth is clamped so that the minimum never exceeds the maximum.
+//! Points are `<position>:<duration ms>` text (or `<position>:<time ms>`
+//! for timed points); settings are decimal percent text (0-100).
 //!
 //! Parsing tolerates surrounding whitespace and trailing NULs.
 
-use crate::StrokeRange;
-
-/// A streamed point as written by the player.
+/// A streamed point as written by a remote.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
     /// Stream position, 0 = deep end, 100 = shallow end. Clamped to
@@ -79,59 +69,6 @@ pub fn setting_percent(fraction: f64) -> u8 {
     (fraction.clamp(0.0, 1.0) * 100.0 + 0.5) as u8
 }
 
-/// Maximum depth as a machine position (0.0-1.0).
-pub fn max_depth(range: StrokeRange) -> f64 {
-    range.sanitized().depth
-}
-
-/// Minimum depth as a machine position (0.0-1.0).
-pub fn min_depth(range: StrokeRange) -> f64 {
-    let range = range.sanitized();
-    range.depth * (1.0 - range.stroke)
-}
-
-/// The stroke range with a new maximum depth (machine position), keeping
-/// the minimum depth. The maximum is clamped to at least the minimum.
-/// Non-finite values leave the range unchanged.
-pub fn with_max_depth(range: StrokeRange, max: f64) -> StrokeRange {
-    let range = range.sanitized();
-    if !max.is_finite() {
-        return range;
-    }
-    let min = min_depth(range);
-    let max = max.clamp(min, 1.0);
-    StrokeRange {
-        depth: max,
-        stroke: stroke_between(min, max, range.stroke),
-    }
-}
-
-/// The stroke range with a new minimum depth (machine position), keeping
-/// the maximum depth. The minimum is clamped to at most the maximum.
-/// Non-finite values leave the range unchanged.
-pub fn with_min_depth(range: StrokeRange, min: f64) -> StrokeRange {
-    let range = range.sanitized();
-    if !min.is_finite() {
-        return range;
-    }
-    let max = range.depth;
-    let min = min.clamp(0.0, max);
-    StrokeRange {
-        depth: max,
-        stroke: stroke_between(min, max, range.stroke),
-    }
-}
-
-/// The stroke setting spanning `min..=max`. At zero depth every stroke
-/// gives the same (empty) range, so `current` is kept.
-fn stroke_between(min: f64, max: f64, current: f64) -> f64 {
-    if max > 0.0 {
-        (1.0 - min / max).clamp(0.0, 1.0)
-    } else {
-        current
-    }
-}
-
 fn text(bytes: &[u8]) -> Option<&str> {
     core::str::from_utf8(bytes)
         .ok()
@@ -149,16 +86,8 @@ fn number(text: &str) -> Option<f64> {
 mod tests {
     use super::*;
 
-    fn close(a: f64, b: f64) -> bool {
-        (a - b).abs() < 1e-9
-    }
-
-    fn range(depth: f64, stroke: f64) -> StrokeRange {
-        StrokeRange { depth, stroke }
-    }
-
     #[test]
-    fn parses_points_as_the_player_sends_them() {
+    fn parses_points() {
         assert_eq!(
             parse_point(b"50:1000"),
             Some(Point {
@@ -234,65 +163,5 @@ mod tests {
         assert_eq!(setting_percent(-0.2), 0);
         assert_eq!(setting_percent(1.7), 100);
         assert_eq!(setting_percent(f64::NAN), 0);
-    }
-
-    #[test]
-    fn depths_follow_depth_and_stroke() {
-        let range = range(0.8, 0.75);
-        assert!(close(max_depth(range), 0.8));
-        assert!(close(min_depth(range), 0.2));
-        assert!(close(min_depth(StrokeRange::FULL), 0.0));
-    }
-
-    #[test]
-    fn setting_max_depth_keeps_min_depth() {
-        let updated = with_max_depth(range(0.8, 0.75), 0.5);
-        assert!(close(updated.depth, 0.5));
-        assert!(close(updated.stroke, 0.6));
-        assert!(close(min_depth(updated), 0.2));
-    }
-
-    #[test]
-    fn setting_min_depth_keeps_max_depth() {
-        let updated = with_min_depth(range(0.8, 0.75), 0.4);
-        assert!(close(updated.depth, 0.8));
-        assert!(close(updated.stroke, 0.5));
-        assert!(close(min_depth(updated), 0.4));
-    }
-
-    #[test]
-    fn written_depth_is_clamped_to_the_other() {
-        let below_min = with_max_depth(range(0.8, 0.75), 0.1);
-        assert!(close(below_min.depth, 0.2));
-        assert!(close(below_min.stroke, 0.0));
-
-        let above_max = with_min_depth(range(0.8, 0.75), 0.9);
-        assert!(close(above_max.depth, 0.8));
-        assert!(close(above_max.stroke, 0.0));
-    }
-
-    #[test]
-    fn depths_at_zero_depth() {
-        let zero = range(0.0, 0.3);
-        assert_eq!(with_min_depth(zero, 0.5), zero);
-        let raised = with_max_depth(zero, 0.5);
-        assert!(close(raised.depth, 0.5));
-        assert!(close(min_depth(raised), 0.0));
-    }
-
-    #[test]
-    fn non_finite_depths_leave_the_range_unchanged() {
-        let range = range(0.8, 0.75);
-        assert_eq!(with_max_depth(range, f64::NAN), range);
-        assert_eq!(with_min_depth(range, f64::INFINITY), range);
-    }
-
-    #[test]
-    fn written_percent_reads_back_unchanged() {
-        let range = with_min_depth(range(0.8, 0.5), 0.25);
-        assert_eq!(setting_percent(min_depth(range)), 25);
-        let range = with_max_depth(range, 0.67);
-        assert_eq!(setting_percent(max_depth(range)), 67);
-        assert_eq!(setting_percent(min_depth(range)), 25);
     }
 }

@@ -174,8 +174,8 @@ impl Modes<'_> {
         } else {
             start
         };
-        // Sensation (-1.0..1.0) sets the jerk setting (0.0..1.0), as
-        // OSSM-Lite reuses sensation for streaming.
+        // Sensation (-1.0..1.0) sets the jerk setting (0.0..1.0): streaming
+        // has no use for sensation, so remotes reuse its control.
         let input = || {
             let pattern = self.patterns.input();
             StreamInput {

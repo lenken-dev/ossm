@@ -1,7 +1,7 @@
 //! Streamed points of one connection, from any of the streaming protocols.
 //!
-//! Both the OSSM-Lite stream characteristic and the `stream:` command write
-//! points as `<position>:<duration ms>` text (see [`lite::parse_point`]).
+//! Remotes write points as `<position>:<duration ms>` text (see
+//! [`text::parse_point`]).
 //! The session hands them to the stream engine and counts those it had to
 //! ignore, for a summary when the connection ends.
 //!
@@ -13,7 +13,7 @@
 //! queued points no longer apply (seek, pause, stall, or a change to how it
 //! generates points); the next point starts a new stream.
 //!
-//! Every other player (OSSM-Lite, the official OSSM one) sends each point as
+//! Every other player sends each point as
 //! its segment starts and never ends a stream, so its points are streamed
 //! latest-only (see [`StreamSender::push_latest`]): nothing queued can make
 //! the machine run behind or keep moving after the player stopped.
@@ -30,7 +30,7 @@ use core::fmt::Write;
 use embassy_time::Instant;
 use heapless::String;
 use log::{info, warn};
-use stream_engine::{ClockOffset, PushError, StreamPlanner, StreamSender, lite};
+use stream_engine::{ClockOffset, PushError, StreamPlanner, StreamSender, text};
 
 /// Longest point text accepted.
 pub const MAX_POINT_LENGTH: usize = 32;
@@ -95,7 +95,7 @@ impl StreamSession {
     /// [`StreamSender::push_latest`]). Returns whether it was streamed.
     pub fn push(&mut self, data: &[u8], latest: bool) -> bool {
         self.stream_point(data, |stream, data| {
-            let point = lite::parse_point(data)?;
+            let point = text::parse_point(data)?;
             Some(if latest {
                 stream.push_latest(point.position, point.duration_ms)
             } else {
@@ -110,7 +110,7 @@ impl StreamSession {
     pub fn push_timed(&mut self, data: &[u8]) -> bool {
         let clock = self.clock;
         self.stream_point(data, |stream, data| {
-            let point = lite::parse_timed_point(data)?;
+            let point = text::parse_timed_point(data)?;
             Some(stream.push_at(point.position, clock.to_local(point.at_ms)?))
         })
     }

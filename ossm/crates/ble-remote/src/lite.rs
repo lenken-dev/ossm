@@ -3,30 +3,50 @@
 //! Lets the OSSM-Lite funscript player stream to this firmware. It writes
 //! points to the stream characteristic, and speed and the minimum and
 //! maximum depth as percent text. The settings map onto the pattern
-//! settings, so every remote shares them (see [`stream_engine::lite`]).
+//! settings, so every remote shares them.
+//!
+//! The player expresses the stroke range as a minimum and a maximum depth,
+//! both as percent of the machine range (see [`StrokeRange::min_depth`] and
+//! [`StrokeRange::max_depth`]). Changing one keeps the other in place.
 
 use core::fmt::Write;
 
 use heapless::String;
 use log::info;
 use pattern_engine::PatternSender;
-use stream_engine::{StrokeRange, lite};
+use stream_engine::{StrokeRange, text};
 use trouble_host::prelude::*;
 
 use crate::Server;
-use crate::stream::StreamSession;
+use crate::stream::{MAX_POINT_LENGTH, StreamSession};
 
 pub const SERVICE_UUID: Uuid = uuid!("4f53534d-0000-0000-0000-000000000000");
-pub const STREAM_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-53747265616d");
-pub const SPEED_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-005370656564");
-pub const MAX_DEPTH_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-4d6178446570");
-pub const MIN_DEPTH_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-4d696e446570");
+const STREAM_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-53747265616d");
+const SPEED_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-005370656564");
+const MAX_DEPTH_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-4d6178446570");
+const MIN_DEPTH_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-4d696e446570");
 
-pub const MAX_SETTING_LENGTH: usize = 16;
+const MAX_SETTING_LENGTH: usize = 16;
 
 /// What the stream characteristic reads as. The player reads it once to
 /// check that the firmware streams.
 const STREAM_READY: &str = "Ready";
+
+/// OSSM-Lite compatible streaming service.
+#[gatt_service(uuid = SERVICE_UUID)]
+pub struct LiteService {
+    #[characteristic(uuid = STREAM_UUID, read, write, write_without_response)]
+    stream: String<MAX_POINT_LENGTH>,
+
+    #[characteristic(uuid = SPEED_UUID, read, write)]
+    speed: String<MAX_SETTING_LENGTH>,
+
+    #[characteristic(uuid = MAX_DEPTH_UUID, read, write)]
+    max_depth: String<MAX_SETTING_LENGTH>,
+
+    #[characteristic(uuid = MIN_DEPTH_UUID, read, write)]
+    min_depth: String<MAX_SETTING_LENGTH>,
+}
 
 /// The OSSM-Lite service of one connection.
 pub struct LiteSession {
@@ -50,10 +70,10 @@ impl LiteSession {
             let speed = self.patterns.input().velocity;
             server.set(&service.speed, &percent_text(speed))?;
         } else if handle == service.max_depth.handle {
-            let max = lite::max_depth(stroke_range(self.patterns));
+            let max = stroke_range(self.patterns).max_depth();
             server.set(&service.max_depth, &percent_text(max))?;
         } else if handle == service.min_depth.handle {
-            let min = lite::min_depth(stroke_range(self.patterns));
+            let min = stroke_range(self.patterns).min_depth();
             server.set(&service.min_depth, &percent_text(min))?;
         }
         Ok(())
@@ -77,12 +97,12 @@ impl LiteSession {
             });
         } else if handle == service.max_depth.handle {
             self.on_setting(session, "max depth", data, |patterns, max| {
-                let range = lite::with_max_depth(stroke_range(patterns), max);
+                let range = stroke_range(patterns).with_max_depth(max);
                 patterns.set_depth_and_stroke(range.depth, range.stroke);
             });
         } else if handle == service.min_depth.handle {
             self.on_setting(session, "min depth", data, |patterns, min| {
-                let range = lite::with_min_depth(stroke_range(patterns), min);
+                let range = stroke_range(patterns).with_min_depth(min);
                 patterns.set_depth_and_stroke(range.depth, range.stroke);
             });
         }
@@ -99,9 +119,9 @@ impl LiteSession {
             session.invalid_write(data);
             return;
         }
-        match lite::parse_setting(data) {
+        match text::parse_setting(data) {
             Some(value) => {
-                info!("[lite] set {} {}", name, lite::setting_percent(value));
+                info!("[lite] set {} {}", name, text::setting_percent(value));
                 apply(self.patterns, value);
             }
             None => session.invalid_write(data),
@@ -119,6 +139,6 @@ fn stroke_range(patterns: &PatternSender) -> StrokeRange {
 
 fn percent_text(fraction: f64) -> String<MAX_SETTING_LENGTH> {
     let mut text = String::new();
-    write!(text, "{}", lite::setting_percent(fraction)).expect("Always fits");
+    write!(text, "{}", text::setting_percent(fraction)).expect("Always fits");
     text
 }

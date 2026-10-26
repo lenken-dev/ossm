@@ -20,7 +20,6 @@ pub fn start(
 
     let connector = BleConnector::new(radio, bt, Default::default())
         .expect("Could not create BleConnector");
-    // No streaming on this firmware yet: the OSSM-Lite service is not
-    // advertised and ignores streamed points.
+    // No streaming on this firmware yet: streamed points are ignored.
     ble_remote::start(spawner, connector, patterns, None, motion, limits);
 }

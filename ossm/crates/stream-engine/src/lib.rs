@@ -2,8 +2,8 @@
 
 //! Streamed motion.
 //!
-//! A streaming client sends timed points (`<position 0-100>:<duration ms>`,
-//! as the OSSM-Lite funscript player does), or points with an absolute due
+//! A streaming client sends timed points (a position 0-100 and a duration
+//! in ms, see [`text`]), or points with an absolute due
 //! time ([`StreamSender::push_at`]). [`StreamPlanner`] queues them on
 //! its own clock and turns them into [`MoveRequest`]s: a target machine
 //! position, an arrival time, and an arrival velocity. Executing a request
@@ -23,19 +23,18 @@
 //! The planner and sequencer are synchronous and clock-agnostic: the caller
 //! passes the current time in milliseconds to every call.
 //!
-//! [`lite`] parses the OSSM-Lite streaming protocol and maps its settings
-//! onto depth and stroke, for remotes that speak it. [`ClockOffset`] maps
+//! [`text`] parses points and settings as remotes write them. [`ClockOffset`] maps
 //! a remote's clock onto the engine's, for points with a due time.
 
 mod clock;
 mod engine;
 mod input;
-pub mod lite;
 mod planner;
 mod range;
 mod runner;
 mod sender;
 mod sequencer;
+pub mod text;
 
 pub use clock::ClockOffset;
 pub use engine::StreamEngine;

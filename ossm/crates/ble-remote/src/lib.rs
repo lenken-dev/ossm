@@ -29,7 +29,6 @@ use static_cell::StaticCell;
 use stream_engine::StreamSender;
 use trouble_host::prelude::*;
 
-use crate::lite::LiteSession;
 use crate::stream::StreamSession;
 
 const SERVICE_UUID: Uuid = uuid!("522b443a-4f53-534d-0001-420badbabe69");
@@ -59,7 +58,7 @@ macro_rules! mk_static {
 #[gatt_server]
 struct Server {
     ossm_service: OssmService,
-    lite_service: LiteService,
+    lite_service: lite::LiteService,
 }
 
 #[gatt_service(uuid = SERVICE_UUID)]
@@ -96,22 +95,6 @@ struct OssmService {
     stream_lookahead: String<{ stream::MAX_LOOKAHEAD_LENGTH }>,
 }
 
-/// OSSM-Lite compatible streaming service (see [`lite`]).
-#[gatt_service(uuid = lite::SERVICE_UUID)]
-struct LiteService {
-    #[characteristic(uuid = lite::STREAM_UUID, read, write, write_without_response)]
-    stream: String<{ stream::MAX_POINT_LENGTH }>,
-
-    #[characteristic(uuid = lite::SPEED_UUID, read, write)]
-    speed: String<{ lite::MAX_SETTING_LENGTH }>,
-
-    #[characteristic(uuid = lite::MAX_DEPTH_UUID, read, write)]
-    max_depth: String<{ lite::MAX_SETTING_LENGTH }>,
-
-    #[characteristic(uuid = lite::MIN_DEPTH_UUID, read, write)]
-    min_depth: String<{ lite::MAX_SETTING_LENGTH }>,
-}
-
 fn get_all_patterns_json() -> String<MAX_PATTERN_LENGTH> {
     let mut output: String<MAX_PATTERN_LENGTH> = String::new();
     output.write_char('[').ok();
@@ -146,13 +129,13 @@ fn get_pattern_description(index: usize) -> String<MAX_PATTERN_LENGTH> {
 
 /// Start the BLE remote.
 ///
-/// Two funscript players can stream: the OSSM-Lite one through its own
-/// service, and the official OSSM one through `go:streaming` and
+/// Remotes stream through `go:streaming` and
 /// `stream:<position>:<duration ms>` commands (or timed points, see
-/// [`stream`]). Neither mode can be entered
+/// [`stream`]), or through a compatibility service ([`lite`]). Neither mode
+/// can be entered
 /// while the other plays: `go:streaming` fails while a pattern is playing or
 /// paused, and playing a pattern fails while streaming. Without a `stream`, the
-/// OSSM-Lite service is not advertised, streamed points are ignored,
+/// compatibility service is not advertised, streamed points are ignored,
 /// `go:streaming` fails, and the stream look-ahead reads `0`.
 pub fn start(
     spawner: &Spawner,
@@ -318,7 +301,7 @@ async fn gatt_events_task<P: PacketPool>(
     stream: Option<&'static StreamSender>,
 ) -> Result<(), Error> {
     let mut session = StreamSession::new(stream);
-    let lite = LiteSession::new(patterns);
+    let lite = lite::LiteSession::new(patterns);
     let reason = loop {
         match connection.next().await {
             GattConnectionEvent::Disconnected { reason } => break reason,
@@ -404,7 +387,7 @@ async fn gatt_events_task<P: PacketPool>(
 /// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
 ///
 /// The advertisement has no room for a second 128-bit service UUID, so the
-/// OSSM-Lite service is listed in the scan response when `streaming`.
+/// compatibility service is listed in the scan response when `streaming`.
 async fn advertise<'values, 'server, C: Controller>(
     name: &'values str,
     peripheral: &mut Peripheral<'values, C, DefaultPacketPool>,
