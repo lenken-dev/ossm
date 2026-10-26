@@ -108,7 +108,6 @@ fn stroke_between(min: f64, max: f64, current: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::text::setting_percent;
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -170,11 +169,11 @@ mod tests {
     }
 
     #[test]
-    fn written_percent_reads_back_unchanged() {
+    fn written_depths_read_back_unchanged() {
         let range = range(0.8, 0.5).with_min_depth(0.25);
-        assert_eq!(setting_percent(range.min_depth()), 25);
+        assert!(close(range.min_depth(), 0.25));
         let range = range.with_max_depth(0.67);
-        assert_eq!(setting_percent(range.max_depth()), 67);
-        assert_eq!(setting_percent(range.min_depth()), 25);
+        assert!(close(range.max_depth(), 0.67));
+        assert!(close(range.min_depth(), 0.25));
     }
 }

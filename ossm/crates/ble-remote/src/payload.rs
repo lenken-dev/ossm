@@ -1,4 +1,4 @@
-//! Text encoding of stream points and settings, as remotes write them.
+//! Payloads remotes write: stream points and settings, as text.
 //!
 //! Points are `<position>:<duration ms>` text (or `<position>:<time ms>`
 //! for timed points); settings are decimal percent text (0-100).
@@ -21,7 +21,7 @@ pub struct TimedPoint {
     /// As [`Point::position`].
     pub position: f64,
     /// When to reach the position, on the remote's clock (see
-    /// [`ClockOffset`](crate::ClockOffset)).
+    /// [`ClockOffset`](stream_engine::ClockOffset)).
     pub at_ms: u64,
 }
 

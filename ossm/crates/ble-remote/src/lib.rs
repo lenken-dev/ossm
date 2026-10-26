@@ -1,6 +1,7 @@
 #![no_std]
 
 mod lite;
+mod payload;
 mod stream;
 
 use core::{
@@ -598,9 +599,8 @@ fn process_command(
                             fail = true;
                         }
                     },
-                    (_, Some(value)) => match parse_setting(value) {
-                        Some(value) => {
-                            let normalized = value / 100.0;
+                    (_, Some(value)) => match payload::parse_setting(value.as_bytes()) {
+                        Some(normalized) => {
                             match action {
                                 "speed" => patterns.set_speed(normalized),
                                 "stroke" => patterns.set_stroke(normalized),
@@ -648,12 +648,6 @@ fn process_command(
     }
 
     respond(server, command, fail);
-}
-
-/// A setting value from a `set:` command: a finite decimal, clamped to 0–100.
-fn parse_setting(value: &str) -> Option<f64> {
-    let value = value.parse::<f64>().ok()?;
-    value.is_finite().then(|| value.clamp(0.0, 100.0))
 }
 
 /// Play a pattern. Fails while streaming: the stream must end first.

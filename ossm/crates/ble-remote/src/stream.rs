@@ -1,7 +1,7 @@
 //! Streamed points of one connection, from any of the streaming protocols.
 //!
 //! Remotes write points as `<position>:<duration ms>` text (see
-//! [`text::parse_point`]).
+//! [`payload::parse_point`]).
 //! The session hands them to the stream engine and counts those it had to
 //! ignore, for a summary when the connection ends.
 //!
@@ -30,7 +30,9 @@ use core::fmt::Write;
 use embassy_time::Instant;
 use heapless::String;
 use log::{info, warn};
-use stream_engine::{ClockOffset, PushError, StreamPlanner, StreamSender, text};
+use stream_engine::{ClockOffset, PushError, StreamPlanner, StreamSender};
+
+use crate::payload;
 
 /// Longest point text accepted.
 pub const MAX_POINT_LENGTH: usize = 32;
@@ -95,7 +97,7 @@ impl StreamSession {
     /// [`StreamSender::push_latest`]). Returns whether it was streamed.
     pub fn push(&mut self, data: &[u8], latest: bool) -> bool {
         self.stream_point(data, |stream, data| {
-            let point = text::parse_point(data)?;
+            let point = payload::parse_point(data)?;
             Some(if latest {
                 stream.push_latest(point.position, point.duration_ms)
             } else {
@@ -110,7 +112,7 @@ impl StreamSession {
     pub fn push_timed(&mut self, data: &[u8]) -> bool {
         let clock = self.clock;
         self.stream_point(data, |stream, data| {
-            let point = text::parse_timed_point(data)?;
+            let point = payload::parse_timed_point(data)?;
             Some(stream.push_at(point.position, clock.to_local(point.at_ms)?))
         })
     }

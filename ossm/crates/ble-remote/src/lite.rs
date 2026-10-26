@@ -14,11 +14,11 @@ use core::fmt::Write;
 use heapless::String;
 use log::info;
 use pattern_engine::PatternSender;
-use stream_engine::{StrokeRange, text};
+use stream_engine::StrokeRange;
 use trouble_host::prelude::*;
 
-use crate::Server;
 use crate::stream::{MAX_POINT_LENGTH, StreamSession};
+use crate::{Server, payload};
 
 pub const SERVICE_UUID: Uuid = uuid!("4f53534d-0000-0000-0000-000000000000");
 const STREAM_UUID: Uuid = uuid!("4f53534d-436f-6d6d-6f6e-53747265616d");
@@ -119,9 +119,9 @@ impl LiteSession {
             session.invalid_write(data);
             return;
         }
-        match text::parse_setting(data) {
+        match payload::parse_setting(data) {
             Some(value) => {
-                info!("[lite] set {} {}", name, text::setting_percent(value));
+                info!("[lite] set {} {}", name, payload::setting_percent(value));
                 apply(self.patterns, value);
             }
             None => session.invalid_write(data),
@@ -139,6 +139,6 @@ fn stroke_range(patterns: &PatternSender) -> StrokeRange {
 
 fn percent_text(fraction: f64) -> String<MAX_SETTING_LENGTH> {
     let mut text = String::new();
-    write!(text, "{}", text::setting_percent(fraction)).expect("Always fits");
+    write!(text, "{}", payload::setting_percent(fraction)).expect("Always fits");
     text
 }
