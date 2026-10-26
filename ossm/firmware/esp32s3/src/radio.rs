@@ -19,7 +19,7 @@ pub fn start(
     patterns: &'static PatternSender,
     stream: &'static StreamSender,
     limits: &MotionLimits,
-    motion: &'static MotionObserver,
+    motion: MotionObserver,
 ) {
     let radio = &*mk_static!(
         esp_radio::Controller<'static>,

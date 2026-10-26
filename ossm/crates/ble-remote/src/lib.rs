@@ -143,7 +143,7 @@ pub fn start(
     connector: BleConnector<'static>,
     patterns: &'static PatternSender,
     stream: Option<&'static StreamSender>,
-    motion: &'static MotionObserver,
+    motion: MotionObserver,
     limits: &MotionLimits,
 ) {
     let mut usable_travel = String::new();
@@ -196,7 +196,7 @@ pub async fn ble_events_task(
     >,
     patterns: &'static PatternSender,
     stream: Option<&'static StreamSender>,
-    motion: &'static MotionObserver,
+    motion: MotionObserver,
     usable_travel: String<8>,
 ) {
     info!("Starting advertising and GATT service");
@@ -255,7 +255,7 @@ pub async fn ble_events_task(
 
                 let events = gatt_events_task(&server, &gatt_connection, patterns, stream);
                 let notify = state_notifications(&server, &gatt_connection, patterns, stream);
-                let position = position_notifications(&server, &gatt_connection, motion);
+                let position = position_notifications(&server, &gatt_connection, &motion);
 
                 match select3(events, notify, position).await {
                     Either3::First(res) => {

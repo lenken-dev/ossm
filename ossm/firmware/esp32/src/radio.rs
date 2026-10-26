@@ -10,7 +10,7 @@ pub fn start(
     spawner: &Spawner,
     bt: BT<'static>,
     patterns: &'static PatternSender,
-    motion: &'static MotionObserver,
+    motion: MotionObserver,
     limits: &MotionLimits,
 ) {
     let radio = &*mk_static!(

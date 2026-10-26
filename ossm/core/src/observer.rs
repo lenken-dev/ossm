@@ -12,7 +12,8 @@ use embassy_sync::pubsub::{self, Subscriber};
 /// phase transitions, but cannot move the motor or service motion
 /// commands.
 ///
-/// Not [`Clone`] and not publicly constructible.
+/// Not publicly constructible. [`Copy`] because it only reads.
+#[derive(Clone, Copy)]
 pub struct MotionObserver {
     channels: &'static Ossm,
 }

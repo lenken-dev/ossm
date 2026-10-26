@@ -14,7 +14,8 @@ use crate::input::PatternInput;
 /// the observer can read engine state, subscribe to state transitions,
 /// and read the current pattern input, but cannot issue commands.
 ///
-/// Not [`Clone`] and not publicly constructible.
+/// Not publicly constructible. [`Copy`] because it only reads.
+#[derive(Clone, Copy)]
 pub struct PatternObserver {
     engine: &'static PatternEngine,
 }

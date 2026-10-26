@@ -31,7 +31,7 @@ mod disabled {
     pub fn start(
         _spawner: &Spawner,
         _output: Option<Config>,
-        _motion: &'static MotionObserver,
+        _motion: MotionObserver,
         _engine: PatternObserver,
     ) {
     }

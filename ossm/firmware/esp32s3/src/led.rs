@@ -13,7 +13,7 @@ pub fn build(config: Option<led::Config<'static>>) -> Option<led::Indicator> {
 pub fn start(
     spawner: &Spawner,
     led: Option<led::Indicator>,
-    _motion: &'static MotionObserver,
+    _motion: MotionObserver,
     _engine: PatternObserver,
 ) {
     if let Some(led) = led {
