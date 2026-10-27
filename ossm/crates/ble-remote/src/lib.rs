@@ -255,7 +255,7 @@ pub async fn ble_events_task(
 
                 let events = gatt_events_task(&server, &gatt_connection, patterns, stream);
                 let notify = state_notifications(&server, &gatt_connection, patterns, stream);
-                let position = position_notifications(&server, &gatt_connection, &motion);
+                let position = position_notifications(&server, &gatt_connection, motion);
 
                 match select3(events, notify, position).await {
                     Either3::First(res) => {
@@ -472,7 +472,7 @@ async fn state_notifications<P: PacketPool>(
 async fn position_notifications<P: PacketPool>(
     server: &Server<'_>,
     connection: &GattConnection<'_, '_, P>,
-    motion: &MotionObserver,
+    motion: MotionObserver,
 ) -> Result<(), Error> {
     let mut ticker = Ticker::every(POSITION_INTERVAL);
     let mut old: String<8> = String::new();

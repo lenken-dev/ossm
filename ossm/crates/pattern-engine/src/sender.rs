@@ -15,7 +15,7 @@ use crate::input::PatternInput;
 /// read methods from [`PatternObserver`](crate::PatternObserver) -
 /// command issuers almost always also need to read state to plan,
 /// and reading is harmless. Code that only needs to observe should
-/// still take `&PatternObserver` for the tighter contract.
+/// still take `PatternObserver` for the tighter contract.
 ///
 /// Produced by [`PatternEngine::split`](crate::PatternEngine::split).
 /// Not [`Clone`] and not publicly constructible. The intended pattern

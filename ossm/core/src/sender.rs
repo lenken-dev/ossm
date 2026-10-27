@@ -13,7 +13,7 @@ use crate::state::{MotionPhase, MotionState};
 /// methods from [`MotionObserver`](crate::MotionObserver) - motion
 /// issuers almost always also need to read state to plan, and reading
 /// is harmless. Code that only needs to observe should still take
-/// `&MotionObserver` for the tighter contract.
+/// `MotionObserver` for the tighter contract.
 ///
 /// There is exactly one `MotionSender` per [`Ossm`](crate::Ossm),
 /// produced by [`Ossm::split`](crate::Ossm::split). The receiver half

@@ -30,7 +30,7 @@ pub fn initialize<I: ColorIndicator>(indicator: I) -> Output<I> {
 /// The platform supplies the concrete task and a clock for Embassy time.
 pub async fn run_status<I: ColorIndicator>(
     mut output: Output<I>,
-    motion: &MotionObserver,
+    motion: MotionObserver,
     engine: PatternObserver,
 ) -> ! {
     let mut ticker = Ticker::every(Duration::from_millis(POLL_INTERVAL_MS));
