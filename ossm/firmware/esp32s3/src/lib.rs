@@ -160,12 +160,11 @@ pub async fn run(spawner: Spawner, config: Config) {
         motion_observer,
     );
 
-    mode_switch::Modes {
+    let modes = mode_switch::Modes {
         motion: &motion,
         patterns,
         pattern_runner: runner,
         stream_runner,
-    }
-    .run()
-    .await
+    };
+    modes.run().await;
 }
