@@ -27,12 +27,11 @@
 //!    plays a pattern, the speed is set to zero before, so later points
 //!    cannot restart motion until the speed is raised.
 
-use core::cell::Cell;
 use core::future::Future;
 
 use embassy_futures::select::{Either, select};
 use embassy_time::{Delay, Timer};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use ossm::{MotionPhase, MotionSender, StateResponse};
 use pattern_engine::{AnyPattern, EngineState, PatternRunner, PatternSender, PendingCommand};
 use stream_engine::{StreamInput, StreamRunner, StreamStart};
@@ -44,58 +43,77 @@ pub struct Modes<'a> {
     pub stream_runner: StreamRunner,
 }
 
+/// The mode driving the machine, with what it starts from.
+pub enum Mode {
+    /// Run patterns, starting with the command handed over by the previous
+    /// mode.
+    Pattern(Option<PendingCommand>),
+    Streaming(StreamStart),
+}
+
 impl Modes<'_> {
     pub async fn run(&self) -> ! {
-        let ignored = Cell::new(0);
-        let mut command = None;
+        let mut mode = Mode::Pattern(None);
         loop {
-            let patterns = self.pattern_runner.run_from(
-                command.take(),
-                self.motion,
-                AnyPattern::all_builtin(),
-                Delay,
-            );
-            let start = match select(patterns, self.owned_stream(&ignored)).await {
-                Either::First(never) => never,
-                Either::Second(start) => start,
+            mode = match mode {
+                Mode::Pattern(command) => self.pattern(command).await,
+                Mode::Streaming(start) => self.streaming(start).await,
             };
+        }
+    }
 
-            info!("Streaming mode ({} points dropped before)", ignored.take());
-            let _active = self.stream_runner.activate();
-            command = match self.prepare(&mut command).await {
-                Ok(homed) => {
-                    let streaming = self.stream(start, homed, &ignored);
-                    let take = async {
-                        loop {
-                            let command = self.pattern_runner.take_command().await;
-                            if !command.is_play() {
-                                return command;
-                            }
-                            warn!("Pattern play dropped: streaming");
-                        }
-                    };
-                    match select(take, streaming).await {
-                        Either::First(command) => Some(command),
-                        Either::Second(never) => never,
+    /// Run patterns until another mode may take over (rule 1).
+    async fn pattern(&self, command: Option<PendingCommand>) -> Mode {
+        info!("Pattern mode");
+        let patterns =
+            self.pattern_runner
+                .run_from(command, self.motion, AnyPattern::all_builtin(), Delay);
+        match select(patterns, self.owned_stream()).await {
+            Either::First(never) => never,
+            Either::Second(start) => Mode::Streaming(start),
+        }
+    }
+
+    /// Prepare, stream until a pattern command other than play, then leave
+    /// (rules 2 and 3).
+    async fn streaming(&self, start: StreamStart) -> Mode {
+        info!("Streaming mode");
+        let _active = self.stream_runner.activate();
+        let mut command = None;
+        if let Ok(homed) = self.prepare(&mut command).await {
+            let take = async {
+                loop {
+                    let command = self.pattern_runner.take_command().await;
+                    if !command.is_play() {
+                        return command;
                     }
+                    warn!("Pattern play dropped: streaming");
                 }
-                Err(()) => command,
             };
+            command = match select(take, self.stream(start, homed)).await {
+                Either::First(command) => Some(command),
+                Either::Second(never) => never,
+            };
+        }
+        self.leave(&mut command).await;
+        Mode::Pattern(command)
+    }
 
-            info!("Pattern mode");
-            self.operate(self.motion.end_stream(), &mut command).await;
-            if self.operate(self.motion.disable(), &mut command).await == StateResponse::Fault {
-                error!("Board fault during disable");
-            }
-            if !command.as_ref().is_some_and(PendingCommand::is_play) {
-                self.patterns.set_speed(0.0);
-            }
+    /// End the stream with a controlled stop and disable the machine,
+    /// zeroing the speed unless `command` plays a pattern (rule 3).
+    async fn leave(&self, command: &mut Option<PendingCommand>) {
+        self.operate(self.motion.end_stream(), command).await;
+        if self.operate(self.motion.disable(), command).await == StateResponse::Fault {
+            error!("Board fault during disable");
+        }
+        if !command.as_ref().is_some_and(PendingCommand::is_play) {
+            self.patterns.set_speed(0.0);
         }
     }
 
     /// Wait for the first point received while streaming may take over
     /// (rule 1), dropping the others.
-    async fn owned_stream(&self, ignored: &Cell<u32>) -> StreamStart {
+    async fn owned_stream(&self) -> StreamStart {
         loop {
             let start = self.stream_runner.wait_for_stream().await;
             let reason = if self.patterns.input().velocity <= 0.0 {
@@ -109,9 +127,7 @@ impl Modes<'_> {
             } else {
                 return start;
             };
-            if ignored.replace(ignored.get() + 1) == 0 {
-                warn!("Streamed point dropped: {reason}");
-            }
+            debug!("Streamed point dropped: {reason}");
         }
     }
 
@@ -170,9 +186,9 @@ impl Modes<'_> {
 
     /// Stream from `start`, or from a fresh start if preparing homed: points
     /// received while homing are stale.
-    async fn stream(&self, start: StreamStart, homed: bool, ignored: &Cell<u32>) -> ! {
+    async fn stream(&self, start: StreamStart, homed: bool) -> ! {
         let start = if homed {
-            self.owned_stream(ignored).await
+            self.owned_stream().await
         } else {
             start
         };
@@ -187,9 +203,7 @@ impl Modes<'_> {
                 jerk: (pattern.sensation + 1.0) / 2.0,
             }
         };
-        self.stream_runner
-            .run(start, self.motion, input)
-            .await
+        self.stream_runner.run(start, self.motion, input).await
     }
 }
 
