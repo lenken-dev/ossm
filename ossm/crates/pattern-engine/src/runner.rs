@@ -1,5 +1,4 @@
-use core::future::Future;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::Ordering;
 
 use embassy_futures::select::{self, Either};
 use embedded_hal_async::delay::DelayNs;
@@ -31,29 +30,24 @@ impl RunnerState {
 }
 
 /// A command taken with [`PatternRunner::take_command`], to be processed
-/// by [`PatternRunner::run_from`].
+/// by [`PatternRunner::run_session`].
 #[derive(Debug, Clone, Copy)]
 pub struct PendingCommand(EngineCommand);
 
 impl PendingCommand {
-    /// Whether the command plays a pattern, rather than stopping, pausing,
-    /// resuming, or homing (a stop-like command).
-    pub fn is_play(&self) -> bool {
-        matches!(self.0, EngineCommand::Play(_))
+    pub fn is_stop(&self) -> bool {
+        matches!(self.0, EngineCommand::Stop)
     }
 }
 
 /// Driver capability for the pattern engine.
 ///
 /// Produced by [`PatternEngine::split`](crate::PatternEngine::split).
-/// Drives the engine's main loop via [`run`](Self::run). The loop
-/// only returns if the host future is dropped (e.g. a mode switch),
-/// at which point the runner is free for another `run` call - each
-/// call starts fresh in the idle state. A host that has switched away
-/// can take the next command with [`take_command`](Self::take_command)
-/// and hand it to [`run_from`](Self::run_from). It should only drop a
-/// run while no [state operation is in
-/// flight](Self::state_operation_in_flight).
+/// Drives the engine's main loop via [`run`](Self::run). A host that
+/// switches modes instead takes each command with
+/// [`take_command`](Self::take_command) and runs a session from it with
+/// [`run_session`](Self::run_session), which returns once the engine is
+/// idle again.
 ///
 /// The runner carries no state of its own; "currently running" is a
 /// property of the in-flight future, not the type. Spawning two
@@ -69,35 +63,15 @@ impl PatternRunner {
         Self { engine }
     }
 
-    /// Take the next command while the runner is not running, e.g. to
-    /// decide whether to switch back to patterns. Hand it to
-    /// [`run_from`](Self::run_from) to process it.
+    /// Take the next command while the engine is idle. Hand it to
+    /// [`run_session`](Self::run_session) to process it.
     ///
     /// Input changes (speed, depth, stroke, sensation) are not commands.
     pub async fn take_command(&self) -> PendingCommand {
         PendingCommand(self.engine.commands.receive().await)
     }
 
-    /// [`take_command`](Self::take_command) without waiting.
-    pub fn try_take_command(&self) -> Option<PendingCommand> {
-        self.engine.commands.try_receive().ok().map(PendingCommand)
-    }
-
-    /// Whether a run is waiting for a motion state operation (enable,
-    /// disable, home, pause, resume) that it requested.
-    ///
-    /// Dropping a run while this is set leaves the operation in flight,
-    /// and its response could be taken for the response to a later
-    /// request.
-    pub fn state_operation_in_flight(&self) -> bool {
-        self.engine.state_operation.load(Ordering::Acquire)
-    }
-
     /// Run the engine forever, processing commands and driving patterns.
-    ///
-    /// Starts idle and publishes it, so a run that follows a dropped one
-    /// does not report its stale state. Commands queued before the call
-    /// are processed.
     ///
     /// `motion` is borrowed for the lifetime of the run. `patterns` is
     /// moved in and lives on the runner's stack frame. `delay` must be
@@ -106,43 +80,45 @@ impl PatternRunner {
     pub async fn run<const N: usize, D: DelayNs + Clone>(
         &self,
         motion: &MotionSender,
-        patterns: [AnyPattern; N],
-        delay: D,
-    ) -> ! {
-        self.run_from(None, motion, patterns, delay).await
-    }
-
-    /// [`run`](Self::run), processing `first` before any queued command.
-    pub async fn run_from<const N: usize, D: DelayNs + Clone>(
-        &self,
-        first: Option<PendingCommand>,
-        motion: &MotionSender,
         mut patterns: [AnyPattern; N],
         delay: D,
     ) -> ! {
+        loop {
+            let first = self.take_command().await;
+            self.run_session(first, motion, &mut patterns, delay.clone())
+                .await;
+        }
+    }
+
+    /// Process `first` and the commands that follow, driving patterns
+    /// until the engine is idle again (stopped, finished, or failed).
+    pub async fn run_session<const N: usize, D: DelayNs + Clone>(
+        &self,
+        first: PendingCommand,
+        motion: &MotionSender,
+        patterns: &mut [AnyPattern; N],
+        delay: D,
+    ) {
         let engine = self.engine;
         let input = &engine.input;
         let mut state = RunnerState::Idle;
-        let mut first = first;
-        store_and_publish(engine, EngineState::Idle);
+        handle_command::<N>(engine, motion, first.0, &mut state).await;
 
         loop {
             match state {
-                RunnerState::Idle | RunnerState::Ready => {
-                    let cmd = match first.take() {
-                        Some(PendingCommand(cmd)) => cmd,
-                        None => engine.commands.receive().await,
-                    };
+                RunnerState::Idle => return,
+                RunnerState::Ready => {
+                    let cmd = engine.commands.receive().await;
                     handle_command::<N>(engine, motion, cmd, &mut state).await;
                 }
                 RunnerState::Homing(maybe_idx) => {
-                    if state_operation(engine, motion.enable()).await != StateResponse::Completed {
+                    if motion.enable().await != StateResponse::Completed {
                         log::error!("Enable failed, returning to idle");
                         set_state(engine, &mut state, RunnerState::Idle);
                         continue;
                     }
 
-                    let home_fut = state_operation(engine, motion.home());
+                    let home_fut = motion.home();
                     let mut home_fut = core::pin::pin!(home_fut);
 
                     loop {
@@ -165,7 +141,7 @@ impl PatternRunner {
                                 break;
                             }
                             Either::Second(EngineCommand::Stop | EngineCommand::Pause) => {
-                                if state_operation(engine, motion.disable()).await
+                                if motion.disable().await
                                     == StateResponse::Fault
                                 {
                                     log::error!("Board fault during disable");
@@ -196,7 +172,7 @@ impl PatternRunner {
                             }
                             Either::Second(cmd) => match cmd {
                                 EngineCommand::Pause => {
-                                    if state_operation(engine, motion.pause()).await
+                                    if motion.pause().await
                                         != StateResponse::Completed
                                     {
                                         log::error!("Pause failed, stopping engine");
@@ -207,7 +183,7 @@ impl PatternRunner {
                                     store_and_publish(engine, EngineState::Paused(idx));
                                 }
                                 EngineCommand::Resume => {
-                                    if state_operation(engine, motion.resume()).await
+                                    if motion.resume().await
                                         != StateResponse::Completed
                                     {
                                         log::error!("Resume failed, stopping engine");
@@ -224,7 +200,7 @@ impl PatternRunner {
                                     break;
                                 }
                                 EngineCommand::Stop => {
-                                    if state_operation(engine, motion.disable()).await
+                                    if motion.disable().await
                                         == StateResponse::Fault
                                     {
                                         log::error!("Board fault during disable");
@@ -241,24 +217,6 @@ impl PatternRunner {
             }
         }
     }
-}
-
-/// Await a motion state operation, flagged as in flight while it runs (see
-/// [`PatternRunner::state_operation_in_flight`]).
-async fn state_operation(
-    engine: &PatternEngine,
-    operation: impl Future<Output = StateResponse>,
-) -> StateResponse {
-    struct InFlight<'a>(&'a AtomicBool);
-    impl Drop for InFlight<'_> {
-        fn drop(&mut self) {
-            self.0.store(false, Ordering::Release);
-        }
-    }
-
-    engine.state_operation.store(true, Ordering::Release);
-    let _in_flight = InFlight(&engine.state_operation);
-    operation.await
 }
 
 fn set_state(engine: &PatternEngine, current: &mut RunnerState, new_state: RunnerState) {
@@ -290,7 +248,7 @@ async fn handle_command<const N: usize>(
         },
         EngineCommand::Play(_) => {}
         EngineCommand::Stop => {
-            if state_operation(engine, motion.disable()).await == StateResponse::Fault {
+            if motion.disable().await == StateResponse::Fault {
                 log::error!("Board fault during disable");
             }
             set_state(engine, state, RunnerState::Idle);

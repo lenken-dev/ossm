@@ -2,36 +2,19 @@
 
 //! Switching between pattern and streamed motion.
 //!
-//! The pattern engine drives the machine until a streamed point starts
-//! streaming. Streaming then lasts until the next pattern command other
-//! than play (stop, pause, ...) from any remote, which the pattern engine
-//! processes once it runs again. Streaming uses the pattern input (depth, stroke, speed), so
-//! every remote controls both modes.
-//!
-//! Rules:
-//! 1. Ownership: a point starts streaming only while no pattern session
-//!    exists (the pattern engine is idle or ready, with no motion state
-//!    operation in flight) and the speed setting is above zero. Other points
-//!    are dropped. A playing or paused pattern must be stopped first. Likewise,
-//!    play commands are dropped in streaming mode: the stream must end first.
-//! 2. Abort: a pattern command aborts preparing the machine (enabling,
-//!    homing) before its next step, without further motion. Issued
-//!    operations are awaited, never cancelled, so each gets its own response.
-//!    The stream starts with the first point after preparing: earlier ones
-//!    are stale.
-//! 3. No lost commands: pattern commands arriving in streaming mode are
-//!    taken, keeping the latest. Leaving streaming ends the stream with a
-//!    controlled stop, disables the machine and sets the speed to zero, so
-//!    later points cannot restart motion until the speed is raised. It then
-//!    hands the kept command to the pattern engine.
+//! Idle is the menu: the machine rests and the first pattern command or
+//! streamed point picks the next mode. A pattern stop (e.g. `go:menu`)
+//! returns to idle from either mode. Streaming uses the pattern input
+//! (depth, stroke, speed), so every remote controls both modes.
 
 use core::future::Future;
+use core::pin::pin;
 
 use embassy_futures::select::{Either, select};
 use embassy_time::{Delay, Timer};
 use log::{debug, error, info, warn};
 use ossm::{MotionPhase, MotionSender, StateResponse};
-use pattern_engine::{AnyPattern, EngineState, PatternRunner, PatternSender, PendingCommand};
+use pattern_engine::{AnyPattern, PatternRunner, PatternSender, PendingCommand};
 use stream_engine::{StreamInput, StreamRunner};
 
 pub struct Modes<'a> {
@@ -43,137 +26,130 @@ pub struct Modes<'a> {
 
 /// The mode driving the machine.
 pub enum Mode {
-    /// Run patterns, starting with the command handed over by the previous
-    /// mode.
-    Pattern(Option<PendingCommand>),
+    Idle,
+    /// Run patterns, starting with the command that left idle.
+    Pattern(PendingCommand),
     Streaming,
 }
 
 impl Modes<'_> {
     pub async fn run(&self) -> ! {
-        let mut mode = Mode::Pattern(None);
+        let mut mode = Mode::Idle;
         loop {
             mode = match mode {
+                Mode::Idle => self.idle().await,
                 Mode::Pattern(command) => self.pattern(command).await,
                 Mode::Streaming => self.streaming().await,
             };
         }
     }
 
-    /// Run patterns until another mode may take over (rule 1).
-    async fn pattern(&self, command: Option<PendingCommand>) -> Mode {
-        info!("Pattern mode");
-        let patterns =
-            self.pattern_runner
-                .run_from(command, self.motion, AnyPattern::all_builtin(), Delay);
-        match select(patterns, self.owned_stream()).await {
-            Either::First(never) => never,
+    /// Wait for the next mode: a pattern command, or a streamed point while
+    /// the speed setting is above zero.
+    async fn idle(&self) -> Mode {
+        info!("Idle mode");
+        let stream = async {
+            loop {
+                self.stream_runner.wait_for_stream().await;
+                if self.patterns.input().velocity > 0.0 {
+                    return;
+                }
+                debug!("Streamed point dropped: speed is zero");
+            }
+        };
+        match select(self.pattern_runner.take_command(), stream).await {
+            Either::First(command) => Mode::Pattern(command),
             Either::Second(()) => Mode::Streaming,
         }
     }
 
-    /// Prepare, stream until a pattern command other than play, then leave
-    /// (rules 2 and 3).
+    /// Run patterns until the engine is idle. Streamed points are not received
+    /// meanwhile.
+    async fn pattern(&self, command: PendingCommand) -> Mode {
+        info!("Pattern mode");
+        let mut patterns = AnyPattern::all_builtin();
+        self.pattern_runner
+            .run_session(command, self.motion, &mut patterns, Delay)
+            .await;
+        Mode::Idle
+    }
+
+    /// Prepare, stream until a pattern stop, then end the stream and disable
+    /// the machine. Other pattern commands are dropped.
     async fn streaming(&self) -> Mode {
         info!("Streaming mode");
         let _active = self.stream_runner.activate();
-        let mut command = None;
-        if self.prepare(&mut command).await.is_ok() {
-            let take = async {
-                while command.is_none() {
-                    keep(&mut command, self.pattern_runner.take_command().await);
-                }
-            };
-            match select(take, self.stream()).await {
+        if self.prepare().await {
+            match select(self.until_stop(), self.stream()).await {
                 Either::First(()) => {}
                 Either::Second(never) => never,
             }
         }
-        self.leave(&mut command).await;
-        Mode::Pattern(command)
-    }
-
-    /// End the stream with a controlled stop, disable the machine and zero
-    /// the speed (rule 3).
-    async fn leave(&self, command: &mut Option<PendingCommand>) {
-        self.operate(self.motion.end_stream(), command).await;
-        if self.operate(self.motion.disable(), command).await == StateResponse::Fault {
+        self.motion.end_stream().await;
+        if self.motion.disable().await == StateResponse::Fault {
             error!("Board fault during disable");
         }
+        // A failed prepare leaves without a stop: zero the speed so that
+        // later points do not retry at once.
         self.patterns.set_speed(0.0);
+        Mode::Idle
     }
 
-    /// Wait for the first point received while streaming may take over
-    /// (rule 1), dropping the others.
-    async fn owned_stream(&self) {
+    /// Bring the controller to rest in `Ready`, enabling and homing as
+    /// needed. False if a pattern stop or a failure aborts.
+    async fn prepare(&self) -> bool {
         loop {
-            self.stream_runner.wait_for_stream().await;
-            let reason = if self.patterns.input().velocity <= 0.0 {
-                "speed is zero"
-            } else if !matches!(
-                self.patterns.state(),
-                EngineState::Idle | EngineState::Ready
-            ) || self.pattern_runner.state_operation_in_flight()
-            {
-                "pattern session active"
-            } else {
-                return;
-            };
-            debug!("Streamed point dropped: {reason}");
-        }
-    }
-
-    /// Bring the controller to rest in `Ready`, enabling and homing as needed
-    /// until a pattern command aborts (rule 2). Pattern commands are taken
-    /// into `command` (rule 3).
-    async fn prepare(&self, command: &mut Option<PendingCommand>) -> Result<(), ()> {
-        loop {
-            while let Some(taken) = self.pattern_runner.try_take_command() {
-                keep(command, taken);
-            }
-            if command.is_some() {
-                info!("Streaming aborted before it started");
-                return Err(());
-            }
             let response = match self.motion.state().phase {
-                MotionPhase::Ready => return Ok(()),
+                MotionPhase::Ready => return true,
                 MotionPhase::Moving | MotionPhase::Stopping => {
                     Timer::after_millis(10).await;
                     continue;
                 }
-                MotionPhase::Disabled => self.operate(self.motion.enable(), command).await,
+                MotionPhase::Disabled => self.operate(self.motion.enable()).await,
                 MotionPhase::Enabled | MotionPhase::Paused => {
-                    self.operate(self.motion.home(), command).await
+                    self.operate(self.motion.home()).await
                 }
             };
-            if response != StateResponse::Completed {
-                error!("Preparing for streaming failed");
-                return Err(());
+            match response {
+                Some(StateResponse::Completed) => {}
+                Some(_) => {
+                    error!("Preparing for streaming failed");
+                    return false;
+                }
+                None => {
+                    info!("Streaming aborted before it started");
+                    return false;
+                }
             }
         }
     }
 
     /// Await a motion operation to completion, meanwhile taking pattern
-    /// commands into `command` so that none are dropped by a full queue.
-    async fn operate<T>(
+    /// commands. None if one was a stop. The operation is never cancelled, so
+    /// its response cannot be taken for that of a later one.
+    async fn operate(
         &self,
-        operation: impl Future<Output = T>,
-        command: &mut Option<PendingCommand>,
-    ) -> T {
-        // Taking a command is cancel-safe: it is only removed from the
-        // queue when the take completes.
-        let take = async {
-            loop {
-                keep(command, self.pattern_runner.take_command().await);
+        operation: impl Future<Output = StateResponse>,
+    ) -> Option<StateResponse> {
+        let mut operation = pin!(operation);
+        match select(operation.as_mut(), self.until_stop()).await {
+            Either::First(response) => Some(response),
+            Either::Second(()) => {
+                operation.await;
+                None
             }
-        };
-        match select(operation, take).await {
-            Either::First(response) => response,
-            Either::Second(never) => never,
         }
     }
 
-    /// Stream from the next point (rule 2).
+    /// Take pattern commands until a stop, dropping the others. Cancel-safe:
+    /// a command is only removed from the queue when its take completes.
+    async fn until_stop(&self) {
+        while !self.pattern_runner.take_command().await.is_stop() {
+            warn!("Pattern command dropped: streaming");
+        }
+    }
+
+    /// Stream from the next point: those received while preparing are stale.
     async fn stream(&self) -> ! {
         let start = self.stream_runner.wait_for_stream().await;
         // Sensation (-1.0..1.0) sets the jerk setting (0.0..1.0): streaming
@@ -188,14 +164,5 @@ impl Modes<'_> {
             }
         };
         self.stream_runner.run(start, self.motion, input).await
-    }
-}
-
-/// Keep `taken` unless it plays a pattern (rule 1).
-fn keep(kept: &mut Option<PendingCommand>, taken: PendingCommand) {
-    if taken.is_play() {
-        warn!("Pattern play dropped: streaming");
-    } else {
-        *kept = Some(taken);
     }
 }

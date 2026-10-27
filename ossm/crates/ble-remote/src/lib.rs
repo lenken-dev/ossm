@@ -132,10 +132,10 @@ fn get_pattern_description(index: usize) -> String<MAX_PATTERN_LENGTH> {
 ///
 /// Remotes stream through `go:streaming` and
 /// `stream:<position>:<duration ms>` commands (or timed points, see
-/// [`stream`]), or through a compatibility service ([`lite`]). Neither mode
-/// can be entered
-/// while the other plays: `go:streaming` fails while a pattern is playing or
-/// paused, and playing a pattern fails while streaming. Without a `stream`, the
+/// [`stream`]), or through a compatibility service ([`lite`]). Either mode
+/// is entered from the menu (`go:menu`): `go:streaming` fails while the
+/// pattern engine is not idle, and playing a pattern fails while streaming.
+/// Without a `stream`, the
 /// compatibility service is not advertised, streamed points are ignored,
 /// `go:streaming` fails, and the stream look-ahead reads `0`.
 pub fn start(
@@ -662,18 +662,15 @@ fn play(patterns: &PatternSender, stream: Option<&StreamSender>, index: usize) -
 
 /// Prepare for streaming by the official funscript player: zero the speed,
 /// so that streamed points take over only once it is raised. An active
-/// stream is left alone. Fails without streaming, and while a pattern is
-/// playing or paused: it must be stopped first.
+/// stream is left alone. Fails without streaming, and while the pattern
+/// engine is not idle: go to the menu first.
 fn go_streaming(patterns: &PatternSender, stream: Option<&StreamSender>) -> bool {
     let Some(stream) = stream else {
         error!("Streaming unavailable");
         return false;
     };
-    if matches!(
-        patterns.state(),
-        EngineState::Playing(_) | EngineState::Paused(_)
-    ) {
-        error!("Cannot stream while a pattern is playing");
+    if patterns.state() != EngineState::Idle {
+        error!("Cannot stream while the pattern engine is not idle");
         return false;
     }
     if !stream.is_active() {
