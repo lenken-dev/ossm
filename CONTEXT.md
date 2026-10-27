@@ -124,7 +124,7 @@ _Avoid_: Measured torque, contact force
 ### Streaming
 
 **Streaming**:
-The mode in which a remote client drives motion with timed stream points instead of a pattern. It uses the depth, stroke, and speed settings, and lasts until the next pattern command other than play. Neither streaming nor a pattern can be started while the other plays.
+The mode in which a remote client drives motion with timed stream points instead of a pattern. It uses the depth, stroke, and speed settings. It starts from idle and lasts until a pattern stop returns to idle; other pattern commands are dropped meanwhile, as are stream points while patterns run.
 _Avoid_: Pattern playback
 
 **Stream point**:
@@ -160,7 +160,7 @@ A stream point discarded on receipt because a queue was full.
 _Avoid_: Skipped point
 
 **Armed**:
-The condition under which preparing the machine for streaming continues: the speed setting is above zero and no pattern command is pending. Otherwise preparing aborts. Taking over requires more: a stream point starts streaming only while the pattern engine is idle or ready, no motion state operation is in flight, and the speed setting is above zero.
+The condition under which a stream point starts streaming: the machine is idle and the speed setting is above zero. A pattern stop while preparing the machine aborts streaming.
 _Avoid_: Enabled
 
 **Stream end**:
